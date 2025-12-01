@@ -1,0 +1,63 @@
+workflows:
+  ios-salaryinfo:
+    name: SalaryInfo iOS Build
+    environment:
+      groups:
+        - appstore_credentials  # You'll create this group in Codemagic
+        - certificate_credentials  # Optional, Codemagic can auto-create
+      vars:
+        XCODE_PROJECT: "Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+        BUNDLE_ID: "com.ila.salaryinfo"  # Your bundle ID
+        APP_NAME: "SalaryInfo"
+        APP_VERSION: "1.0.0"
+      xcode: latest
+      cocoapods: default
+      flutter: stable
+    scripts:
+      - name: Set up Flutter
+        script: |
+          flutter --version
+          flutter pub get
+      - name: Set up keychain
+        script: |
+          keychain initialize
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --platform IOS \
+            --create
+      - name: Set up code signing
+        script: |
+          keychain add-certificates
+      - name: Install pods
+        script: |
+          cd ios && pod install --repo-update
+      - name: Build ipa for distribution
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --output "build/ios/ipa"
+      - name: Verify build
+        script: |
+          echo "✅ Build completed for:"
+          echo "App: $APP_NAME"
+          echo "Bundle ID: $BUNDLE_ID"
+          echo "Version: $APP_VERSION"
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      email:
+        recipients:
+          - hazajadded@gmail.com  # CHANGE TO YOUR EMAIL
+        notify:
+          success: true
+          failure: true
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false
