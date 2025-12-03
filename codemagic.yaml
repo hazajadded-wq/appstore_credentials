@@ -1,6 +1,6 @@
 workflows:
-  salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.5
+  salaryinfo-ios-emergency:
+    name: SalaryInfo iOS - EMERGENCY FIX v1.0.6
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -15,97 +15,40 @@ workflows:
       - name: Set up code signing
         script: |
           set -e
-          set -x
           keychain initialize
-      
-      - name: Verify Bundle ID
-        script: |
-          set -e
-          set -x
-          echo "Checking Bundle ID in project..."
-          if grep -q "com.pocket.salaryinfo" ios/Runner.xcodeproj/project.pbxproj; then
-            echo "✓ Bundle ID is correct: com.pocket.salaryinfo"
-          else
-            echo "✗ ERROR: Bundle ID mismatch!"
-            echo "Expected: com.pocket.salaryinfo"
-            exit 1
-          fi
-      
-      - name: Verify Info.plist has HTTP permissions
-        script: |
-          set -e
-          set -x
-          echo "Checking Info.plist for HTTP permissions..."
-          if grep -q "NSAllowsArbitraryLoads" ios/Runner/Info.plist; then
-            echo "✓ HTTP permissions found in Info.plist"
-          else
-            echo "✗ ERROR: HTTP permissions NOT found!"
-            echo "Info.plist must include NSAppTransportSecurity settings"
-            exit 1
-          fi
-      
-      - name: Verify logo exists
-        script: |
-          set -e
-          set -x
-          echo "Checking if logo file exists..."
-          if [ -f "assets/images/logo.png" ]; then
-            echo "✓ Logo file found: assets/images/logo.png"
-          else
-            echo "✗ WARNING: Logo file not found at assets/images/logo.png"
-            echo "App may fail to launch without logo!"
-          fi
       
       - name: Fetch signing files
         script: |
           set -e
-          set -x
-          echo "Fetching signing files for Bundle ID: $BUNDLE_ID"
-          app-store-connect fetch-signing-files \
-            "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
       
-      - name: Add certificates to keychain
+      - name: Add certificates
         script: |
           set -e
-          set -x
           keychain add-certificates
       
-      - name: Set up code signing settings
+      - name: Set up signing
         script: |
           set -e
-          set -x
           xcode-project use-profiles
       
-      - name: Get Flutter packages
+      - name: Get packages
         script: |
           set -e
-          set -x
           flutter pub get
       
       - name: Install pods
         script: |
           set -e
-          set -x
-          cd ios
-          pod install
-          cd ..
+          cd ios && pod install && cd ..
       
       - name: Build IPA
         script: |
           set -e
-          set -x
-          echo "Building IPA for Bundle ID: $BUNDLE_ID"
-          echo "App Store ID: $APP_STORE_APPLE_ID"
-          echo "Version: 1.0.5 (6)"
-          flutter build ipa --release \
-            --export-options-plist=/Users/builder/export_options.plist
+          flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
-      - flutter_drive.log
     
     publishing:
       email:
@@ -114,7 +57,6 @@ workflows:
         notify:
           success: true
           failure: true
-      
       app_store_connect:
         auth: integration
         submit_to_testflight: true
