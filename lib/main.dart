@@ -9,10 +9,8 @@ import 'dart:async';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Clear app cache on startup
   await clearAppCache();
 
-  // Set preferred orientations
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
@@ -21,13 +19,11 @@ void main() async {
   runApp(const MyApp());
 }
 
-// Function to clear application cache
 Future<void> clearAppCache() async {
   SharedPreferences prefs = await SharedPreferences.getInstance();
   await prefs.clear();
 }
 
-// Custom theme with Cairo font
 final ThemeData appTheme = ThemeData(
   primarySwatch: Colors.teal,
   visualDensity: VisualDensity.adaptivePlatformDensity,
@@ -84,7 +80,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// Modern UI Components
 class ModernCard extends StatelessWidget {
   final Widget child;
   final double? width;
@@ -191,7 +186,6 @@ class ModernButton extends StatelessWidget {
   }
 }
 
-// Splash Screen مع الشعار الحقيقي
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
 
@@ -270,7 +264,6 @@ class _SplashScreenState extends State<SplashScreen>
         ),
         child: Stack(
           children: [
-            // Decorative circles - Top Right
             Positioned(
               top: -100,
               right: -100,
@@ -286,8 +279,6 @@ class _SplashScreenState extends State<SplashScreen>
                 ),
               ),
             ),
-
-            // Decorative circles - Bottom Left
             Positioned(
               bottom: -150,
               left: -100,
@@ -303,8 +294,6 @@ class _SplashScreenState extends State<SplashScreen>
                 ),
               ),
             ),
-
-            // Main content card
             Center(
               child: SlideTransition(
                 position: Tween<Offset>(
@@ -327,7 +316,6 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Logo with scale animation
                         ScaleTransition(
                           scale: _scaleAnimation,
                           child: Container(
@@ -353,8 +341,6 @@ class _SplashScreenState extends State<SplashScreen>
                           ),
                         ),
                         const SizedBox(height: 30),
-
-                        // Company name
                         Text(
                           'الشركة العامة لتعبئة',
                           style: GoogleFonts.cairo(
@@ -374,8 +360,6 @@ class _SplashScreenState extends State<SplashScreen>
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 15),
-
-                        // Subtitle
                         Text(
                           'بوابة الموظف الرقمية',
                           style: GoogleFonts.cairo(
@@ -386,8 +370,6 @@ class _SplashScreenState extends State<SplashScreen>
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 40),
-
-                        // Loading indicator
                         SizedBox(
                           width: 40,
                           height: 40,
@@ -411,7 +393,6 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-// Privacy Policy Screen
 class PrivacyPolicyScreen extends StatelessWidget {
   const PrivacyPolicyScreen({Key? key}) : super(key: key);
 
@@ -421,7 +402,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
       backgroundColor: const Color(0xFFF7FAFC),
       body: Column(
         children: [
-          // Header
           Container(
             width: double.infinity,
             padding:
@@ -470,8 +450,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
               ],
             ),
           ),
-
-          // Content
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -517,8 +495,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
               ),
             ),
           ),
-
-          // Agreement button
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
@@ -592,7 +568,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
   }
 }
 
-// WebView Screen with Internet Connection Check
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({Key? key}) : super(key: key);
 
@@ -623,12 +598,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
     super.dispose();
   }
 
-  // Check internet connection - FIXED
   Future<void> _checkInternetConnection() async {
     final List<ConnectivityResult> connectivityResult =
         (await Connectivity().checkConnectivity()) as List<ConnectivityResult>;
     setState(() {
-      // Check if there's any connection (not none)
       hasInternetConnection = connectivityResult.any((result) =>
           result == ConnectivityResult.mobile ||
           result == ConnectivityResult.wifi ||
@@ -639,13 +612,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
     });
   }
 
-  // Listen to connectivity changes - FIXED
   void _listenToConnectivityChanges() {
     connectivitySubscription = Connectivity()
             .onConnectivityChanged
             .listen((List<ConnectivityResult> results) {
               setState(() {
-                // Check if there's any connection (not none)
                 hasInternetConnection = results.any((result) =>
                     result == ConnectivityResult.mobile ||
                     result == ConnectivityResult.wifi ||
@@ -655,7 +626,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     result == ConnectivityResult.other);
               });
 
-              // Reload page if connection restored
               if (hasInternetConnection && !isLoading) {
                 controller.reload();
               }
@@ -831,10 +801,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // WebView
             if (hasInternetConnection) WebViewWidget(controller: controller),
-
-            // No Internet Connection Screen
             if (!hasInternetConnection)
               Container(
                 width: double.infinity,
@@ -846,7 +813,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // No internet icon
                         Container(
                           width: 120,
                           height: 120,
@@ -861,8 +827,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           ),
                         ),
                         const SizedBox(height: 30),
-
-                        // Title
                         Text(
                           'لا يوجد اتصال بالإنترنت',
                           style: GoogleFonts.cairo(
@@ -873,8 +837,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 15),
-
-                        // Message
                         Text(
                           'يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى',
                           style: GoogleFonts.cairo(
@@ -885,8 +847,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 40),
-
-                        // Retry button
                         ModernButton(
                           onPressed: () async {
                             await _checkInternetConnection();
@@ -919,8 +879,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   ),
                 ),
               ),
-
-            // Loading indicator
             if (isLoading && hasInternetConnection)
               Container(
                 width: double.infinity,
