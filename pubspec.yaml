@@ -2,7 +2,7 @@ name: salaryinfo
 description: Government salary information portal
 publish_to: 'none'
 
-version: 1.0.8+11
+version: 1.0.8+12
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -14,7 +14,8 @@ dependencies:
   webview_flutter: ^4.4.4
   google_fonts: ^6.1.0
   shared_preferences: ^2.2.2
-  connectivity_plus: ^5.0.2
+  connectivity_plus: ^6.1.0  # Updated to latest version with Privacy Manifest
+  package_info_plus: ^8.0.0  # For displaying app version
 
 dev_dependencies:
   flutter_test:
