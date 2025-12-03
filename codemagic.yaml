@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.7 Final
+    name: SalaryInfo iOS - v1.0.8 Final
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -45,7 +45,7 @@ workflows:
       - name: Build IPA
         script: |
           set -e
-          echo "Building version 1.0.7 (10)"
+          echo "Building version 1.0.8 (11)"
           flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     
     artifacts:
