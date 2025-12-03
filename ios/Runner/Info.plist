@@ -25,7 +25,6 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	
-	<!-- HTTP PERMISSIONS -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -38,11 +37,9 @@
 		<true/>
 	</dict>
 	
-	<!-- Skip encryption questions -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	
-	<!-- Permissions -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs network access to connect to the salary information server</string>
 	
@@ -66,7 +63,6 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	
-	<!-- Flutter -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
