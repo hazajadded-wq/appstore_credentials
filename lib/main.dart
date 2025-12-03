@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -776,8 +778,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
               ElevatedButton(
                 onPressed: () {
-                  Navigator.of(context).pop(true); // return true
-                  SystemNavigator.pop(); // close the app
+                  Navigator.of(context).pop(true); // close dialog first
+
+                  // Close app depending on platform
+                  if (Platform.isAndroid) {
+                    SystemNavigator.pop();
+                  } else if (Platform.isIOS) {
+                    exit(0); // iOS actual app exit
+                  }
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00BFA5),
