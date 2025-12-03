@@ -813,21 +813,21 @@ class _WebViewScreenState extends State<WebViewScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              if (canGoBack && controller != null) {
-                debugPrint('⬅️ Back button pressed - Going back in WebView');
-                controller!.goBack();
-              } else {
-                debugPrint('🚪 Back button pressed - Showing exit dialog');
-                final shouldExit = await _showExitDialog();
-                if (shouldExit == true) {
-                  SystemNavigator.pop();
-                }
-              }
-            },
-          ),
+          //   leading: IconButton(
+          //  icon: const Icon(Icons.arrow_back),
+          // onPressed: () async {
+          //   if (canGoBack && controller != null) {
+          //    debugPrint('⬅️ Back button pressed - Going back in WebView');
+          //    controller!.goBack();
+          //  } else {
+          //   debugPrint('🚪 Back button pressed - Showing exit dialog');
+          //  final shouldExit = await _showExitDialog();
+          // if (shouldExit == true) {
+          //   SystemNavigator.pop();
+          //  }
+          // }
+          // },
+          //),
           title: Text(
             'الشركة العامة لتعبئة وخدمات الغاز',
             style: GoogleFonts.cairo(
