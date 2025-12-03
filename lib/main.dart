@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'dart:async';
 
 void main() async {
@@ -203,11 +204,13 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _fadeAnimation;
   late Animation<double> _slideAnimation;
   late Animation<double> _scaleAnimation;
+  String _version = '';
 
   @override
   void initState() {
     super.initState();
     debugPrint('🚀 SplashScreen initState');
+    _loadVersion();
 
     _controller = AnimationController(
       vsync: this,
@@ -241,11 +244,26 @@ class _SplashScreenState extends State<SplashScreen>
             transitionsBuilder: (_, animation, __, child) {
               return FadeTransition(opacity: animation, child: child);
             },
-            transitionDuration: const Duration(milliseconds: 600),
+            transitionDuration: const Duration(milliseconds: 500),
           ),
         );
       }
     });
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      setState(() {
+        _version = 'v${packageInfo.version} (${packageInfo.buildNumber})';
+      });
+      debugPrint('📱 App Version: $_version');
+    } catch (e) {
+      debugPrint('❌ Error loading version: $e');
+      setState(() {
+        _version = 'v1.0.8 (11)';
+      });
+    }
   }
 
   @override
@@ -257,145 +275,128 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
             colors: [
-              const Color(0xFFE8F5F3),
-              const Color(0xFFD4EDE9),
-              const Color(0xFFC0E5DF),
+              const Color(0xFF00BFA5).withOpacity(0.05),
+              Colors.white,
+              const Color(0xFF00BFA5).withOpacity(0.05),
             ],
           ),
         ),
         child: Stack(
           children: [
-            Positioned(
-              top: -100,
-              right: -100,
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: Container(
-                  width: 300,
-                  height: 300,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF00BFA5).withOpacity(0.15),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: -150,
-              left: -100,
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: Container(
-                  width: 400,
-                  height: 400,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF00BFA5).withOpacity(0.15),
-                  ),
-                ),
-              ),
-            ),
             Center(
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0, 0.3),
-                  end: Offset.zero,
-                ).animate(_slideAnimation),
-                child: FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: ModernCard(
-                    width: MediaQuery.of(context).size.width * 0.85,
-                    padding: const EdgeInsets.all(40),
-                    margin: const EdgeInsets.symmetric(horizontal: 20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 30,
-                        offset: const Offset(0, 15),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: ScaleTransition(
+                      scale: _scaleAnimation,
+                      child: Container(
+                        width: 140,
+                        height: 140,
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(30),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00BFA5).withOpacity(0.2),
+                              blurRadius: 30,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: Image.asset(
+                          'assets/images/logo.png',
+                          width: 100,
+                          height: 100,
+                        ),
                       ),
-                    ],
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ScaleTransition(
-                          scale: _scaleAnimation,
-                          child: Container(
-                            width: 140,
-                            height: 140,
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF00BFA5),
-                              borderRadius: BorderRadius.circular(30),
-                              boxShadow: [
-                                BoxShadow(
-                                  color:
-                                      const Color(0xFF00BFA5).withOpacity(0.3),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Image.asset(
-                              'assets/images/logo.png',
-                              fit: BoxFit.contain,
-                              errorBuilder: (context, error, stackTrace) {
-                                debugPrint('❌ Error loading logo: $error');
-                                return Icon(
-                                  Icons.business,
-                                  size: 80,
-                                  color: Colors.white,
-                                );
-                              },
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.3),
+                      end: Offset.zero,
+                    ).animate(_slideAnimation),
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Column(
+                        children: [
+                          Text(
+                            'بوابة الموظف الرقمية',
+                            style: GoogleFonts.cairo(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF2D3748),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 30),
-                        Text(
-                          'الشركة العامة لتعبئة',
-                          style: GoogleFonts.cairo(
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF2D3748),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        Text(
-                          'وخدمات الغاز',
-                          style: GoogleFonts.cairo(
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF2D3748),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 15),
-                        Text(
-                          'بوابة الموظف الرقمية',
-                          style: GoogleFonts.cairo(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                            color: const Color(0xFF00BFA5),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 40),
-                        SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              const Color(0xFF00BFA5),
+                          const SizedBox(height: 12),
+                          Text(
+                            'الشركة العامة لتعبئة وخدمات الغاز',
+                            style: GoogleFonts.cairo(
+                              fontSize: 16,
+                              color: const Color(0xFF4A5568),
                             ),
-                            strokeWidth: 3,
+                            textAlign: TextAlign.center,
                           ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 50),
+                  FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: SizedBox(
+                      width: 50,
+                      height: 50,
+                      child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          const Color(0xFF00BFA5),
                         ),
-                      ],
+                        strokeWidth: 3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Version number at bottom
+            Positioned(
+              bottom: 30,
+              left: 0,
+              right: 0,
+              child: FadeTransition(
+                opacity: _fadeAnimation,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00BFA5).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFF00BFA5).withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      _version.isEmpty ? 'جاري التحميل...' : _version,
+                      style: GoogleFonts.cairo(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF00BFA5),
+                      ),
                     ),
                   ),
                 ),
@@ -413,175 +414,205 @@ class PrivacyPolicyScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('الشركة العامة لتعبئة وخدمات الغاز');
-
+    debugPrint('📄 Building PrivacyPolicyScreen');
     return Scaffold(
-      backgroundColor: const Color(0xFFF7FAFC),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding:
-                const EdgeInsets.only(top: 60, bottom: 30, left: 20, right: 20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  const Color(0xFF00BFA5),
-                  const Color(0xFF00A896),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF00BFA5).withOpacity(0.3),
-                  blurRadius: 15,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                Icon(
-                  Icons.privacy_tip_outlined,
-                  size: 50,
-                  color: Colors.white,
-                ),
-                const SizedBox(height: 15),
-                Text(
-                  'سياسة الخصوصية',
-                  style: GoogleFonts.cairo(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'يرجى قراءة سياسة الخصوصية بعناية',
-                  style: GoogleFonts.cairo(
-                    fontSize: 15,
-                    color: Colors.white.withOpacity(0.9),
-                  ),
-                ),
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                const Color(0xFF00BFA5).withOpacity(0.03),
+                Colors.white,
               ],
             ),
           ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: ModernCard(
-                padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              // Header with Logo
+              Container(
+                padding: const EdgeInsets.all(30),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildPrivacySection(
-                      '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                    Container(
+                      width: 100,
+                      height: 100,
+                      padding: const EdgeInsets.all(15),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF00BFA5).withOpacity(0.15),
+                            blurRadius: 20,
+                            offset: const Offset(0, 5),
+                          ),
+                        ],
+                      ),
+                      child: Image.asset('assets/images/logo.png'),
                     ),
-                    _buildPrivacySection(
-                      '2. البيانات المجمعة',
-                      'يتم جمع البيانات الأساسية للموظف مثل الاسم، الرقم الوظيفي، القسم، الراتب، والمعلومات الوظيفية الأخرى اللازمة لإدارة الموارد البشرية والرواتب.',
+                    const SizedBox(height: 20),
+                    Text(
+                      'سياسة الخصوصية',
+                      style: GoogleFonts.cairo(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF2D3748),
+                      ),
                     ),
-                    _buildPrivacySection(
-                      '3. استخدام البيانات',
-                      'تُستخدم البيانات لأغراض إدارية فقط، مثل حساب الرواتب، إدارة الحضور والانصراف، والتواصل مع الموظفين بخصوص الأمور الوظيفية.',
-                    ),
-                    _buildPrivacySection(
-                      '4. حماية البيانات',
-                      'تتخذ الشركة العامة لتعبئة وخدمات الغاز جميع التدابير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
-                    ),
-                    _buildPrivacySection(
-                      '5. مشاركة البيانات',
-                      'لن يتم مشاركة بيانات الموظفين مع أي جهة خارجية إلا في حالات ضرورية مثل الامتثال للقوانين أو بموافقة الموظف.',
-                    ),
-                    _buildPrivacySection(
-                      '6. الاحتفاظ بالبيانات',
-                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حفظها وفقًا للمتطلبات القانونية.',
-                    ),
-                    _buildPrivacySection(
-                      '7. حقوق الموظف',
-                      'يحق للموظف الاطلاع على بياناته، وطلب تصحيح أي خطأ، أو حذف بياناته بعد انتهاء العلاقة الوظيفية، ما لم يكن الاحتفاظ بها مطلوبًا قانونيًا.',
-                    ),
-                    _buildPrivacySection(
-                      '8. التعديلات على السياسة',
-                      'قد تقوم الشركة العامة لتعبئة وخدمات الغاز بتحديث هذه السياسة من وقت لآخر، وسيتم إخطار الموظفين بأي تعديل من خلال التطبيق.',
+                    const SizedBox(height: 8),
+                    Text(
+                      'بوابة الموظف الرقمية',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        color: const Color(0xFF4A5568),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -5),
-                ),
-              ],
-            ),
-            child: ModernButton(
-              onPressed: () {
-                debugPrint('✅ Privacy Policy accepted - Navigating to WebView');
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                    builder: (context) => const WebViewScreen(),
+
+              // Privacy Policy Content
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: ModernCard(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildPolicySection(
+                          icon: Icons.security,
+                          title: 'حماية بياناتك',
+                          content:
+                              'نحن نحترم خصوصيتك ونلتزم بحماية معلوماتك الشخصية. هذا التطبيق مصمم لعرض معلومات الرواتب للموظفين فقط.',
+                        ),
+                        const SizedBox(height: 24),
+                        _buildPolicySection(
+                          icon: Icons.data_usage,
+                          title: 'البيانات المستخدمة',
+                          content:
+                              'يستخدم التطبيق المعلومات التالية:\n• اتصال الإنترنت للوصول إلى البوابة\n• لا يتم جمع أو تخزين معلومات شخصية في التطبيق',
+                        ),
+                        const SizedBox(height: 24),
+                        _buildPolicySection(
+                          icon: Icons.lock,
+                          title: 'الأمان',
+                          content:
+                              'جميع الاتصالات مع الخادم آمنة. لا يقوم التطبيق بتخزين أي بيانات حساسة على الجهاز.',
+                        ),
+                        const SizedBox(height: 24),
+                        _buildPolicySection(
+                          icon: Icons.phone_android,
+                          title: 'الأذونات المطلوبة',
+                          content:
+                              'التطبيق يحتاج إلى:\n• الإنترنت: للاتصال بالخادم',
+                        ),
+                      ],
+                    ),
                   ),
-                );
-              },
-              child: Text(
-                'موافق',
-                style: GoogleFonts.cairo(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
                 ),
               ),
-            ),
+
+              // Accept Button
+              Container(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: ModernButton(
+                        onPressed: () {
+                          debugPrint('✅ Privacy policy accepted');
+                          Navigator.of(context).pushReplacement(
+                            MaterialPageRoute(
+                                builder: (_) => const WebViewScreen()),
+                          );
+                        },
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.check_circle, color: Colors.white),
+                            const SizedBox(width: 10),
+                            Text(
+                              'موافق والمتابعة',
+                              style: GoogleFonts.cairo(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'بالضغط على موافق، فإنك توافق على سياسة الخصوصية',
+                      style: GoogleFonts.cairo(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildPrivacySection(String title, String content) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE8F5E9),
-              borderRadius: BorderRadius.circular(5),
-            ),
-            child: Text(
-              title,
-              style: GoogleFonts.cairo(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF00BFA5),
+  Widget _buildPolicySection({
+    required IconData icon,
+    required String title,
+    required String content,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00BFA5).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            icon,
+            color: const Color(0xFF00BFA5),
+            size: 24,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: GoogleFonts.cairo(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF2D3748),
+                ),
               ),
-            ),
+              const SizedBox(height: 8),
+              Text(
+                content,
+                style: GoogleFonts.cairo(
+                  fontSize: 14,
+                  color: const Color(0xFF4A5568),
+                  height: 1.6,
+                ),
+              ),
+            ],
           ),
-          Text(
-            content,
-            style: GoogleFonts.cairo(
-              fontSize: 15,
-              height: 1.6,
-              color: const Color(0xFF4A5568),
-            ),
-            textAlign: TextAlign.right,
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -594,32 +625,46 @@ class WebViewScreen extends StatefulWidget {
 }
 
 class _WebViewScreenState extends State<WebViewScreen> {
-  final String loginUrl = 'http://109.224.38.44:5000/login';
   WebViewController? controller;
   bool isLoading = true;
-  double loadingProgress = 0.0;
-  bool canGoBack = false;
   bool hasError = false;
-  String errorMessage = '';
-  String currentUrl = '';
+  bool canGoBack = false;
   bool isLoggedIn = false;
+  double loadingProgress = 0.0;
+  String errorMessage = '';
+  String _version = '';
 
   @override
   void initState() {
     super.initState();
     debugPrint('🌐 WebViewScreen initState');
-    debugPrint('🔗 Login URL: $loginUrl');
+    _loadVersion();
+    _initializeWebView();
+  }
 
-    // Delay initialization to ensure proper rendering
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) {
-        _initializeWebView();
-      }
-    });
+  Future<void> _loadVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      setState(() {
+        _version = 'v${packageInfo.version} (${packageInfo.buildNumber})';
+      });
+      debugPrint('📱 App Version: $_version');
+    } catch (e) {
+      debugPrint('❌ Error loading version: $e');
+      setState(() {
+        _version = 'v1.0.8 (11)';
+      });
+    }
   }
 
   void _initializeWebView() {
-    debugPrint('⚙️ Initializing WebView...');
+    debugPrint('🔧 Initializing WebView');
+    setState(() {
+      isLoading = true;
+      hasError = false;
+      canGoBack = false;
+      loadingProgress = 0.0;
+    });
 
     try {
       controller = WebViewController()
@@ -628,104 +673,76 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (String url) {
-              debugPrint('📄 Page started: $url');
-              if (mounted) {
-                setState(() {
-                  isLoading = true;
-                  hasError = false;
-                  loadingProgress = 0.0;
-                  currentUrl = url;
-                  // Check if user is logged in (not on login page)
-                  isLoggedIn = !url.contains('/login');
-                });
-              }
+              debugPrint('📍 Page started: $url');
+              setState(() {
+                isLoading = true;
+                loadingProgress = 0.0;
+              });
             },
             onProgress: (int progress) {
-              debugPrint('⏳ Progress: $progress%');
-              if (mounted) {
-                setState(() {
-                  loadingProgress = progress / 100;
-                });
-              }
+              debugPrint('📊 Loading progress: $progress%');
+              setState(() {
+                loadingProgress = progress / 100.0;
+              });
             },
-            onPageFinished: (String url) {
+            onPageFinished: (String url) async {
               debugPrint('✅ Page finished: $url');
-              if (mounted) {
-                setState(() {
-                  isLoading = false;
-                  loadingProgress = 1.0;
-                  currentUrl = url;
-                  isLoggedIn = !url.contains('/login');
-                });
-              }
-              _updateCanGoBack();
+
+              // Check if we can go back
+              final canGoBackNow = await controller?.canGoBack() ?? false;
+
+              setState(() {
+                isLoading = false;
+                canGoBack = canGoBackNow;
+                isLoggedIn = !url.contains('/login') && !url.contains('=login');
+              });
+
+              debugPrint('🔙 Can go back: $canGoBack');
+              debugPrint('👤 Is logged in: $isLoggedIn');
             },
             onWebResourceError: (WebResourceError error) {
-              debugPrint('❌ WebView Error:');
-              debugPrint('   Description: ${error.description}');
-              debugPrint('   Error code: ${error.errorCode}');
-              debugPrint('   Error type: ${error.errorType}');
-
-              if (mounted) {
-                setState(() {
-                  isLoading = false;
-                  hasError = true;
-                  errorMessage = error.description;
-                });
-              }
+              debugPrint('❌ WebView Error: ${error.description}');
+              setState(() {
+                isLoading = false;
+                hasError = true;
+                errorMessage = error.description;
+              });
             },
             onNavigationRequest: (NavigationRequest request) {
-              debugPrint('🔗 Navigation: ${request.url}');
+              debugPrint('🔗 Navigation request: ${request.url}');
               return NavigationDecision.navigate;
             },
           ),
-        );
-
-      // Load URL
-      debugPrint('🚀 Loading URL: $loginUrl');
-      controller!.loadRequest(Uri.parse(loginUrl));
-
-      if (mounted) {
-        setState(() {});
-      }
-
-      debugPrint('✅ WebView initialized successfully');
+        )
+        ..loadRequest(Uri.parse('http://salary.scgfs.iq'));
+      debugPrint('🚀 WebView initialized and loading URL');
     } catch (e) {
       debugPrint('❌ Error initializing WebView: $e');
-      if (mounted) {
-        setState(() {
-          hasError = true;
-          errorMessage = e.toString();
-        });
-      }
-    }
-  }
-
-  Future<void> _updateCanGoBack() async {
-    if (controller != null) {
-      final canNavigateBack = await controller!.canGoBack();
       setState(() {
-        canGoBack = canNavigateBack;
+        isLoading = false;
+        hasError = true;
+        errorMessage = e.toString();
       });
     }
   }
 
   Future<bool> _onWillPop() async {
     if (canGoBack && controller != null) {
-      debugPrint('⬅️ Going back in WebView history');
+      debugPrint('⬅️ Hardware back pressed - Going back in WebView');
       controller!.goBack();
       return false;
+    } else {
+      debugPrint('🚪 Hardware back pressed - Showing exit dialog');
+      final shouldExit = await _showExitDialog();
+      return shouldExit ?? false;
     }
-
-    // Show exit dialog
-    return await _showExitDialog() ?? false;
   }
 
   Future<bool?> _showExitDialog() {
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (context) {
         return Directionality(
           textDirection: TextDirection.rtl,
           child: AlertDialog(
@@ -836,12 +853,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
               }
             },
           ),
-          title: Text(
-            'الشركة العامة لتعبئة وخدمات الغاز',
-            style: GoogleFonts.cairo(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'الشركة العامة لتعبئة وخدمات الغاز',
+                style: GoogleFonts.cairo(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (_version.isNotEmpty)
+                Text(
+                  _version,
+                  style: GoogleFonts.cairo(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withOpacity(0.9),
+                  ),
+                ),
+            ],
           ),
         ),
         body: Stack(
@@ -957,6 +988,38 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // Version Badge - Always visible at bottom right
+            if (_version.isNotEmpty && !hasError)
+              Positioned(
+                bottom: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00BFA5),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00BFA5).withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    _version,
+                    style: GoogleFonts.cairo(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
                     ),
                   ),
                 ),
