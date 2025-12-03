@@ -1,63 +1,111 @@
 workflows:
-  ios-salaryinfo:
-    name: SalaryInfo iOS Build
+  salaryinfo-ios-final:
+    name: SalaryInfo iOS - Final v1.0.4
+    instance_type: mac_mini_m2
     environment:
       groups:
-        - appstore_credentials  # You'll create this group in Codemagic
-        - certificate_credentials  # Optional, Codemagic can auto-create
+        - appstore_credentials
       vars:
-        XCODE_PROJECT: "Runner.xcworkspace"
-        XCODE_SCHEME: "Runner"
-        BUNDLE_ID: "com.ila.salaryinfo"  # Your bundle ID
-        APP_NAME: "SalaryInfo"
-        APP_VERSION: "1.0.0"
+        BUNDLE_ID: "com.ila.salaryinfo"
+        APP_STORE_APPLE_ID: 6755962367
       xcode: latest
       cocoapods: default
       flutter: stable
     scripts:
-      - name: Set up Flutter
-        script: |
-          flutter --version
-          flutter pub get
-      - name: Set up keychain
-        script: |
-          keychain initialize
-      - name: Fetch signing files
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --platform IOS \
-            --create
       - name: Set up code signing
         script: |
+          set -e
+          set -x
+          keychain initialize
+      
+      - name: Fix Bundle ID
+        script: |
+          set -e
+          set -x
+          cd ios
+          sed -i '' 's/com.example.salaryinfo/com.ila.salaryinfo/g' Runner.xcodeproj/project.pbxproj
+          cd ..
+      
+      - name: Verify Info.plist has HTTP permissions
+        script: |
+          set -e
+          set -x
+          echo "✓ Checking Info.plist for HTTP permissions..."
+          if grep -q "NSAllowsArbitraryLoads" ios/Runner/Info.plist; then
+            echo "✓ HTTP permissions found in Info.plist"
+          else
+            echo "✗ ERROR: HTTP permissions NOT found!"
+            echo "Info.plist must include NSAppTransportSecurity settings"
+            exit 1
+          fi
+      
+      - name: Verify logo exists
+        script: |
+          set -e
+          set -x
+          echo "✓ Checking if logo file exists..."
+          if [ -f "assets/images/logo.png" ]; then
+            echo "✓ Logo file found: assets/images/logo.png"
+          else
+            echo "✗ WARNING: Logo file not found at assets/images/logo.png"
+            echo "App will fail if logo is missing!"
+          fi
+      
+      - name: Fetch signing files
+        script: |
+          set -e
+          set -x
+          app-store-connect fetch-signing-files \
+            "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+      
+      - name: Add certificates to keychain
+        script: |
+          set -e
+          set -x
           keychain add-certificates
+      
+      - name: Set up code signing settings
+        script: |
+          set -e
+          set -x
+          xcode-project use-profiles
+      
+      - name: Get Flutter packages
+        script: |
+          set -e
+          set -x
+          flutter pub get
+      
       - name: Install pods
         script: |
-          cd ios && pod install --repo-update
-      - name: Build ipa for distribution
+          set -e
+          set -x
+          cd ios
+          pod install
+          cd ..
+      
+      - name: Build IPA
         script: |
-          xcode-project build-ipa \
-            --workspace "$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME" \
-            --output "build/ios/ipa"
-      - name: Verify build
-        script: |
-          echo "✅ Build completed for:"
-          echo "App: $APP_NAME"
-          echo "Bundle ID: $BUNDLE_ID"
-          echo "Version: $APP_VERSION"
+          set -e
+          set -x
+          flutter build ipa --release \
+            --export-options-plist=/Users/builder/export_options.plist
+    
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    
     publishing:
       email:
         recipients:
-          - hazajadded@gmail.com  # CHANGE TO YOUR EMAIL
+          - hazajadded@gmail.com
         notify:
           success: true
           failure: true
+      
       app_store_connect:
-        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
-        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
-        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        auth: integration
         submit_to_testflight: true
-        submit_to_app_store: false

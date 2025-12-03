@@ -1,7 +1,8 @@
 name: salaryinfo
-description: "SalaryInfo - WebView Application"
+description: Government salary information portal
 publish_to: 'none'
-version: 1.0.0+1
+
+version: 1.0.4+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -9,21 +10,20 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  webview_flutter: ^4.4.2
-  share_plus: ^7.2.1
+  cupertino_icons: ^1.0.6
+  webview_flutter: ^4.4.4
+  google_fonts: ^6.1.0
+  shared_preferences: ^2.2.2
+  connectivity_plus: ^5.0.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_launcher_icons: ^0.13.1
-
-flutter_icons:
-  android: true
-  ios: true
-  image_path: "assets/app_icon.png"
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
+  
+  # إضافة الصور
   assets:
-    - assets/app_icon.png
+    - assets/images/printo.png
