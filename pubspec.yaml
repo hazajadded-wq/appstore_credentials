@@ -2,7 +2,7 @@ name: salaryinfo
 description: Government salary information portal
 publish_to: 'none'
 
-version: 1.0.7+8
+version: 1.0.7+9
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
