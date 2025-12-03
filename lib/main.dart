@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'dart:async';
 
 void main() async {
@@ -602,7 +601,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool canGoBack = false;
   bool hasError = false;
   String errorMessage = '';
-  String _version = '';
   String currentUrl = '';
   bool isLoggedIn = false;
 
@@ -611,7 +609,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
     super.initState();
     debugPrint('🌐 WebViewScreen initState');
     debugPrint('🔗 Login URL: $loginUrl');
-    _loadVersion();
 
     // Delay initialization to ensure proper rendering
     Future.delayed(const Duration(milliseconds: 300), () {
@@ -621,21 +618,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
     });
   }
 
-
-  Future<void> _loadVersion() async {
-    try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      setState(() {
-        _version = 'v${packageInfo.version}';
-      });
-      debugPrint('📱 App Version: $_version');
-    } catch (e) {
-      debugPrint('❌ Error loading version: $e');
-      setState(() {
-        _version = 'v1.0.8';
-      });
-    }
-  }
   void _initializeWebView() {
     debugPrint('⚙️ Initializing WebView...');
 
@@ -861,22 +843,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
               fontWeight: FontWeight.bold,
             ),
           ),
-          actions: [
-            if (_version.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(left: 16),
-                child: Center(
-                  child: Text(
-                    _version,
-                    style: GoogleFonts.cairo(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withOpacity(0.9),
-                    ),
-                  ),
-                ),
-              ),
-          ],
         ),
         body: Stack(
           children: [
