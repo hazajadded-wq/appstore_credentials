@@ -48,7 +48,7 @@ workflows:
       - name: Build IPA
         script: |
           set -e
-          echo "📱 Building version 1.0.8 (13) with Privacy Manifest fix"
+          echo "📱 Building version 1.0.8 (14) with Privacy Manifest fix"
           flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     
     artifacts:
