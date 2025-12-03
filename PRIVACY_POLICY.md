@@ -99,8 +99,8 @@ We may update this policy periodically. You will be notified of significant chan
 For questions or concerns about this Privacy Policy:
 
 **Email:** hazajadded@gmail.com  
-**Developer:** Ali Hazajadded  
-**Location:** Baghdad, Iraq
+**Developer:** Ali Mahmoud Ahmed
+**Location:** diyala, Iraq
 
 ---
 
