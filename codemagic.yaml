@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.8 Final
+    name: SalaryInfo iOS - v1.0.8 Final with Privacy Manifest
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -32,10 +32,13 @@ workflows:
           set -e
           xcode-project use-profiles
       
-      - name: Get packages
+      - name: Get and upgrade packages
         script: |
           set -e
+          echo "📦 Upgrading Flutter packages..."
+          flutter pub upgrade
           flutter pub get
+          echo "✅ Packages upgraded successfully"
       
       - name: Install pods
         script: |
@@ -45,7 +48,7 @@ workflows:
       - name: Build IPA
         script: |
           set -e
-          echo "Building version 1.0.8 (11)"
+          echo "📱 Building version 1.0.8 (12) with Privacy Manifest fix"
           flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     
     artifacts:
