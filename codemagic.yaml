@@ -1,6 +1,6 @@
 workflows:
-  salaryinfo-ios-emergency:
-    name: SalaryInfo iOS - EMERGENCY FIX v1.0.6
+  salaryinfo-ios-final:
+    name: SalaryInfo iOS - v1.0.7 Final
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -45,10 +45,12 @@ workflows:
       - name: Build IPA
         script: |
           set -e
+          echo "Building version 1.0.7 (8)"
           flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
     
     publishing:
       email:
