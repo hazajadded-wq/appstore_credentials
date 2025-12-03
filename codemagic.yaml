@@ -6,8 +6,8 @@ workflows:
       groups:
         - appstore_credentials
       vars:
-        BUNDLE_ID: "com.ila.salaryinfo"
-        APP_STORE_APPLE_ID: 6755962367
+        BUNDLE_ID: "com.pocket.salaryinfo"
+        APP_STORE_APPLE_ID: 6756042000
       xcode: latest
       cocoapods: default
       flutter: stable
@@ -18,19 +18,24 @@ workflows:
           set -x
           keychain initialize
       
-      - name: Fix Bundle ID
+      - name: Verify Bundle ID
         script: |
           set -e
           set -x
-          cd ios
-          sed -i '' 's/com.example.salaryinfo/com.ila.salaryinfo/g' Runner.xcodeproj/project.pbxproj
-          cd ..
+          echo "Checking Bundle ID in project..."
+          if grep -q "com.pocket.salaryinfo" ios/Runner.xcodeproj/project.pbxproj; then
+            echo "✓ Bundle ID is correct: com.pocket.salaryinfo"
+          else
+            echo "✗ ERROR: Bundle ID mismatch!"
+            echo "Expected: com.pocket.salaryinfo"
+            exit 1
+          fi
       
       - name: Verify Info.plist has HTTP permissions
         script: |
           set -e
           set -x
-          echo "✓ Checking Info.plist for HTTP permissions..."
+          echo "Checking Info.plist for HTTP permissions..."
           if grep -q "NSAllowsArbitraryLoads" ios/Runner/Info.plist; then
             echo "✓ HTTP permissions found in Info.plist"
           else
@@ -43,18 +48,19 @@ workflows:
         script: |
           set -e
           set -x
-          echo "✓ Checking if logo file exists..."
+          echo "Checking if logo file exists..."
           if [ -f "assets/images/logo.png" ]; then
             echo "✓ Logo file found: assets/images/logo.png"
           else
             echo "✗ WARNING: Logo file not found at assets/images/logo.png"
-            echo "App will fail if logo is missing!"
+            echo "App may fail to launch without logo!"
           fi
       
       - name: Fetch signing files
         script: |
           set -e
           set -x
+          echo "Fetching signing files for Bundle ID: $BUNDLE_ID"
           app-store-connect fetch-signing-files \
             "$BUNDLE_ID" \
             --type IOS_APP_STORE \
@@ -90,6 +96,8 @@ workflows:
         script: |
           set -e
           set -x
+          echo "Building IPA for Bundle ID: $BUNDLE_ID"
+          echo "App Store ID: $APP_STORE_APPLE_ID"
           flutter build ipa --release \
             --export-options-plist=/Users/builder/export_options.plist
     
