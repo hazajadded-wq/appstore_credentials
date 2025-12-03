@@ -46,7 +46,6 @@ We use your information to:
 ## Data Security
 
 We protect your data using:
-- Encrypted data transmission (HTTPS/SSL)
 - Secure authentication system
 - Limited access to authorized personnel only
 - Regular security updates
@@ -152,7 +151,6 @@ For questions or concerns about this Privacy Policy:
 ## أمان البيانات
 
 نحمي بياناتك باستخدام:
-- نقل البيانات المشفرة (HTTPS/SSL)
 - نظام مصادقة آمن
 - وصول محدود للموظفين المصرح لهم فقط
 - تحديثات أمنية منتظمة
