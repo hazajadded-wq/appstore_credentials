@@ -327,7 +327,8 @@ class _SplashScreenState extends State<SplashScreen>
                               borderRadius: BorderRadius.circular(30),
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF00BFA5).withOpacity(0.3),
+                                  color:
+                                      const Color(0xFF00BFA5).withOpacity(0.3),
                                   blurRadius: 20,
                                   offset: const Offset(0, 10),
                                 ),
@@ -403,7 +404,8 @@ class PrivacyPolicyScreen extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.only(top: 60, bottom: 30, left: 20, right: 20),
+            padding:
+                const EdgeInsets.only(top: 60, bottom: 30, left: 20, right: 20),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
@@ -585,7 +587,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
-    print('WebViewScreen initState - Starting initialization');
+    debugPrint('🚀 WebViewScreen initState - Starting initialization');
     _checkInternetConnection();
     _initializeWebView();
     _listenToConnectivityChanges();
@@ -593,63 +595,66 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   @override
   void dispose() {
+    debugPrint('🛑 WebViewScreen dispose');
     connectivitySubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _checkInternetConnection() async {
     try {
-      final List<ConnectivityResult> connectivityResult = await Connectivity().checkConnectivity();
-      print('Connectivity check result: $connectivityResult');
+      final List<ConnectivityResult> connectivityResult = (await Connectivity()
+          .checkConnectivity()) as List<ConnectivityResult>;
+      debugPrint('📡 Connectivity check result: $connectivityResult');
       setState(() {
-        hasInternetConnection = connectivityResult.any((result) => 
-          result == ConnectivityResult.mobile || 
-          result == ConnectivityResult.wifi ||
-          result == ConnectivityResult.ethernet ||
-          result == ConnectivityResult.vpn ||
-          result == ConnectivityResult.bluetooth ||
-          result == ConnectivityResult.other
-        );
+        hasInternetConnection = connectivityResult.any((result) =>
+            result == ConnectivityResult.mobile ||
+            result == ConnectivityResult.wifi ||
+            result == ConnectivityResult.ethernet ||
+            result == ConnectivityResult.vpn ||
+            result == ConnectivityResult.bluetooth ||
+            result == ConnectivityResult.other);
       });
-      print('Has internet connection: $hasInternetConnection');
+      debugPrint('✅ Has internet connection: $hasInternetConnection');
     } catch (e) {
-      print('Error checking connectivity: $e');
+      debugPrint('❌ Error checking connectivity: $e');
       setState(() {
-        hasInternetConnection = true; // افترض وجود اتصال في حالة الخطأ
+        hasInternetConnection = true;
       });
     }
   }
 
   void _listenToConnectivityChanges() {
-    connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
-      print('Connectivity changed: $results');
-      setState(() {
-        hasInternetConnection = results.any((result) => 
-          result == ConnectivityResult.mobile || 
-          result == ConnectivityResult.wifi ||
-          result == ConnectivityResult.ethernet ||
-          result == ConnectivityResult.vpn ||
-          result == ConnectivityResult.bluetooth ||
-          result == ConnectivityResult.other
-        );
-      });
-      
-      if (hasInternetConnection && !isLoading) {
-        print('Connection restored - reloading WebView');
-        controller.reload();
-      }
-    });
+    connectivitySubscription = Connectivity()
+            .onConnectivityChanged
+            .listen((List<ConnectivityResult> results) {
+              debugPrint('📡 Connectivity changed: $results');
+              setState(() {
+                hasInternetConnection = results.any((result) =>
+                    result == ConnectivityResult.mobile ||
+                    result == ConnectivityResult.wifi ||
+                    result == ConnectivityResult.ethernet ||
+                    result == ConnectivityResult.vpn ||
+                    result == ConnectivityResult.bluetooth ||
+                    result == ConnectivityResult.other);
+              });
+
+              if (hasInternetConnection && !isLoading) {
+                debugPrint('🔄 Connection restored - reloading WebView');
+                controller.reload();
+              }
+            } as void Function(ConnectivityResult event)?)
+        as StreamSubscription<List<ConnectivityResult>>?;
   }
 
   void _initializeWebView() {
-    print('Initializing WebView with URL: $url');
+    debugPrint('🌐 Initializing WebView with URL: $url');
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
-            print('Page started loading: $url');
+            debugPrint('📄 Page started loading: $url');
             setState(() {
               isLoading = true;
               loadingProgress = 0.0;
@@ -657,13 +662,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
             _updateCanGoBack();
           },
           onProgress: (int progress) {
-            print('Loading progress: $progress%');
+            debugPrint('⏳ Loading progress: $progress%');
             setState(() {
               loadingProgress = progress / 100;
             });
           },
           onPageFinished: (String url) {
-            print('Page finished loading: $url');
+            debugPrint('✅ Page finished loading: $url');
             setState(() {
               isLoading = false;
               loadingProgress = 1.0;
@@ -671,22 +676,22 @@ class _WebViewScreenState extends State<WebViewScreen> {
             _updateCanGoBack();
           },
           onWebResourceError: (WebResourceError error) {
-            print('WebView error: ${error.description}');
-            print('Error code: ${error.errorCode}');
-            print('Error type: ${error.errorType}');
+            debugPrint('❌ WebView error: ${error.description}');
+            debugPrint('❌ Error code: ${error.errorCode}');
+            debugPrint('❌ Error type: ${error.errorType}');
             setState(() {
               isLoading = false;
             });
           },
           onNavigationRequest: (NavigationRequest request) {
-            print('Navigation request: ${request.url}');
+            debugPrint('🔗 Navigation request: ${request.url}');
             return NavigationDecision.navigate;
           },
         ),
       )
       ..loadRequest(Uri.parse(url));
-    
-    print('WebView controller initialized');
+
+    debugPrint('✅ WebView controller initialized');
   }
 
   Future<void> _updateCanGoBack() async {
@@ -747,7 +752,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
                 child: Text(
                   'لا',
@@ -762,7 +768,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 onPressed: () => Navigator.of(context).pop(true),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00BFA5),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -785,8 +792,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('Building WebViewScreen - hasInternet: $hasInternetConnection, isLoading: $isLoading');
-    
+    debugPrint(
+        '🎨 Building WebViewScreen - hasInternet: $hasInternetConnection, isLoading: $isLoading');
+
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
@@ -815,7 +823,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: () {
-                print('Refresh button pressed');
+                debugPrint('🔄 Refresh button pressed');
                 _checkInternetConnection();
                 controller.reload();
               },
@@ -824,9 +832,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            if (hasInternetConnection)
-              WebViewWidget(controller: controller),
-            
+            if (hasInternetConnection) WebViewWidget(controller: controller),
             if (!hasInternetConnection)
               Container(
                 width: double.infinity,
@@ -874,7 +880,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         const SizedBox(height: 40),
                         ModernButton(
                           onPressed: () async {
-                            print('Retry button pressed');
+                            debugPrint('🔄 Retry button pressed');
                             await _checkInternetConnection();
                             if (hasInternetConnection) {
                               controller.reload();
@@ -905,7 +911,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   ),
                 ),
               ),
-            
             if (isLoading && hasInternetConnection)
               Container(
                 width: double.infinity,
