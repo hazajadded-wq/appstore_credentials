@@ -19,11 +19,8 @@ void main() async {
     debugPrint('❌ Error clearing cache: $e');
   }
 
-  // Set orientation
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  // REMOVED: SystemChrome.setPreferredOrientations
+  // This was causing touch issues on iPhone 13 mini and iPad Air 5
 
   runApp(const MyApp());
 }
