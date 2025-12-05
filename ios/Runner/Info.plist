@@ -24,12 +24,18 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	
-	<!-- CRITICAL: Disable iPad multitasking - iPhone only app -->
+
+	<!-- iPhone only -->
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+
+	<!-- Disable iPad multitasking -->
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	
-	<!-- HTTP PERMISSIONS - CRITICAL FOR WEBVIEW -->
+	<!-- HTTP PERMISSIONS -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -41,30 +47,25 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	
-	<!-- Skip encryption questions -->
+
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	
-	<!-- Network usage description -->
+
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs network access to connect to the salary information server</string>
-	
-	<!-- UI Settings -->
+
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
-	
-	<!-- Supported orientations - iPhone ONLY (Portrait) -->
+
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	
-	<!-- Flutter settings -->
+
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
