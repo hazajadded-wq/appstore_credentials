@@ -54,21 +54,10 @@
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	
-	<!-- Supported orientations - iPhone -->
+	<!-- Supported orientations - iPhone ONLY (Portrait) -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	
-	<!-- Supported orientations - iPad -->
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	
 	<!-- Flutter settings -->
