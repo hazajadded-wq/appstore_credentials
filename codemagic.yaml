@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.8 Final with Privacy Manifest
+    name: SalaryInfo iOS - v1.0.9 Touch Events Fix
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -32,24 +32,37 @@ workflows:
           set -e
           xcode-project use-profiles
       
+      - name: Clean build
+        script: |
+          set -e
+          echo "🧹 Cleaning Flutter build..."
+          flutter clean
+          echo "✅ Clean completed"
+      
       - name: Get and upgrade packages
         script: |
           set -e
-          echo "📦 Upgrading Flutter packages..."
-          flutter pub upgrade
+          echo "📦 Getting Flutter packages..."
           flutter pub get
-          echo "✅ Packages upgraded successfully"
+          echo "✅ Packages ready"
       
       - name: Install pods
         script: |
           set -e
+          echo "📦 Installing CocoaPods..."
           cd ios && pod install && cd ..
+          echo "✅ Pods installed"
       
       - name: Build IPA
         script: |
           set -e
-          echo "📱 Building version 1.0.8 (15) with Privacy Manifest fix"
-          flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
+          echo "📱 Building version 1.0.9 (16) - Touch Events Fix"
+          echo "🔧 Fixed: SystemChrome orientation lock causing touch issues on iPhone 13 mini"
+          flutter build ipa --release \
+            --build-name=1.0.9 \
+            --build-number=16 \
+            --export-options-plist=/Users/builder/export_options.plist
+          echo "✅ Build completed successfully"
     
     artifacts:
       - build/ios/ipa/*.ipa
