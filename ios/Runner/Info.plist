@@ -25,6 +25,10 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	
+	<!-- CRITICAL: Disable iPad multitasking - iPhone only app -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	
 	<!-- HTTP PERMISSIONS - CRITICAL FOR WEBVIEW -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
