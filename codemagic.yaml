@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.9 Touch Events Fix
+    name: SalaryInfo iOS - v1.0.9 iPhone Only
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -39,7 +39,7 @@ workflows:
           flutter clean
           echo "✅ Clean completed"
       
-      - name: Get and upgrade packages
+      - name: Get packages
         script: |
           set -e
           echo "📦 Getting Flutter packages..."
@@ -56,8 +56,8 @@ workflows:
       - name: Build IPA
         script: |
           set -e
-          echo "📱 Building version 1.0.9 (16) - Touch Events Fix"
-          echo "🔧 Fixed: SystemChrome orientation lock causing touch issues on iPhone 13 mini"
+          echo "📱 Building version 1.0.9 (17) - iPhone Only + Touch Fix"
+          echo "🔧 Fixed: SystemChrome removed + iPad support removed"
           flutter build ipa --release \
             --build-name=1.0.9 \
             --build-number=16 \
