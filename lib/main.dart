@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -157,39 +158,40 @@ class ModernButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: Ink(
-            height: height,
-            padding: padding,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(borderRadius),
-              gradient: isGradient
-                  ? LinearGradient(
-                      colors: [
-                        color ?? const Color(0xFF00BFA5),
-                        color != null
-                            ? color!.withOpacity(0.8)
-                            : const Color(0xFF00A896),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    )
-                  : null,
-              color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
-              boxShadow: [
-                BoxShadow(
-                  color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Center(child: child),
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: Ink(
+          height: height,
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(borderRadius),
+            gradient: isGradient
+                ? LinearGradient(
+                    colors: [
+                      color ?? const Color(0xFF00BFA5),
+                      color != null
+                          ? color!.withOpacity(0.8)
+                          : const Color(0xFF00A896),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
+            boxShadow: [
+              BoxShadow(
+                color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ));
+          child: Center(child: child),
+        ),
+      ),
+    );
   }
 }
 
@@ -554,37 +556,38 @@ class PrivacyPolicyScreen extends StatelessWidget {
 
   Widget _buildPrivacySection(String title, String content) {
     return Padding(
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5E9),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                title,
-                style: GoogleFonts.cairo(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF00BFA5),
-                ),
-              ),
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(5),
             ),
-            Text(
-              content,
+            child: Text(
+              title,
               style: GoogleFonts.cairo(
-                fontSize: 15,
-                height: 1.6,
-                color: const Color(0xFF4A5568),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF00BFA5),
               ),
-              textAlign: TextAlign.right,
             ),
-          ],
-        ));
+          ),
+          Text(
+            content,
+            style: GoogleFonts.cairo(
+              fontSize: 15,
+              height: 1.6,
+              color: const Color(0xFF4A5568),
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -605,10 +608,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   String errorMessage = '';
   String currentUrl = '';
   bool isLoggedIn = false;
-  String lastNavigatedUrl = '';
-  int navigationCount = 0;
-  double zoomLevel = 1.0;
+  String lastNavigatedUrl = ''; // Track last URL to prevent loops
+  int navigationCount = 0; // Count consecutive navigations to same URL
+  double zoomLevel = 1.0; // Zoom level for page content
 
+  // GlobalKey for screenshot capture
   final GlobalKey _webViewKey = GlobalKey();
 
   @override
@@ -617,6 +621,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('🌐 WebViewScreen initState');
     debugPrint('🔗 Login URL: $loginUrl');
 
+    // Delay initialization to ensure proper rendering
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         _initializeWebView();
@@ -635,15 +640,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
           'FlutterChannel',
           onMessageReceived: (JavaScriptMessage message) {
             debugPrint('📨 JavaScript message received: ${message.message}');
+            // Handle any JavaScript messages from the web page
           },
         );
 
+      // Platform-specific settings for Android
       if (Platform.isAndroid) {
         debugPrint('🤖 Configuring Android WebView settings');
+
+        // Get the Android WebView controller
         final androidController =
             controller!.platform as AndroidWebViewController;
+
+        // Enable critical settings for proper HTML display
         androidController.setMediaPlaybackRequiresUserGesture(false);
+
         controller!.enableZoom(true);
+
         debugPrint('✅ Android WebView settings configured');
       }
 
@@ -652,6 +665,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onPageStarted: (String url) {
             debugPrint('📄 Page started: $url');
 
+            // Reset counter if it's a genuinely different page
             if (!url.contains('download=1')) {
               navigationCount = 0;
               lastNavigatedUrl = '';
@@ -663,6 +677,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 hasError = false;
                 loadingProgress = 0.0;
                 currentUrl = url;
+                // Check if user is logged in (not on login page)
                 isLoggedIn = !url.contains('/login');
               });
             }
@@ -678,6 +693,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onPageFinished: (String url) {
             debugPrint('✅ Page finished: $url');
 
+            // Reset navigation counter on successful load
             navigationCount = 0;
 
             if (mounted) {
@@ -690,19 +706,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
             }
             _updateCanGoBack();
 
+            // Hide notifications on login page
             if (url.contains('/login')) {
               debugPrint('🔐 Login page detected - hiding notifications');
               _hideNotificationsOnLoginPage();
             }
 
+            // Auto-fit payslip pages to screen
             if (url.contains('/payslips/view') || url.contains('/salary')) {
               debugPrint('📄 Payslip page detected - auto-fitting to screen');
+              // Reset zoom level for new page
               setState(() {
                 zoomLevel = 1.0;
               });
               _autoFitPageToScreen();
             }
 
+            // Inject JavaScript to fix HTML download on Android
             if (Platform.isAndroid) {
               _injectAndroidFix();
             }
@@ -724,20 +744,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onNavigationRequest: (NavigationRequest request) {
             debugPrint('🔗 Navigation request: ${request.url}');
 
+            // Detect and prevent infinite reload loops
             if (request.url == lastNavigatedUrl) {
               navigationCount++;
               debugPrint(
                   '⚠️ Duplicate navigation detected. Count: $navigationCount');
 
+              // If same URL is being requested more than twice, block it
               if (navigationCount > 2) {
                 debugPrint('🛑 Blocking repeated navigation to prevent loop');
                 return NavigationDecision.prevent;
               }
             } else {
+              // Different URL, reset counter
               lastNavigatedUrl = request.url;
               navigationCount = 1;
             }
 
+            // Allow all navigation for HTML content display
+            // This ensures both iOS and Android can view HTML salary slips
             if (request.url.contains('/login') ||
                 request.url.contains('/dashboard') ||
                 request.url.contains('/salary') ||
@@ -751,6 +776,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
       );
 
+      // Load URL
       debugPrint('🚀 Loading URL: $loginUrl');
       controller!.loadRequest(Uri.parse(loginUrl));
 
@@ -789,22 +815,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Auto-fit page script loading...');
           
+          // Remove any existing viewport meta tags
           var existingViewports = document.querySelectorAll('meta[name="viewport"]');
           existingViewports.forEach(function(viewport) {
             viewport.remove();
           });
           
+          // Add optimized viewport for mobile display
           var meta = document.createElement('meta');
           meta.name = 'viewport';
           meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
           document.getElementsByTagName('head')[0].appendChild(meta);
           
+          // Adjust body styling for better fit
           document.body.style.margin = '0';
           document.body.style.padding = '8px';
           document.body.style.boxSizing = 'border-box';
           document.body.style.overflow = 'auto';
           document.body.style.width = '100%';
           
+          // Find main content container and adjust
           var containers = document.querySelectorAll('div.container, div.content, main, article');
           containers.forEach(function(container) {
             container.style.maxWidth = '100%';
@@ -813,6 +843,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             container.style.boxSizing = 'border-box';
           });
           
+          // Adjust tables to fit screen
           var tables = document.querySelectorAll('table');
           tables.forEach(function(table) {
             table.style.width = '100%';
@@ -822,11 +853,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
             table.style.overflowX = 'auto';
           });
           
+          // Adjust any fixed width elements
           var fixedElements = document.querySelectorAll('[style*="width"]');
           fixedElements.forEach(function(element) {
             var computedWidth = window.getComputedStyle(element).width;
             var widthValue = parseInt(computedWidth);
             
+            // If element is wider than screen, make it responsive
             if (widthValue > window.innerWidth) {
               element.style.width = '100%';
               element.style.maxWidth = '100%';
@@ -844,73 +877,49 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   void _zoomIn() {
-    debugPrint('➕ Zoom In pressed, current zoom: $zoomLevel');
-    if (zoomLevel < 3.0) {
-      setState(() {
+    setState(() {
+      if (zoomLevel < 3.0) {
         zoomLevel += 0.2;
-        debugPrint('🔄 New zoom level: $zoomLevel');
-      });
-      _applyZoom();
-    } else {
-      debugPrint('⛔ Max zoom reached');
-    }
+        _applyZoom();
+      }
+    });
   }
 
   void _zoomOut() {
-    debugPrint('➖ Zoom Out pressed, current zoom: $zoomLevel');
-    if (zoomLevel > 0.5) {
-      setState(() {
+    setState(() {
+      if (zoomLevel > 0.5) {
         zoomLevel -= 0.2;
-        debugPrint('🔄 New zoom level: $zoomLevel');
-      });
-      _applyZoom();
-    } else {
-      debugPrint('⛔ Min zoom reached');
-    }
+        _applyZoom();
+      }
+    });
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) {
-      debugPrint('⛔ Controller is null, cannot apply zoom');
-      return;
-    }
-
-    debugPrint('🎯 Applying zoom: $zoomLevel');
+    if (controller == null) return;
 
     try {
       if (Platform.isIOS) {
-        // طريقة أبسط وأكثر فعالية لـ iOS
+        // iOS: Use simple transform on body
         await controller!.runJavaScript('''
           (function() {
-            // تغيير حجم الصفحة كلها باستخدام transform على body
             var body = document.body;
             var html = document.documentElement;
             
-            // إزالة أي تحويلات سابقة
-            body.style.transform = '';
-            body.style.webkitTransform = '';
-            html.style.transform = '';
-            html.style.webkitTransform = '';
+            // Apply transform
+            body.style.transform = 'scale($zoomLevel)';
+            body.style.transformOrigin = 'top center';
+            body.style.transition = 'transform 0.2s ease';
             
-            // تطبيق التحويل الجديد
-            body.style.transform = 'scale(' + $zoomLevel + ')';
-            body.style.webkitTransform = 'scale(' + $zoomLevel + ')';
-            body.style.transformOrigin = 'top right';
-            body.style.webkitTransformOrigin = 'top right';
+            // Prevent scroll
+            body.style.overflowX = 'hidden';
+            html.style.overflowX = 'hidden';
             
-            // ضبط العرض والارتفاع
-            body.style.width = (100 / $zoomLevel) + '%';
-            body.style.height = (100 / $zoomLevel) + '%';
-            
-            // ضبط overflow للسماح بالتمرير
-            body.style.overflow = 'auto';
-            html.style.overflow = 'auto';
-            
-            console.log('✅ iOS zoom applied: scale(' + $zoomLevel + ')');
+            console.log('iOS zoom applied: $zoomLevel');
           })();
         ''');
+        debugPrint('🔍 iOS Zoom level: $zoomLevel');
       } else {
-        // الطريقة الأصلية للاندرويد
+        // Android: Use transform scale
         await controller!.runJavaScript('''
           (function() {
             var html = document.documentElement;
@@ -918,20 +927,18 @@ class _WebViewScreenState extends State<WebViewScreen> {
             
             html.style.transformOrigin = '0 0';
             body.style.transformOrigin = '0 0';
-            
             html.style.transform = 'scale($zoomLevel)';
             html.style.width = (100 / $zoomLevel) + '%';
-            
             body.style.width = '100%';
             body.style.minHeight = '100vh';
             
-            console.log('✅ CSS transform zoom applied: $zoomLevel');
+            console.log('Android transform zoom applied: $zoomLevel');
           })();
         ''');
+        debugPrint('🔍 Android Zoom level: $zoomLevel');
       }
-      debugPrint('✅ Zoom applied successfully: $zoomLevel');
     } catch (e) {
-      debugPrint('❌ Error applying zoom: $e');
+      debugPrint('⚠️ Error applying zoom: $e');
     }
   }
 
@@ -945,11 +952,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Notification blocker loading...');
           
+          // Hide all notification/alert elements
           var notifications = document.querySelectorAll('.alert, .notification, .toast, [role="alert"], .flash-message, .alert-success, .alert-danger, .alert-warning, .alert-info');
           notifications.forEach(function(notif) {
             notif.style.display = 'none';
           });
           
+          // Also hide any elements with notification-related classes
           var allElements = document.querySelectorAll('*');
           allElements.forEach(function(el) {
             var classes = el.className || '';
@@ -979,16 +988,21 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     debugPrint('💉 Injecting Android fix for HTML downloads');
 
+    // JavaScript to handle download buttons and prevent reload loops
     const String jsCode = '''
       (function() {
         console.log('Android WebView fix loading...');
         
+        // Store original window.open
         var originalOpen = window.open;
         
+        // Override window.open to navigate in same window on Android
         window.open = function(url, name, specs) {
           console.log('Intercepted window.open:', url);
           
+          // If it's an HTML download or new window, navigate in current window
           if (url) {
+            // Remove download parameter to prevent reload loops
             var cleanUrl = url.replace(/[?&]download=1/, '');
             console.log('Cleaned URL:', cleanUrl);
             
@@ -998,23 +1012,28 @@ class _WebViewScreenState extends State<WebViewScreen> {
             return window;
           }
           
+          // Fallback to original for other cases
           return originalOpen.call(window, url, name, specs);
         };
         
+        // Intercept all download buttons
         document.addEventListener('click', function(e) {
           var target = e.target;
           
+          // Check if clicked element or parent is a download button
           for (var i = 0; i < 5; i++) {
             if (!target) break;
             
             var href = target.getAttribute('href');
             var onclick = target.getAttribute('onclick');
             
+            // If it has download parameter, prevent default and navigate without it
             if (href && href.includes('download=1')) {
               e.preventDefault();
               var cleanUrl = href.replace(/[?&]download=1/, '');
               console.log('Download button clicked, navigating to:', cleanUrl);
               
+              // Only navigate if different from current URL
               if (cleanUrl !== window.location.href && cleanUrl !== window.location.pathname + window.location.search) {
                 window.location.href = cleanUrl;
               }
@@ -1039,173 +1058,193 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<bool> _requestPermissions() async {
     if (Platform.isAndroid) {
+      // For Android, gal package handles permissions automatically on Android 13+
+      // For Android 12 and below, request storage permission
       try {
         var status = await Permission.photos.status;
         if (!status.isGranted) {
           status = await Permission.photos.request();
         }
+        // Even if denied, gal might still work on Android 13+
         return status.isGranted || status.isPermanentlyDenied;
       } catch (e) {
         debugPrint('Permission check error: $e');
+        // Continue anyway, gal will handle it
         return true;
       }
     }
+    // iOS doesn't need permission for saving to gallery with gal
     return true;
-  }
-
-  Future<Uint8List> _captureWebView() async {
-    try {
-      debugPrint('📸 Capturing WebView screenshot...');
-
-      // انتظار لضمان التصيير الكامل
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // تأكد من أن WebView معروض
-      if (!_webViewKey.currentContext!.mounted) {
-        throw Exception('WebView not mounted');
-      }
-
-      RenderRepaintBoundary? boundary = _webViewKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        throw Exception('Could not find render boundary');
-      }
-
-      debugPrint('🎯 Found render boundary, capturing image...');
-
-      // التقاط الصورة مع pixelRatio مناسب
-      double pixelRatio = Platform.isIOS ? 2.0 : 3.0;
-      debugPrint(
-          '📱 Using pixelRatio: $pixelRatio for ${Platform.isIOS ? 'iOS' : 'Android'}');
-
-      ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Could not convert image to byte data');
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
-
-      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
-
-      // تحقق من أن الصورة ليست سوداء (تحتوي على بيانات)
-      if (screenshot.isEmpty) {
-        throw Exception('Screenshot is empty');
-      }
-
-      // تحقق من أول بايتات لمعرفة إذا كانت سوداء
-      if (screenshot.length > 100) {
-        bool isAllBlack = true;
-        for (int i = 0; i < 100; i++) {
-          if (screenshot[i] != 0) {
-            isAllBlack = false;
-            break;
-          }
-        }
-        if (isAllBlack) {
-          debugPrint('⚠️ Warning: Screenshot may be black');
-        }
-      }
-
-      return screenshot;
-    } catch (e) {
-      debugPrint('❌ Error capturing WebView: $e');
-      rethrow;
-    }
   }
 
   Future<void> _savePageAsImage() async {
     try {
       debugPrint('📸 Starting screenshot capture...');
 
+      // Request permissions
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
         _showMessage('الرجاء منح صلاحية الوصول للتخزين');
         return;
       }
 
+      // Show loading
       if (mounted) {
         setState(() {
           isLoading = true;
         });
       }
 
-      // انتظار أطول لضمان التصيير الكامل
-      await Future.delayed(const Duration(milliseconds: 1000));
+      // Wait a bit to ensure everything is rendered
+      await Future.delayed(const Duration(milliseconds: 500));
 
-      Uint8List screenshot;
+      Uint8List? screenshot;
 
-      try {
-        screenshot = await _captureWebView();
-      } catch (e) {
-        debugPrint('❌ WebView capture failed: $e');
+      if (Platform.isIOS) {
+        // iOS: Use Canvas API (built into browser - no external libraries!)
+        debugPrint('📱 Using iOS Canvas API screenshot');
 
-        // محاولة بديلة: التقاط باستخدام overlay
         try {
-          debugPrint('🔄 Trying alternative capture method...');
+          debugPrint('📸 Capturing screenshot with Canvas API...');
 
-          // إنشاء overlay للتقاط محتوى WebView
-          RenderBox? renderBox =
-              _webViewKey.currentContext?.findRenderObject() as RenderBox?;
-          if (renderBox == null) {
-            throw Exception('RenderBox not found');
+          // Capture using native browser Canvas API
+          final result = await controller!.runJavaScriptReturningResult('''
+            (async function() {
+              try {
+                // Get page dimensions
+                const body = document.body;
+                const html = document.documentElement;
+                const width = Math.max(body.scrollWidth, body.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth);
+                const height = Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight);
+                
+                console.log('Page size: ' + width + 'x' + height);
+                
+                // Create canvas
+                const canvas = document.createElement('canvas');
+                canvas.width = width * 2; // 2x for retina
+                canvas.height = height * 2;
+                const ctx = canvas.getContext('2d');
+                ctx.scale(2, 2);
+                
+                // Set white background
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, width, height);
+                
+                // Create SVG with foreignObject containing the page HTML
+                const data = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
+                  '<foreignObject width="100%" height="100%">' +
+                  '<div xmlns="http://www.w3.org/1999/xhtml">' +
+                  document.documentElement.outerHTML +
+                  '</div>' +
+                  '</foreignObject>' +
+                  '</svg>';
+                
+                // Convert SVG to image
+                const img = new Image();
+                const svgBlob = new Blob([data], { type: 'image/svg+xml;charset=utf-8' });
+                const url = URL.createObjectURL(svgBlob);
+                
+                // Wait for image to load and draw it
+                await new Promise((resolve, reject) => {
+                  img.onload = function() {
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                    resolve();
+                  };
+                  img.onerror = function() {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('Failed to load SVG image'));
+                  };
+                  img.src = url;
+                });
+                
+                // Convert canvas to base64
+                const dataUrl = canvas.toDataURL('image/png');
+                console.log('Screenshot captured successfully');
+                return dataUrl.split(',')[1];
+                
+              } catch (error) {
+                console.error('Canvas API error:', error.toString());
+                throw error;
+              }
+            })();
+          ''');
+
+          // ignore: unnecessary_null_comparison
+          if (result != null && result.toString().isNotEmpty) {
+            screenshot = base64Decode(result.toString());
+            debugPrint('✅ iOS screenshot captured: ${screenshot.length} bytes');
+          } else {
+            throw Exception('Empty result from Canvas API');
           }
-
-          final size = renderBox.size;
-          final recorder = ui.PictureRecorder();
-          final canvas = Canvas(recorder,
-              Rect.fromPoints(Offset.zero, Offset(size.width, size.height)));
-
-          // رسم خلفية بيضاء أولاً
-          canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-              Paint()..color = Colors.white);
-
-          // رسم WebView
-          renderBox.paint(canvas as PaintingContext, Offset.zero);
-
-          final picture = recorder.endRecording();
-          final image =
-              await picture.toImage(size.width.toInt(), size.height.toInt());
-          final byteData =
-              await image.toByteData(format: ui.ImageByteFormat.png);
-
-          if (byteData == null) {
-            throw Exception('Could not convert alternative image to byte data');
+        } catch (e) {
+          debugPrint('❌ Error capturing iOS screenshot: $e');
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
           }
-
-          screenshot = byteData.buffer.asUint8List();
-          debugPrint(
-              '✅ Alternative capture successful: ${screenshot.length} bytes');
-        } catch (e2) {
-          debugPrint('❌ Alternative capture also failed: $e2');
-          throw Exception('All capture methods failed');
+          return;
         }
+
+        // ignore: unnecessary_null_comparison
+        if (screenshot == null) {
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+      } else {
+        // Android: Use RepaintBoundary (works fine on Android)
+        debugPrint('🤖 Using Android RepaintBoundary screenshot');
+        RenderRepaintBoundary? boundary = _webViewKey.currentContext
+            ?.findRenderObject() as RenderRepaintBoundary?;
+
+        if (boundary == null) {
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+
+        // Capture the image
+        ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+        ByteData? byteData =
+            await image.toByteData(format: ui.ImageByteFormat.png);
+
+        if (byteData == null) {
+          _showMessage('فشل التقاط الصورة');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+
+        screenshot = byteData.buffer.asUint8List();
       }
 
-      if (screenshot.isEmpty) {
-        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
-        }
-        return;
-      }
+      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
 
-      debugPrint('💾 Saving screenshot to gallery...');
-
+      // Save to temporary file first
       final tempDir = await getTemporaryDirectory();
       final fileName =
           'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
       final tempFile = File('${tempDir.path}/$fileName');
       await tempFile.writeAsBytes(screenshot);
 
+      // Save to gallery using gal package
       try {
         await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
-        debugPrint('✅ Image saved to gallery successfully');
+        debugPrint('💾 Image saved to gallery successfully');
 
         if (mounted) {
           setState(() {
@@ -1215,14 +1254,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
         _showMessage('تم حفظ قسيمة الراتب في المعرض');
 
-        // تنظيف الملف المؤقت بعد التأكد من الحفظ
-        await Future.delayed(const Duration(seconds: 1), () async {
-          try {
-            await tempFile.delete();
-          } catch (e) {
-            debugPrint('⚠️ Error deleting temp file: $e');
-          }
-        });
+        // Clean up temp file
+        await tempFile.delete();
       } catch (e) {
         debugPrint('❌ Error saving to gallery: $e');
 
@@ -1273,6 +1306,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       return false;
     }
 
+    // Show exit dialog
     return await _showExitDialog() ?? false;
   }
 
@@ -1333,12 +1367,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
               ElevatedButton(
                 onPressed: () {
-                  Navigator.of(context).pop(true);
+                  Navigator.of(context).pop(true); // close dialog first
 
+                  // Close app depending on platform
                   if (Platform.isAndroid) {
                     SystemNavigator.pop();
                   } else if (Platform.isIOS) {
-                    exit(0);
+                    exit(0); // iOS actual app exit
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -1400,14 +1435,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
+            // WebView wrapped with RepaintBoundary for screenshot
             if (controller != null && !hasError)
               RepaintBoundary(
                 key: _webViewKey,
-                child: Container(
-                  color: Colors.white, // خلفية بيضاء للتأكد
-                  child: WebViewWidget(controller: controller!),
-                ),
+                child: WebViewWidget(controller: controller!),
               ),
+
+            // Error screen
             if (hasError)
               Center(
                 child: Padding(
@@ -1479,6 +1514,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   ),
                 ),
               ),
+
+            // Loading overlay
             if (isLoading && !hasError)
               Container(
                 color: Colors.white.withOpacity(0.9),
@@ -1518,11 +1555,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
           ],
         ),
+        // Show zoom controls and save button when viewing payslip
         floatingActionButton: currentUrl.contains('/payslips/view') && !hasError
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  // Zoom Out button
                   FloatingActionButton(
                     heroTag: 'zoom_out',
                     mini: true,
@@ -1533,6 +1572,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         color: Color(0xFF00BFA5), size: 20),
                   ),
                   const SizedBox(width: 10),
+
+                  // Zoom In button
                   FloatingActionButton(
                     heroTag: 'zoom_in',
                     mini: true,
@@ -1543,6 +1584,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         color: Color(0xFF00BFA5), size: 20),
                   ),
                   const SizedBox(width: 16),
+
+                  // Save button
                   FloatingActionButton.extended(
                     heroTag: 'save_image',
                     onPressed: _savePageAsImage,
