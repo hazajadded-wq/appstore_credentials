@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -609,6 +610,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool isLoggedIn = false;
   String lastNavigatedUrl = ''; // Track last URL to prevent loops
   int navigationCount = 0; // Count consecutive navigations to same URL
+  double zoomLevel = 1.0; // Zoom level for page content
 
   // GlobalKey for screenshot capture
   final GlobalKey _webViewKey = GlobalKey();
@@ -704,6 +706,22 @@ class _WebViewScreenState extends State<WebViewScreen> {
             }
             _updateCanGoBack();
 
+            // Hide notifications on login page
+            if (url.contains('/login')) {
+              debugPrint('🔐 Login page detected - hiding notifications');
+              _hideNotificationsOnLoginPage();
+            }
+
+            // Auto-fit payslip pages to screen
+            if (url.contains('/payslips/view') || url.contains('/salary')) {
+              debugPrint('📄 Payslip page detected - auto-fitting to screen');
+              // Reset zoom level for new page
+              setState(() {
+                zoomLevel = 1.0;
+              });
+              _autoFitPageToScreen();
+            }
+
             // Inject JavaScript to fix HTML download on Android
             if (Platform.isAndroid) {
               _injectAndroidFix();
@@ -784,6 +802,169 @@ class _WebViewScreenState extends State<WebViewScreen> {
       setState(() {
         canGoBack = canNavigateBack;
       });
+    }
+  }
+
+  Future<void> _autoFitPageToScreen() async {
+    if (controller == null) return;
+
+    debugPrint('📐 Auto-fitting page to screen...');
+
+    try {
+      await controller!.runJavaScript('''
+        (function() {
+          console.log('Auto-fit page script loading...');
+          
+          // Remove any existing viewport meta tags
+          var existingViewports = document.querySelectorAll('meta[name="viewport"]');
+          existingViewports.forEach(function(viewport) {
+            viewport.remove();
+          });
+          
+          // Add optimized viewport for mobile display
+          var meta = document.createElement('meta');
+          meta.name = 'viewport';
+          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
+          document.getElementsByTagName('head')[0].appendChild(meta);
+          
+          // Adjust body styling for better fit
+          document.body.style.margin = '0';
+          document.body.style.padding = '8px';
+          document.body.style.boxSizing = 'border-box';
+          document.body.style.overflow = 'auto';
+          document.body.style.width = '100%';
+          
+          // Find main content container and adjust
+          var containers = document.querySelectorAll('div.container, div.content, main, article');
+          containers.forEach(function(container) {
+            container.style.maxWidth = '100%';
+            container.style.width = '100%';
+            container.style.padding = '8px';
+            container.style.boxSizing = 'border-box';
+          });
+          
+          // Adjust tables to fit screen
+          var tables = document.querySelectorAll('table');
+          tables.forEach(function(table) {
+            table.style.width = '100%';
+            table.style.maxWidth = '100%';
+            table.style.fontSize = '14px';
+            table.style.display = 'block';
+            table.style.overflowX = 'auto';
+          });
+          
+          // Adjust any fixed width elements
+          var fixedElements = document.querySelectorAll('[style*="width"]');
+          fixedElements.forEach(function(element) {
+            var computedWidth = window.getComputedStyle(element).width;
+            var widthValue = parseInt(computedWidth);
+            
+            // If element is wider than screen, make it responsive
+            if (widthValue > window.innerWidth) {
+              element.style.width = '100%';
+              element.style.maxWidth = '100%';
+            }
+          });
+          
+          console.log('✅ Page auto-fitted to screen');
+        })();
+      ''');
+
+      debugPrint('✅ Auto-fit completed');
+    } catch (e) {
+      debugPrint('⚠️ Error auto-fitting page: $e');
+    }
+  }
+
+  void _zoomIn() {
+    setState(() {
+      if (zoomLevel < 3.0) {
+        zoomLevel += 0.2;
+        _applyZoom();
+      }
+    });
+  }
+
+  void _zoomOut() {
+    setState(() {
+      if (zoomLevel > 0.5) {
+        zoomLevel -= 0.2;
+        _applyZoom();
+      }
+    });
+  }
+
+  Future<void> _applyZoom() async {
+    if (controller == null) return;
+
+    try {
+      await controller!.runJavaScript('''
+        (function() {
+          // Apply zoom using CSS transform (works better than viewport)
+          var html = document.documentElement;
+          var body = document.body;
+          
+          // Set transform origin to top-left
+          html.style.transformOrigin = '0 0';
+          body.style.transformOrigin = '0 0';
+          
+          // Apply scale transform
+          html.style.transform = 'scale($zoomLevel)';
+          
+          // Adjust viewport width to prevent horizontal scroll
+          html.style.width = (100 / $zoomLevel) + '%';
+          
+          // Ensure body fills the scaled space
+          body.style.width = '100%';
+          body.style.minHeight = '100vh';
+          
+          console.log('CSS transform zoom applied: $zoomLevel');
+        })();
+      ''');
+      debugPrint('🔍 Zoom level: $zoomLevel (CSS transform)');
+    } catch (e) {
+      debugPrint('⚠️ Error applying zoom: $e');
+    }
+  }
+
+  Future<void> _hideNotificationsOnLoginPage() async {
+    if (controller == null) return;
+
+    debugPrint('🔕 Hiding notifications on login page...');
+
+    try {
+      await controller!.runJavaScript('''
+        (function() {
+          console.log('Notification blocker loading...');
+          
+          // Hide all notification/alert elements
+          var notifications = document.querySelectorAll('.alert, .notification, .toast, [role="alert"], .flash-message, .alert-success, .alert-danger, .alert-warning, .alert-info');
+          notifications.forEach(function(notif) {
+            notif.style.display = 'none';
+          });
+          
+          // Also hide any elements with notification-related classes
+          var allElements = document.querySelectorAll('*');
+          allElements.forEach(function(el) {
+            var classes = el.className || '';
+            if (typeof classes === 'string' && (
+              classes.includes('notification') || 
+              classes.includes('alert') || 
+              classes.includes('toast') ||
+              classes.includes('تنبيه') ||
+              classes.includes('إشعار')
+            )) {
+              el.style.display = 'none';
+            }
+          });
+          
+          console.log('✅ Notifications hidden on login page');
+        })();
+      ''');
+
+      debugPrint('✅ Notifications hidden');
+    } catch (e) {
+      debugPrint('⚠️ Error hiding notifications: $e');
     }
   }
 
@@ -900,38 +1081,103 @@ class _WebViewScreenState extends State<WebViewScreen> {
       }
 
       // Wait a bit to ensure everything is rendered
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 500));
 
-      // Capture screenshot using RepaintBoundary
-      RenderRepaintBoundary? boundary = _webViewKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
+      Uint8List? screenshot;
 
-      if (boundary == null) {
-        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
+      if (Platform.isIOS) {
+        // iOS: Use html2canvas JavaScript library to capture page
+        debugPrint('📱 Using iOS JavaScript-based screenshot');
+
+        try {
+          // Inject html2canvas library and capture
+          final result = await controller?.runJavaScriptReturningResult('''
+            (async function() {
+              // Load html2canvas if not already loaded
+              if (typeof html2canvas === 'undefined') {
+                var script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+                document.head.appendChild(script);
+                
+                // Wait for script to load
+                await new Promise((resolve) => {
+                  script.onload = resolve;
+                });
+              }
+              
+              // Capture the page
+              const canvas = await html2canvas(document.body, {
+                scale: 2,
+                useCORS: true,
+                allowTaint: true,
+                backgroundColor: '#ffffff'
+              });
+              
+              // Convert to base64
+              return canvas.toDataURL('image/png').split(',')[1];
+            })();
+          ''');
+
+          if (result != null && result.toString().isNotEmpty) {
+            // Decode base64 to bytes
+            screenshot = base64Decode(result.toString());
+            debugPrint(
+                '✅ iOS screenshot captured via JavaScript: ${screenshot.length} bytes');
+          }
+        } catch (e) {
+          debugPrint('❌ Error capturing iOS screenshot: $e');
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
         }
-        return;
+
+        if (screenshot == null) {
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+      } else {
+        // Android: Use RepaintBoundary (works fine on Android)
+        debugPrint('🤖 Using Android RepaintBoundary screenshot');
+        RenderRepaintBoundary? boundary = _webViewKey.currentContext
+            ?.findRenderObject() as RenderRepaintBoundary?;
+
+        if (boundary == null) {
+          _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+
+        // Capture the image
+        ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+        ByteData? byteData =
+            await image.toByteData(format: ui.ImageByteFormat.png);
+
+        if (byteData == null) {
+          _showMessage('فشل التقاط الصورة');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
+
+        screenshot = byteData.buffer.asUint8List();
       }
 
-      // Capture the image
-      ui.Image image = await boundary.toImage(pixelRatio: 3.0);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        _showMessage('فشل التقاط الصورة');
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
-        }
-        return;
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
       debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
 
       // Save to temporary file first
@@ -958,6 +1204,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         await tempFile.delete();
       } catch (e) {
         debugPrint('❌ Error saving to gallery: $e');
+
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -967,6 +1214,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       }
     } catch (e) {
       debugPrint('❌ Error saving screenshot: $e');
+
       if (mounted) {
         setState(() {
           isLoading = false;
@@ -1253,21 +1501,53 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
           ],
         ),
-        // Show save button only when viewing payslip
+        // Show zoom controls and save button when viewing payslip
         floatingActionButton: currentUrl.contains('/payslips/view') && !hasError
-            ? FloatingActionButton.extended(
-                onPressed: _savePageAsImage,
-                backgroundColor: const Color(0xFF00BFA5),
-                icon: const Icon(Icons.save_alt, color: Colors.white),
-                label: Text(
-                  'حفظ كصورة',
-                  style: GoogleFonts.cairo(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Zoom Out button
+                  FloatingActionButton(
+                    heroTag: 'zoom_out',
+                    mini: true,
+                    onPressed: _zoomOut,
+                    backgroundColor: Colors.white,
+                    elevation: 4,
+                    child: const Icon(Icons.zoom_out,
+                        color: Color(0xFF00BFA5), size: 20),
                   ),
-                ),
-                elevation: 6,
+                  const SizedBox(width: 10),
+
+                  // Zoom In button
+                  FloatingActionButton(
+                    heroTag: 'zoom_in',
+                    mini: true,
+                    onPressed: _zoomIn,
+                    backgroundColor: Colors.white,
+                    elevation: 4,
+                    child: const Icon(Icons.zoom_in,
+                        color: Color(0xFF00BFA5), size: 20),
+                  ),
+                  const SizedBox(width: 16),
+
+                  // Save button
+                  FloatingActionButton.extended(
+                    heroTag: 'save_image',
+                    onPressed: _savePageAsImage,
+                    backgroundColor: const Color(0xFF00BFA5),
+                    icon: const Icon(Icons.save_alt, color: Colors.white),
+                    label: Text(
+                      'حفظ كصورة',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    elevation: 6,
+                  ),
+                ],
               )
             : null,
       ),
