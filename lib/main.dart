@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -157,39 +158,40 @@ class ModernButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: Ink(
-            height: height,
-            padding: padding,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(borderRadius),
-              gradient: isGradient
-                  ? LinearGradient(
-                      colors: [
-                        color ?? const Color(0xFF00BFA5),
-                        color != null
-                            ? color!.withOpacity(0.8)
-                            : const Color(0xFF00A896),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    )
-                  : null,
-              color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
-              boxShadow: [
-                BoxShadow(
-                  color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Center(child: child),
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: Ink(
+          height: height,
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(borderRadius),
+            gradient: isGradient
+                ? LinearGradient(
+                    colors: [
+                      color ?? const Color(0xFF00BFA5),
+                      color != null
+                          ? color!.withOpacity(0.8)
+                          : const Color(0xFF00A896),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
+            boxShadow: [
+              BoxShadow(
+                color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ));
+          child: Center(child: child),
+        ),
+      ),
+    );
   }
 }
 
@@ -613,36 +615,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   // GlobalKey for screenshot capture
   final GlobalKey _webViewKey = GlobalKey();
 
-  Future<Uint8List?> _captureIOSWebView() async {
-    try {
-      // انتظار لضمان التصيير الكامل
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      RenderRepaintBoundary? boundary = _webViewKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        throw Exception('Could not find render boundary');
-      }
-
-      // التقاط الصورة مع pixelRatio مناسب لـ iOS
-      ui.Image image = await boundary.toImage(pixelRatio: 2.0);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Could not convert image to byte data');
-      }
-
-      debugPrint(
-          '✅ iOS screenshot captured successfully: ${byteData.lengthInBytes} bytes');
-      return byteData.buffer.asUint8List();
-    } catch (e) {
-      debugPrint('❌ iOS capture failed: $e');
-      return null;
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -927,35 +899,21 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     try {
       if (Platform.isIOS) {
-        // طريقة أفضل لـ iOS باستخدام JavaScript
+        // iOS: Use body zoom property (better compatibility)
         await controller!.runJavaScript('''
           (function() {
-            // تغيير حجم الخط الرئيسي للصفحة
-            var body = document.body;
-            var currentFontSize = parseFloat(window.getComputedStyle(body).fontSize) || 16;
-            var newFontSize = currentFontSize * $zoomLevel;
+            document.body.style.zoom = '$zoomLevel';
             
-            // تطبيق على جميع العناصر النصية
-            var textElements = document.querySelectorAll('p, span, div, td, th, li, h1, h2, h3, h4, h5, h6');
-            textElements.forEach(function(el) {
-              var elFontSize = parseFloat(window.getComputedStyle(el).fontSize);
-              if (elFontSize && elFontSize > 8) {
-                el.style.fontSize = (elFontSize * $zoomLevel) + 'px';
-              }
-            });
+            // Prevent horizontal scroll
+            document.body.style.overflowX = 'hidden';
+            document.documentElement.style.overflowX = 'hidden';
             
-            // تغيير حجم الجداول والعناصر الهيكلية
-            var containerElements = document.querySelectorAll('table, .container, .content, main');
-            containerElements.forEach(function(el) {
-              el.style.transform = 'scale($zoomLevel)';
-              el.style.transformOrigin = 'top right';
-            });
-            
-            console.log('iOS zoom applied: ' + $zoomLevel);
+            console.log('iOS zoom applied: $zoomLevel');
           })();
         ''');
+        debugPrint('🔍 iOS Zoom level: $zoomLevel');
       } else {
-        // الطريقة الأصلية للاندرويد
+        // Android: Use transform scale
         await controller!.runJavaScript('''
           (function() {
             var html = document.documentElement;
@@ -963,18 +921,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
             
             html.style.transformOrigin = '0 0';
             body.style.transformOrigin = '0 0';
-            
             html.style.transform = 'scale($zoomLevel)';
             html.style.width = (100 / $zoomLevel) + '%';
-            
             body.style.width = '100%';
             body.style.minHeight = '100vh';
             
-            console.log('CSS transform zoom applied: $zoomLevel');
+            console.log('Android transform zoom applied: $zoomLevel');
           })();
         ''');
+        debugPrint('🔍 Android Zoom level: $zoomLevel');
       }
-      debugPrint('🔍 Zoom level: $zoomLevel');
     } catch (e) {
       debugPrint('⚠️ Error applying zoom: $e');
     }
@@ -1139,9 +1095,84 @@ class _WebViewScreenState extends State<WebViewScreen> {
       Uint8List? screenshot;
 
       if (Platform.isIOS) {
-        // iOS: استخدام الطريقة المحسنة
-        debugPrint('📱 Using improved iOS screenshot method');
-        screenshot = await _captureIOSWebView();
+        // iOS: Use html2canvas JavaScript library to capture page
+        debugPrint('📱 Using iOS JavaScript-based screenshot');
+
+        try {
+          // First, inject html2canvas and wait for it to load
+          await controller!.runJavaScript('''
+            (function() {
+              return new Promise((resolve, reject) => {
+                if (typeof html2canvas !== 'undefined') {
+                  console.log('html2canvas already loaded');
+                  resolve('ready');
+                  return;
+                }
+                
+                var script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+                script.onload = function() {
+                  console.log('html2canvas loaded successfully');
+                  resolve('loaded');
+                };
+                script.onerror = function() {
+                  console.error('Failed to load html2canvas');
+                  reject('Failed to load library');
+                };
+                document.head.appendChild(script);
+              });
+            })();
+          ''');
+
+          // Wait a bit for library to initialize
+          await Future.delayed(const Duration(milliseconds: 1000));
+
+          debugPrint('📸 Capturing screenshot with html2canvas...');
+
+          // Now capture the screenshot
+          final result = await controller!.runJavaScriptReturningResult('''
+            (async function() {
+              try {
+                if (typeof html2canvas === 'undefined') {
+                  throw new Error('html2canvas not loaded');
+                }
+                
+                console.log('Starting capture...');
+                const canvas = await html2canvas(document.body, {
+                  scale: 2,
+                  useCORS: true,
+                  allowTaint: true,
+                  backgroundColor: '#ffffff',
+                  logging: true
+                });
+                
+                console.log('Canvas created, converting to base64...');
+                const dataUrl = canvas.toDataURL('image/png');
+                return dataUrl.split(',')[1];
+              } catch (error) {
+                console.error('Capture error:', error);
+                throw error;
+              }
+            })();
+          ''');
+
+          if (result.toString().isNotEmpty) {
+            // Decode base64 to bytes
+            screenshot = base64Decode(result.toString());
+            debugPrint('✅ iOS screenshot captured: ${screenshot.length} bytes');
+          } else {
+            throw Exception('Empty result from html2canvas');
+          }
+        } catch (e) {
+          debugPrint('❌ Error capturing iOS screenshot: $e');
+          _showMessage('فشل التقاط الصورة - تأكد من اتصال الإنترنت');
+          if (mounted) {
+            setState(() {
+              isLoading = false;
+            });
+          }
+          return;
+        }
       } else {
         // Android: Use RepaintBoundary (works fine on Android)
         debugPrint('🤖 Using Android RepaintBoundary screenshot');
@@ -1176,16 +1207,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         screenshot = byteData.buffer.asUint8List();
       }
 
-      if (screenshot == null || screenshot.isEmpty) {
-        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
-        }
-        return;
-      }
-
       debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
 
       // Save to temporary file first
@@ -1208,14 +1229,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
         _showMessage('تم حفظ قسيمة الراتب في المعرض');
 
-        // Clean up temp file after showing message
-        await Future.delayed(const Duration(seconds: 1), () async {
-          try {
-            await tempFile.delete();
-          } catch (e) {
-            debugPrint('⚠️ Error deleting temp file: $e');
-          }
-        });
+        // Clean up temp file
+        await tempFile.delete();
       } catch (e) {
         debugPrint('❌ Error saving to gallery: $e');
 
