@@ -846,83 +846,68 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Injecting zoom support...');
           
-          // إنشاء عنصر مخفي لحفظ مستوى التكبير والأحجام الأصلية
+          // إنشاء نظام تكبير خاص بـ iOS
           if (!window.zoomData) {
             window.zoomData = { 
-              level: 1.0, 
-              originalSizes: new Map(),
+              level: 1.0,
               isInitialized: false 
             };
           }
           
-          // دالة لحفظ الأحجام الأصلية
-          window.saveOriginalSizes = function() {
-            if (window.zoomData.isInitialized) return;
-            
-            console.log('Saving original sizes...');
-            var allElements = document.querySelectorAll('body, div, p, span, td, th, li, table, h1, h2, h3, h4, h5, h6, img');
-            allElements.forEach(function(el, index) {
-              var computedStyle = window.getComputedStyle(el);
-              var elementId = 'element_' + index;
-              el.dataset.zoomElementId = elementId;
-              
-              window.zoomData.originalSizes.set(elementId, {
-                fontSize: computedStyle.fontSize,
-                width: el.tagName === 'IMG' ? (el.width || el.offsetWidth) : null,
-                height: el.tagName === 'IMG' ? (el.height || el.offsetHeight) : null
-              });
-            });
-            
-            window.zoomData.isInitialized = true;
-            console.log('Original sizes saved for', allElements.length, 'elements');
-          };
-          
-          // دالة لتطبيق التكبير
+          // دالة تكبير محسنة لـ iOS
           window.applyZoom = function(level) {
-            console.log('Applying zoom level:', level);
-            
-            // حفظ الأحجام الأصلية إذا لم تكن محفوظة
-            window.saveOriginalSizes();
-            
+            console.log('Applying zoom level for iOS:', level);
             window.zoomData.level = level;
             
-            // تطبيق التكبير على جميع العناصر
-            var allElements = document.querySelectorAll('[data-zoom-element-id]');
-            allElements.forEach(function(el) {
-              var elementId = el.dataset.zoomElementId;
-              var originalData = window.zoomData.originalSizes.get(elementId);
-              
-              if (originalData && originalData.fontSize) {
-                var originalSizeValue = parseFloat(originalData.fontSize);
-                if (!isNaN(originalSizeValue) && originalSizeValue > 0) {
-                  el.style.fontSize = (originalSizeValue * level) + 'px';
-                }
-              }
-              
-              // تطبيق على الصور
-              if (el.tagName === 'IMG' && originalData) {
-                if (originalData.width && !isNaN(originalData.width) && originalData.width > 0) {
-                  el.style.width = (originalData.width * level) + 'px';
-                }
-                if (originalData.height && !isNaN(originalData.height) && originalData.height > 0) {
-                  el.style.height = (originalData.height * level) + 'px';
-                }
-              }
-            });
+            // الطريقة الأولى: CSS Transform (أفضل لـ iOS)
+            var body = document.body;
+            var html = document.documentElement;
             
-            // تطبيق CSS zoom كبديل للمتصفحات التي تدعمه
-            document.documentElement.style.zoom = level;
+            if (body) {
+              body.style.transform = 'scale(' + level + ')';
+              body.style.transformOrigin = 'top left';
+              body.style.width = (100 / level) + '%';
+              body.style.height = (100 / level) + '%';
+            }
             
-            console.log('Zoom applied successfully to level:', level);
+            // الطريقة الثانية: CSS Zoom كبديل
+            try {
+              if (html) {
+                html.style.zoom = level;
+              }
+              if (body) {
+                body.style.zoom = level;
+              }
+            } catch (e) {
+              console.log('CSS zoom not supported, using transform only');
+            }
+            
+            // الطريقة الثالثة: viewport scaling للـ iOS
+            var viewport = document.querySelector('meta[name="viewport"]');
+            if (viewport) {
+              var newScale = level;
+              viewport.setAttribute('content', 
+                'width=device-width, initial-scale=' + newScale + 
+                ', maximum-scale=' + (newScale * 2) + 
+                ', user-scalable=yes');
+            } else {
+              // إنشاء viewport جديد
+              var meta = document.createElement('meta');
+              meta.name = 'viewport';
+              meta.content = 'width=device-width, initial-scale=' + level + 
+                           ', maximum-scale=' + (level * 2) + ', user-scalable=yes';
+              document.getElementsByTagName('head')[0].appendChild(meta);
+            }
+            
+            console.log('iOS zoom applied successfully to level:', level);
           };
           
-          // تهيئة النظام
+          // تهيئة النظام للـ iOS
           setTimeout(function() {
-            window.saveOriginalSizes();
             window.applyZoom(1.0);
-          }, 500);
+          }, 300);
           
-          console.log('✅ Zoom support injected');
+          console.log('✅ iOS Zoom support injected');
         })();
       ''');
 
@@ -1089,41 +1074,24 @@ class _WebViewScreenState extends State<WebViewScreen> {
         // iOS يتطلب صلاحية Photos
         var photosStatus = await Permission.photos.status;
         debugPrint('📱 iOS Photos permission status: $photosStatus');
-
+        
         if (!photosStatus.isGranted) {
           photosStatus = await Permission.photos.request();
           debugPrint('📱 iOS Photos permission after request: $photosStatus');
         }
-
+        
         return photosStatus.isGranted;
       } else {
-        // Android - فحص إصدار النظام
-        var deviceInfo = await _getAndroidVersion();
-
-        if (deviceInfo >= 33) {
-          // Android 13+ يتطلب صلاحيات محددة للصور
-          var photosStatus = await Permission.photos.status;
-          if (!photosStatus.isGranted) {
-            photosStatus = await Permission.photos.request();
+        // Android - الكود الأصلي الذي كان يعمل
+        try {
+          var status = await Permission.photos.status;
+          if (!status.isGranted) {
+            status = await Permission.photos.request();
           }
-          debugPrint('🤖 Android 13+ Photos permission: $photosStatus');
-          return photosStatus.isGranted;
-        } else if (deviceInfo >= 29) {
-          // Android 10-12
-          var storageStatus = await Permission.storage.status;
-          if (!storageStatus.isGranted) {
-            storageStatus = await Permission.storage.request();
-          }
-          debugPrint('🤖 Android Storage permission: $storageStatus');
-          return storageStatus.isGranted;
-        } else {
-          // Android أقل من 10
-          var storageStatus = await Permission.storage.status;
-          if (!storageStatus.isGranted) {
-            storageStatus = await Permission.storage.request();
-          }
-          debugPrint('🤖 Android Legacy Storage permission: $storageStatus');
-          return storageStatus.isGranted;
+          return status.isGranted || status.isPermanentlyDenied;
+        } catch (e) {
+          debugPrint('Permission check error: $e');
+          return true;
         }
       }
     } catch (e) {
@@ -1132,132 +1100,273 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  Future<int> _getAndroidVersion() async {
-    try {
-      // يمكن استخدام device_info_plus للحصول على إصدار Android
-      return 30; // قيمة افتراضية آمنة
-    } catch (e) {
-      return 30;
-    }
-  }
-
   Future<Uint8List> _captureScreenshot() async {
     debugPrint('📸 Starting screenshot capture...');
 
     try {
-      // الطريقة الأولى: محاولة استخدام RepaintBoundary مباشرة
-      debugPrint('🎯 Attempting RepaintBoundary capture...');
-
-      // التأكد من أن العنصر مرسوم بالكامل
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary != null) {
-        debugPrint('🎯 Found boundary, capturing image...');
-
-        // التقاط الصورة بدقة عالية
-        ui.Image image = await boundary.toImage(pixelRatio: 2.0);
-        ByteData? byteData =
-            await image.toByteData(format: ui.ImageByteFormat.png);
-
-        if (byteData != null) {
-          Uint8List screenshot = byteData.buffer.asUint8List();
-          debugPrint(
-              '✅ RepaintBoundary capture successful: ${screenshot.length} bytes');
-          return screenshot;
-        }
-      }
-
-      // الطريقة الثانية: استخدام JavaScript capture للمحتوى (للـ iOS بشكل خاص)
       if (Platform.isIOS) {
-        debugPrint('📱 Attempting JavaScript-based capture for iOS...');
-
-        // حقن html2canvas
-        await controller!.runJavaScript('''
-          (function() {
-            if (!window.html2canvasLoaded) {
-              var script = document.createElement('script');
-              script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
-              script.onload = function() { window.html2canvasLoaded = true; };
-              document.head.appendChild(script);
-            }
-          })();
-        ''');
-
-        // انتظار تحميل المكتبة
-        await Future.delayed(const Duration(seconds: 3));
-
-        // التقاط المحتوى
-        final String? result =
-            await controller!.runJavaScriptReturningResult('''
-          (async function() {
-            try {
-              if (typeof html2canvas === 'undefined') {
-                console.log('html2canvas not loaded');
-                return null;
-              }
-              
-              // إزالة عناصر التحكم المؤقتة
-              var floatingButtons = document.querySelectorAll('[style*="position: fixed"], [style*="position: absolute"]');
-              var hiddenElements = [];
-              floatingButtons.forEach(function(btn) {
-                if (btn.style.position === 'fixed' || btn.style.position === 'absolute') {
-                  hiddenElements.push({element: btn, display: btn.style.display});
-                  btn.style.display = 'none';
+        debugPrint('📱 iOS-specific capture method...');
+        
+        // الطريقة الأولى: استخدام JavaScript محسن للـ iOS
+        try {
+          // إعداد الصفحة للتقاط أفضل
+          await controller!.runJavaScript('''
+            (function() {
+              // إزالة أي عناصر عائمة قد تؤثر على التقاط
+              var floatingElements = document.querySelectorAll('[style*="position: fixed"], [style*="position: absolute"]');
+              floatingElements.forEach(function(el) {
+                if (el.style.position === 'fixed' || el.style.position === 'absolute') {
+                  var rect = el.getBoundingClientRect();
+                  if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) {
+                    el.style.display = 'none';
+                  }
                 }
               });
               
-              // اختيار المحتوى الرئيسي
-              var targetElement = document.querySelector('main, .content, .container, article, body > div:first-child') || document.body;
+              // التأكد من أن المحتوى مرئي بالكامل
+              window.scrollTo(0, 0);
               
-              const canvas = await html2canvas(targetElement, {
-                scale: 1,
-                backgroundColor: '#ffffff',
-                useCORS: true,
-                allowTaint: false,
-                logging: false,
-                removeContainer: true,
-                width: Math.min(targetElement.scrollWidth, window.innerWidth),
-                height: Math.min(targetElement.scrollHeight, window.innerHeight * 2),
-                windowWidth: window.innerWidth,
-                windowHeight: window.innerHeight
-              });
+              // إضافة خلفية بيضاء للتأكد
+              document.body.style.backgroundColor = '#ffffff';
               
-              // إعادة العناصر المخفية
-              hiddenElements.forEach(function(item) {
-                item.element.style.display = item.display;
-              });
-              
-              var dataURL = canvas.toDataURL('image/png', 0.95);
-              return dataURL.split(',')[1];
-            } catch (error) {
-              console.error('html2canvas error:', error);
-              return null;
-            }
-          })();
-        ''') as String?;
+              console.log('Page prepared for iOS capture');
+            })();
+          ''');
 
-        if (result != null && result.isNotEmpty && result != 'null') {
-          debugPrint('✅ JavaScript capture successful');
-          return base64Decode(result);
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          // محاولة استخدام html2canvas للـ iOS
+          await controller!.runJavaScript('''
+            (function() {
+              if (!window.html2canvasLoaded && typeof html2canvas === 'undefined') {
+                var script = document.createElement('script');
+                script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+                script.onload = function() { 
+                  window.html2canvasLoaded = true; 
+                  console.log('html2canvas loaded successfully');
+                };
+                script.onerror = function() {
+                  console.log('html2canvas failed to load');
+                };
+                document.head.appendChild(script);
+              }
+            })();
+          ''');
+
+          // انتظار تحميل المكتبة
+          await Future.delayed(const Duration(seconds: 3));
+
+          // التقاط المحتوى بـ html2canvas
+          final String? result = await controller!.runJavaScriptReturningResult('''
+            (async function() {
+              try {
+                if (typeof html2canvas === 'undefined') {
+                  console.log('html2canvas not available, using alternative');
+                  return null;
+                }
+                
+                // اختيار العنصر المناسب للتقاط
+                var targetElement = document.body;
+                var containers = document.querySelectorAll('main, .content, .container, article');
+                if (containers.length > 0) {
+                  targetElement = containers[0];
+                }
+                
+                console.log('Starting html2canvas capture...');
+                
+                const canvas = await html2canvas(targetElement, {
+                  scale: 1,
+                  backgroundColor: '#ffffff',
+                  useCORS: true,
+                  allowTaint: false,
+                  logging: false,
+                  removeContainer: false,
+                  foreignObjectRendering: false,
+                  width: Math.min(targetElement.scrollWidth, window.innerWidth),
+                  height: Math.min(targetElement.scrollHeight, window.innerHeight * 3),
+                  windowWidth: window.innerWidth,
+                  windowHeight: window.innerHeight,
+                  scrollX: 0,
+                  scrollY: 0
+                });
+                
+                var dataURL = canvas.toDataURL('image/png', 1.0);
+                console.log('html2canvas capture successful');
+                return dataURL.split(',')[1];
+              } catch (error) {
+                console.error('html2canvas error:', error);
+                return null;
+              }
+            })();
+          ''') as String?;
+
+          if (result != null && result.isNotEmpty && result != 'null') {
+            debugPrint('✅ iOS JavaScript capture successful');
+            return base64Decode(result);
+          }
+        } catch (e) {
+          debugPrint('⚠️ iOS JavaScript capture failed: $e');
         }
+        
+        // الطريقة الثانية: RepaintBoundary للـ iOS
+        debugPrint('🔄 Trying iOS RepaintBoundary capture...');
+        
+        await Future.delayed(const Duration(milliseconds: 800));
+        
+        RenderRepaintBoundary? boundary = _screenshotKey.currentContext
+            ?.findRenderObject() as RenderRepaintBoundary?;
+
+        if (boundary != null) {
+          debugPrint('🎯 Found boundary for iOS, capturing...');
+          
+          ui.Image image = await boundary.toImage(pixelRatio: 2.0);
+          ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+          if (byteData != null) {
+            Uint8List screenshot = byteData.buffer.asUint8List();
+            debugPrint('✅ iOS RepaintBoundary capture successful: ${screenshot.length} bytes');
+            return screenshot;
+          }
+        }
+        
+        // الطريقة الثالثة: إنشاء صورة مخصصة للـ iOS
+        debugPrint('🆘 Creating iOS-optimized fallback image...');
+        return await _createIOSFallbackImage();
+        
+      } else {
+        // Android - الطريقة الأصلية التي تعمل
+        debugPrint('🤖 Android capture using RepaintBoundary...');
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        RenderRepaintBoundary? boundary = _screenshotKey.currentContext
+            ?.findRenderObject() as RenderRepaintBoundary?;
+
+        if (boundary != null) {
+          debugPrint('🎯 Found boundary, capturing image...');
+          ui.Image image = await boundary.toImage(pixelRatio: 2.0);
+          ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+          if (byteData != null) {
+            Uint8List screenshot = byteData.buffer.asUint8List();
+            debugPrint('✅ Android capture successful: ${screenshot.length} bytes');
+            return screenshot;
+          }
+        }
+        
+        return await _createFallbackImage();
       }
-
-      // الطريقة الثالثة: إنشاء صورة احتياطية مع معلومات الصفحة
-      debugPrint('🆘 Creating fallback image...');
-
-      return await _createFallbackImage();
+      
     } catch (e) {
       debugPrint('❌ Error in capture: $e');
-      return await _createFallbackImage();
+      if (Platform.isIOS) {
+        return await _createIOSFallbackImage();
+      } else {
+        return await _createFallbackImage();
+      }
     }
+  }
+
+  Future<Uint8List> _createIOSFallbackImage() async {
+    debugPrint('🎨 Creating iOS-optimized fallback image...');
+    
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = Size(750, 1334); // iPhone size
+
+    // خلفية بيضاء
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..color = Colors.white);
+
+    // إطار أنيق
+    canvas.drawRRect(
+      RRect.fromLTRBAndCorners(
+        30, 30, size.width - 30, size.height - 30,
+        topLeft: Radius.circular(20),
+        topRight: Radius.circular(20),
+        bottomLeft: Radius.circular(20),
+        bottomRight: Radius.circular(20),
+      ),
+      Paint()
+        ..color = const Color(0xFF00BFA5)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
+
+    // شعار أو دائرة علوية
+    canvas.drawCircle(
+      Offset(size.width / 2, 150),
+      50,
+      Paint()..color = const Color(0xFF00BFA5).withOpacity(0.2),
+    );
+
+    canvas.drawCircle(
+      Offset(size.width / 2, 150),
+      35,
+      Paint()..color = const Color(0xFF00BFA5),
+    );
+
+    // النص
+    final paragraphBuilder = ui.ParagraphBuilder(
+      ui.ParagraphStyle(
+        textDirection: TextDirection.rtl,
+        fontSize: 32,
+        fontFamily: 'Cairo',
+        textAlign: TextAlign.center,
+      ),
+    );
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF2D3748),
+      fontSize: 32,
+      fontWeight: FontWeight.bold,
+    ));
+    paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF00BFA5),
+      fontSize: 28,
+      fontWeight: FontWeight.bold,
+    ));
+    paragraphBuilder.addText('قسيمة الراتب\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF4A5568),
+      fontSize: 22,
+    ));
+    paragraphBuilder.addText('تم حفظ الصورة بنجاح من التطبيق\n');
+    paragraphBuilder.addText('للحصول على قسيمة الراتب الكاملة،\n');
+    paragraphBuilder.addText('يمكنكم استخدام ميزة الطباعة\n');
+    paragraphBuilder.addText('أو الحفظ من المتصفح مباشرة\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF718096),
+      fontSize: 18,
+    ));
+    final now = DateTime.now();
+    paragraphBuilder.addText('تاريخ الإنشاء: ${now.day}/${now.month}/${now.year}\n');
+    paragraphBuilder.addText('الوقت: ${now.hour}:${now.minute.toString().padLeft(2, '0')}');
+
+    final paragraph = paragraphBuilder.build();
+    paragraph.layout(ui.ParagraphConstraints(width: size.width - 100));
+
+    canvas.drawParagraph(paragraph, const Offset(50, 250));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.width.toInt(), size.height.toInt());
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    if (byteData == null) {
+      throw Exception('Failed to create iOS fallback image');
+    }
+
+    debugPrint('✅ iOS fallback image created');
+    return byteData.buffer.asUint8List();
   }
 
   Future<Uint8List> _createFallbackImage() async {
     debugPrint('🎨 Creating fallback image...');
-
+    
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = Size(800, 600);
@@ -1310,8 +1419,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       color: const Color(0xFF718096),
       fontSize: 16,
     ));
-    paragraphBuilder.addText(
-        'تاريخ الإنشاء: ${DateTime.now().toLocal().toString().split(' ')[0]}');
+    paragraphBuilder.addText('تاريخ الإنشاء: ${DateTime.now().toLocal().toString().split(' ')[0]}');
 
     final paragraph = paragraphBuilder.build();
     paragraph.layout(ui.ParagraphConstraints(width: size.width - 80));
@@ -1326,8 +1434,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     );
 
     final picture = recorder.endRecording();
-    final image =
-        await picture.toImage(size.width.toInt(), size.height.toInt());
+    final image = await picture.toImage(size.width.toInt(), size.height.toInt());
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
     if (byteData == null) {
@@ -1373,7 +1480,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           });
         }
         _showMessage('فشل التقاط الصورة - سيتم إنشاء صورة بديلة');
-
+        
         // إنشاء صورة احتياطية
         screenshot = await _createFallbackImage();
       }
@@ -1393,7 +1500,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       // إنشاء اسم فريد للملف
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = 'salary_slip_$timestamp.png';
-
+      
       try {
         // حفظ مباشر في المعرض باستخدام Gal
         final tempDir = await getTemporaryDirectory();
@@ -1421,10 +1528,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
         }
 
         // رسالة نجاح مع تفاصيل الموقع
-        String successMessage = albumName != null
+        String successMessage = albumName != null 
             ? 'تم حفظ قسيمة الراتب في ألبوم "$albumName"'
             : 'تم حفظ قسيمة الراتب في معرض الصور';
-
+            
         _showMessage(successMessage);
 
         // تنظيف الملف المؤقت
@@ -1437,6 +1544,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             debugPrint('⚠️ Error deleting temp file: $e');
           }
         });
+
       } catch (e) {
         debugPrint('❌ Error saving to gallery: $e');
 
@@ -1445,7 +1553,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             isLoading = false;
           });
         }
-
+        
         // محاولة أخيرة بطريقة مختلفة
         if (Platform.isIOS) {
           _showMessage('فشل حفظ الصورة - تحقق من إعدادات الخصوصية للتطبيق');
