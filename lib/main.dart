@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -629,7 +630,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('⚙️ Initializing WebView...');
 
     try {
-      controller = WebViewController()
+      // iOS-specific parameters for better compatibility
+      late final PlatformWebViewControllerCreationParams params;
+      if (Platform.isIOS) {
+        params = WebKitWebViewControllerCreationParams(
+          allowsInlineMediaPlayback: true,
+          mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+        );
+      } else if (Platform.isAndroid) {
+        params = AndroidWebViewControllerCreationParams();
+      } else {
+        params = const PlatformWebViewControllerCreationParams();
+      }
+
+      controller = WebViewController.fromPlatformCreationParams(params)
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
         ..addJavaScriptChannel(
@@ -638,6 +652,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
             debugPrint('📨 JavaScript message received: ${message.message}');
           },
         );
+
+      // iOS-specific configurations
+      if (Platform.isIOS && controller!.platform is WebKitWebViewController) {
+        final webKitController =
+            controller!.platform as WebKitWebViewController;
+        webKitController.setAllowsBackForwardNavigationGestures(true);
+      }
 
       if (Platform.isAndroid) {
         debugPrint('🤖 Configuring Android WebView settings');
@@ -846,68 +867,39 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Injecting zoom support...');
           
-          // إنشاء نظام تكبير خاص بـ iOS
+          // إنشاء عنصر مخفي لحفظ مستوى التكبير
           if (!window.zoomData) {
-            window.zoomData = { 
-              level: 1.0,
-              isInitialized: false 
-            };
+            window.zoomData = { level: 1.0 };
           }
           
-          // دالة تكبير محسنة لـ iOS
+          // دالة لتطبيق التكبير - محسنة للعمل على iOS
           window.applyZoom = function(level) {
-            console.log('Applying zoom level for iOS:', level);
+            console.log('Applying zoom level:', level);
             window.zoomData.level = level;
             
-            // الطريقة الأولى: CSS Transform (أفضل لـ iOS)
+            // تطبيق التكبير باستخدام transform للتوافق مع iOS
             var body = document.body;
             var html = document.documentElement;
             
-            if (body) {
-              body.style.transform = 'scale(' + level + ')';
-              body.style.transformOrigin = 'top left';
-              body.style.width = (100 / level) + '%';
-              body.style.height = (100 / level) + '%';
-            }
+            // استخدام transform بدلاً من zoom للتوافق مع iOS
+            body.style.transformOrigin = 'top left';
+            body.style.transform = 'scale(' + level + ')';
+            body.style.width = (100 / level) + '%';
+            body.style.height = (100 / level) + '%';
             
-            // الطريقة الثانية: CSS Zoom كبديل
-            try {
-              if (html) {
-                html.style.zoom = level;
-              }
-              if (body) {
-                body.style.zoom = level;
-              }
-            } catch (e) {
-              console.log('CSS zoom not supported, using transform only');
-            }
-            
-            // الطريقة الثالثة: viewport scaling للـ iOS
+            // تحديث viewport للتوافق مع iOS
             var viewport = document.querySelector('meta[name="viewport"]');
             if (viewport) {
-              var newScale = level;
-              viewport.setAttribute('content', 
-                'width=device-width, initial-scale=' + newScale + 
-                ', maximum-scale=' + (newScale * 2) + 
-                ', user-scalable=yes');
-            } else {
-              // إنشاء viewport جديد
-              var meta = document.createElement('meta');
-              meta.name = 'viewport';
-              meta.content = 'width=device-width, initial-scale=' + level + 
-                           ', maximum-scale=' + (level * 2) + ', user-scalable=yes';
-              document.getElementsByTagName('head')[0].appendChild(meta);
+              viewport.content = 'width=device-width, initial-scale=' + level + ', maximum-scale=3.0, user-scalable=yes, viewport-fit=cover';
             }
             
-            console.log('iOS zoom applied successfully to level:', level);
+            console.log('iOS-compatible zoom applied successfully');
           };
           
-          // تهيئة النظام للـ iOS
-          setTimeout(function() {
-            window.applyZoom(1.0);
-          }, 300);
+          // تطبيق التكبير الافتراضي
+          window.applyZoom(1.0);
           
-          console.log('✅ iOS Zoom support injected');
+          console.log('✅ Zoom support injected');
         })();
       ''');
 
@@ -949,14 +941,24 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           if (typeof window.applyZoom === 'function') {
             window.applyZoom($zoomLevel);
-            console.log('Zoom level $zoomLevel applied via window.applyZoom');
           } else {
-            // الطريقة البديلة - استخدام CSS zoom فقط
-            console.log('Fallback: Using CSS zoom only');
-            document.documentElement.style.zoom = '$zoomLevel';
-            document.body.style.zoom = '$zoomLevel';
-            console.log('CSS zoom level $zoomLevel applied');
+            // الطريقة البديلة متوافقة مع iOS
+            var body = document.body;
+            var html = document.documentElement;
+            
+            // استخدام transform بدلاً من zoom للتوافق مع iOS
+            body.style.transformOrigin = 'top left';
+            body.style.transform = 'scale($zoomLevel)';
+            body.style.width = (100 / $zoomLevel) + '%';
+            body.style.height = (100 / $zoomLevel) + '%';
+            
+            // تحديث viewport
+            var viewport = document.querySelector('meta[name="viewport"]');
+            if (viewport) {
+              viewport.content = 'width=device-width, initial-scale=$zoomLevel, maximum-scale=3.0, user-scalable=yes, viewport-fit=cover';
+            }
           }
+          console.log('Zoom level $zoomLevel applied');
         })();
       ''');
 
@@ -1069,387 +1071,167 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    try {
-      if (Platform.isIOS) {
-        // iOS يتطلب صلاحية Photos
-        var photosStatus = await Permission.photos.status;
-        debugPrint('📱 iOS Photos permission status: $photosStatus');
-        
-        if (!photosStatus.isGranted) {
-          photosStatus = await Permission.photos.request();
-          debugPrint('📱 iOS Photos permission after request: $photosStatus');
+    if (Platform.isAndroid) {
+      try {
+        var status = await Permission.photos.status;
+        if (!status.isGranted) {
+          status = await Permission.photos.request();
         }
-        
-        return photosStatus.isGranted;
-      } else {
-        // Android - الكود الأصلي الذي كان يعمل
-        try {
-          var status = await Permission.photos.status;
-          if (!status.isGranted) {
-            status = await Permission.photos.request();
-          }
-          return status.isGranted || status.isPermanentlyDenied;
-        } catch (e) {
-          debugPrint('Permission check error: $e');
-          return true;
-        }
+        return status.isGranted || status.isPermanentlyDenied;
+      } catch (e) {
+        debugPrint('Permission check error: $e');
+        return true;
       }
-    } catch (e) {
-      debugPrint('⚠️ Permission check error: $e');
-      return true; // السماح بالمتابعة في حالة الخطأ
     }
+    return true;
   }
 
   Future<Uint8List> _captureScreenshot() async {
     debugPrint('📸 Starting screenshot capture...');
 
     try {
+      // الطريقة 1: استخدام JavaScript لالتقاط محتوى HTML وتحويله إلى صورة
       if (Platform.isIOS) {
-        debugPrint('📱 iOS-specific capture method...');
-        
-        // الطريقة الأولى: استخدام JavaScript محسن للـ iOS
-        try {
-          // إعداد الصفحة للتقاط أفضل
-          await controller!.runJavaScript('''
-            (function() {
-              // إزالة أي عناصر عائمة قد تؤثر على التقاط
-              var floatingElements = document.querySelectorAll('[style*="position: fixed"], [style*="position: absolute"]');
-              floatingElements.forEach(function(el) {
-                if (el.style.position === 'fixed' || el.style.position === 'absolute') {
-                  var rect = el.getBoundingClientRect();
-                  if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) {
-                    el.style.display = 'none';
-                  }
-                }
+        debugPrint('📱 Using JavaScript-based capture for iOS');
+
+        // حقن html2canvas للتقاط الصورة
+        await controller!.runJavaScript('''
+          (function() {
+            // تحميل html2canvas إذا لم يكن موجوداً
+            if (typeof html2canvas === 'undefined') {
+              var script = document.createElement('script');
+              script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+              document.head.appendChild(script);
+            }
+          })();
+        ''');
+
+        await Future.delayed(const Duration(seconds: 2));
+
+        // التقاط الصورة باستخدام html2canvas
+        final String? result =
+            await controller!.runJavaScriptReturningResult('''
+          (async function() {
+            try {
+              // انتظار تحميل html2canvas
+              if (typeof html2canvas === 'undefined') {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+              
+              // التقاط المحتوى الرئيسي
+              var targetElement = document.querySelector('main, .content, .container, article') || document.body;
+              
+              const canvas = await html2canvas(targetElement, {
+                scale: 1,
+                backgroundColor: '#ffffff',
+                useCORS: true,
+                allowTaint: true,
+                logging: false,
+                width: targetElement.scrollWidth,
+                height: targetElement.scrollHeight,
+                foreignObjectRendering: false,
+                removeContainer: true
               });
               
-              // التأكد من أن المحتوى مرئي بالكامل
-              window.scrollTo(0, 0);
-              
-              // إضافة خلفية بيضاء للتأكد
-              document.body.style.backgroundColor = '#ffffff';
-              
-              console.log('Page prepared for iOS capture');
-            })();
-          ''');
+              return canvas.toDataURL('image/png').split(',')[1];
+            } catch (error) {
+              console.error('Capture error:', error);
+              return '';
+            }
+          })();
+        ''') as String?;
 
-          await Future.delayed(const Duration(milliseconds: 500));
-
-          // محاولة استخدام html2canvas للـ iOS
-          await controller!.runJavaScript('''
-            (function() {
-              if (!window.html2canvasLoaded && typeof html2canvas === 'undefined') {
-                var script = document.createElement('script');
-                script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
-                script.onload = function() { 
-                  window.html2canvasLoaded = true; 
-                  console.log('html2canvas loaded successfully');
-                };
-                script.onerror = function() {
-                  console.log('html2canvas failed to load');
-                };
-                document.head.appendChild(script);
-              }
-            })();
-          ''');
-
-          // انتظار تحميل المكتبة
-          await Future.delayed(const Duration(seconds: 3));
-
-          // التقاط المحتوى بـ html2canvas
-          final String? result = await controller!.runJavaScriptReturningResult('''
-            (async function() {
-              try {
-                if (typeof html2canvas === 'undefined') {
-                  console.log('html2canvas not available, using alternative');
-                  return null;
-                }
-                
-                // اختيار العنصر المناسب للتقاط
-                var targetElement = document.body;
-                var containers = document.querySelectorAll('main, .content, .container, article');
-                if (containers.length > 0) {
-                  targetElement = containers[0];
-                }
-                
-                console.log('Starting html2canvas capture...');
-                
-                const canvas = await html2canvas(targetElement, {
-                  scale: 1,
-                  backgroundColor: '#ffffff',
-                  useCORS: true,
-                  allowTaint: false,
-                  logging: false,
-                  removeContainer: false,
-                  foreignObjectRendering: false,
-                  width: Math.min(targetElement.scrollWidth, window.innerWidth),
-                  height: Math.min(targetElement.scrollHeight, window.innerHeight * 3),
-                  windowWidth: window.innerWidth,
-                  windowHeight: window.innerHeight,
-                  scrollX: 0,
-                  scrollY: 0
-                });
-                
-                var dataURL = canvas.toDataURL('image/png', 1.0);
-                console.log('html2canvas capture successful');
-                return dataURL.split(',')[1];
-              } catch (error) {
-                console.error('html2canvas error:', error);
-                return null;
-              }
-            })();
-          ''') as String?;
-
-          if (result != null && result.isNotEmpty && result != 'null') {
-            debugPrint('✅ iOS JavaScript capture successful');
-            return base64Decode(result);
-          }
-        } catch (e) {
-          debugPrint('⚠️ iOS JavaScript capture failed: $e');
+        if (result != null && result.isNotEmpty) {
+          debugPrint(
+              '✅ JavaScript capture successful, converting base64 to bytes...');
+          return base64Decode(result);
         }
-        
-        // الطريقة الثانية: RepaintBoundary للـ iOS
-        debugPrint('🔄 Trying iOS RepaintBoundary capture...');
-        
-        await Future.delayed(const Duration(milliseconds: 800));
-        
-        RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-            ?.findRenderObject() as RenderRepaintBoundary?;
-
-        if (boundary != null) {
-          debugPrint('🎯 Found boundary for iOS, capturing...');
-          
-          ui.Image image = await boundary.toImage(pixelRatio: 2.0);
-          ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-          if (byteData != null) {
-            Uint8List screenshot = byteData.buffer.asUint8List();
-            debugPrint('✅ iOS RepaintBoundary capture successful: ${screenshot.length} bytes');
-            return screenshot;
-          }
-        }
-        
-        // الطريقة الثالثة: إنشاء صورة مخصصة للـ iOS
-        debugPrint('🆘 Creating iOS-optimized fallback image...');
-        return await _createIOSFallbackImage();
-        
-      } else {
-        // Android - الطريقة الأصلية التي تعمل
-        debugPrint('🤖 Android capture using RepaintBoundary...');
-        
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-            ?.findRenderObject() as RenderRepaintBoundary?;
-
-        if (boundary != null) {
-          debugPrint('🎯 Found boundary, capturing image...');
-          ui.Image image = await boundary.toImage(pixelRatio: 2.0);
-          ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-          if (byteData != null) {
-            Uint8List screenshot = byteData.buffer.asUint8List();
-            debugPrint('✅ Android capture successful: ${screenshot.length} bytes');
-            return screenshot;
-          }
-        }
-        
-        return await _createFallbackImage();
       }
-      
+
+      // الطريقة 2: استخدام RepaintBoundary (تعمل على Android بشكل جيد)
+      debugPrint('🔄 Falling back to RepaintBoundary capture...');
+
+      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+
+      if (boundary == null) {
+        debugPrint('❌ Could not find RepaintBoundary');
+        throw Exception('Could not find RepaintBoundary');
+      }
+
+      debugPrint('🎯 Found boundary, capturing image...');
+
+      // التقاط الصورة
+      ui.Image image =
+          await boundary.toImage(pixelRatio: Platform.isIOS ? 2.0 : 3.0);
+      ByteData? byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        throw Exception('Could not convert image to byte data');
+      }
+
+      Uint8List screenshot = byteData.buffer.asUint8List();
+      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
+
+      return screenshot;
     } catch (e) {
       debugPrint('❌ Error in capture: $e');
-      if (Platform.isIOS) {
-        return await _createIOSFallbackImage();
-      } else {
-        return await _createFallbackImage();
+
+      // الطريقة 3: طريقة الطوارئ - إنشاء صورة نصية
+      debugPrint('🆘 Creating emergency text image...');
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final size = Size(800, 600);
+
+      // خلفية بيضاء
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
+          Paint()..color = Colors.white);
+
+      // نص توضيحي
+      final paragraphBuilder = ui.ParagraphBuilder(
+        ui.ParagraphStyle(
+          textDirection: TextDirection.rtl,
+          fontSize: 20,
+          fontFamily: 'Cairo',
+        ),
+      );
+
+      paragraphBuilder.pushStyle(ui.TextStyle(
+        color: const Color(0xFF2D3748),
+        fontSize: 20,
+      ));
+
+      paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
+      paragraphBuilder.addText('قسيمة الراتب\n\n');
+      paragraphBuilder.addText('تم حفظ الصورة بنجاح\n');
+      paragraphBuilder.addText('يمكن الوصول للتفاصيل الكاملة عبر التطبيق\n\n');
+      paragraphBuilder.addText(
+          'تاريخ الحفظ: ${DateTime.now().toLocal().toString().split(' ')[0]}');
+
+      final paragraph = paragraphBuilder.build();
+      paragraph.layout(ui.ParagraphConstraints(width: size.width - 40));
+
+      canvas.drawParagraph(paragraph, const Offset(20, 100));
+
+      final picture = recorder.endRecording();
+      final image =
+          await picture.toImage(size.width.toInt(), size.height.toInt());
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        throw Exception('Failed to create emergency image');
       }
+
+      return byteData.buffer.asUint8List();
     }
-  }
-
-  Future<Uint8List> _createIOSFallbackImage() async {
-    debugPrint('🎨 Creating iOS-optimized fallback image...');
-    
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(750, 1334); // iPhone size
-
-    // خلفية بيضاء
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-        Paint()..color = Colors.white);
-
-    // إطار أنيق
-    canvas.drawRRect(
-      RRect.fromLTRBAndCorners(
-        30, 30, size.width - 30, size.height - 30,
-        topLeft: Radius.circular(20),
-        topRight: Radius.circular(20),
-        bottomLeft: Radius.circular(20),
-        bottomRight: Radius.circular(20),
-      ),
-      Paint()
-        ..color = const Color(0xFF00BFA5)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 4,
-    );
-
-    // شعار أو دائرة علوية
-    canvas.drawCircle(
-      Offset(size.width / 2, 150),
-      50,
-      Paint()..color = const Color(0xFF00BFA5).withOpacity(0.2),
-    );
-
-    canvas.drawCircle(
-      Offset(size.width / 2, 150),
-      35,
-      Paint()..color = const Color(0xFF00BFA5),
-    );
-
-    // النص
-    final paragraphBuilder = ui.ParagraphBuilder(
-      ui.ParagraphStyle(
-        textDirection: TextDirection.rtl,
-        fontSize: 32,
-        fontFamily: 'Cairo',
-        textAlign: TextAlign.center,
-      ),
-    );
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF2D3748),
-      fontSize: 32,
-      fontWeight: FontWeight.bold,
-    ));
-    paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF00BFA5),
-      fontSize: 28,
-      fontWeight: FontWeight.bold,
-    ));
-    paragraphBuilder.addText('قسيمة الراتب\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF4A5568),
-      fontSize: 22,
-    ));
-    paragraphBuilder.addText('تم حفظ الصورة بنجاح من التطبيق\n');
-    paragraphBuilder.addText('للحصول على قسيمة الراتب الكاملة،\n');
-    paragraphBuilder.addText('يمكنكم استخدام ميزة الطباعة\n');
-    paragraphBuilder.addText('أو الحفظ من المتصفح مباشرة\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF718096),
-      fontSize: 18,
-    ));
-    final now = DateTime.now();
-    paragraphBuilder.addText('تاريخ الإنشاء: ${now.day}/${now.month}/${now.year}\n');
-    paragraphBuilder.addText('الوقت: ${now.hour}:${now.minute.toString().padLeft(2, '0')}');
-
-    final paragraph = paragraphBuilder.build();
-    paragraph.layout(ui.ParagraphConstraints(width: size.width - 100));
-
-    canvas.drawParagraph(paragraph, const Offset(50, 250));
-
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(size.width.toInt(), size.height.toInt());
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-    if (byteData == null) {
-      throw Exception('Failed to create iOS fallback image');
-    }
-
-    debugPrint('✅ iOS fallback image created');
-    return byteData.buffer.asUint8List();
-  }
-
-  Future<Uint8List> _createFallbackImage() async {
-    debugPrint('🎨 Creating fallback image...');
-    
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(800, 600);
-
-    // خلفية بيضاء
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-        Paint()..color = Colors.white);
-
-    // إطار
-    canvas.drawRect(
-      Rect.fromLTWH(20, 20, size.width - 40, size.height - 40),
-      Paint()
-        ..color = const Color(0xFF00BFA5)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3,
-    );
-
-    // النص
-    final paragraphBuilder = ui.ParagraphBuilder(
-      ui.ParagraphStyle(
-        textDirection: TextDirection.rtl,
-        fontSize: 24,
-        fontFamily: 'Cairo',
-      ),
-    );
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF2D3748),
-      fontSize: 28,
-      fontWeight: FontWeight.bold,
-    ));
-    paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF00BFA5),
-      fontSize: 22,
-      fontWeight: FontWeight.bold,
-    ));
-    paragraphBuilder.addText('قسيمة الراتب\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF4A5568),
-      fontSize: 18,
-    ));
-    paragraphBuilder.addText('تم إنشاء هذه الصورة من التطبيق\n');
-    paragraphBuilder.addText('للحصول على قسيمة الراتب الكاملة،\n');
-    paragraphBuilder.addText('يرجى استخدام ميزة الطباعة من المتصفح\n\n');
-
-    paragraphBuilder.pushStyle(ui.TextStyle(
-      color: const Color(0xFF718096),
-      fontSize: 16,
-    ));
-    paragraphBuilder.addText('تاريخ الإنشاء: ${DateTime.now().toLocal().toString().split(' ')[0]}');
-
-    final paragraph = paragraphBuilder.build();
-    paragraph.layout(ui.ParagraphConstraints(width: size.width - 80));
-
-    canvas.drawParagraph(paragraph, const Offset(40, 120));
-
-    // رسم شعار أو أيقونة
-    canvas.drawCircle(
-      Offset(size.width / 2, 320),
-      30,
-      Paint()..color = const Color(0xFF00BFA5).withOpacity(0.1),
-    );
-
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(size.width.toInt(), size.height.toInt());
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-    if (byteData == null) {
-      throw Exception('Failed to create fallback image');
-    }
-
-    debugPrint('✅ Fallback image created');
-    return byteData.buffer.asUint8List();
   }
 
   Future<void> _savePageAsImage() async {
     try {
       debugPrint('💾 Starting save process...');
 
-      // طلب الصلاحيات المطلوبة
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
         _showMessage('الرجاء منح صلاحية الوصول للتخزين');
@@ -1462,11 +1244,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      // إظهار رسالة المعالجة
-      _showMessage('جاري معالجة الصورة...');
-
-      // انتظار أطول لضمان التصيير الكامل
-      await Future.delayed(const Duration(milliseconds: 2000));
+      // انتظار لضمان التصيير
+      await Future.delayed(const Duration(milliseconds: 1500));
 
       Uint8List screenshot;
 
@@ -1474,19 +1253,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
         screenshot = await _captureScreenshot();
       } catch (e) {
         debugPrint('❌ Capture failed: $e');
+        _showMessage('فشل التقاط الصورة');
         if (mounted) {
           setState(() {
             isLoading = false;
           });
         }
-        _showMessage('فشل التقاط الصورة - سيتم إنشاء صورة بديلة');
-        
-        // إنشاء صورة احتياطية
-        screenshot = await _createFallbackImage();
+        return;
       }
 
       if (screenshot.isEmpty) {
-        _showMessage('فشل في إنشاء الصورة');
+        _showMessage('فشل التقاط الصورة');
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -1497,29 +1274,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
       debugPrint('📁 Saving to gallery...');
 
-      // إنشاء اسم فريد للملف
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = 'salary_slip_$timestamp.png';
-      
-      try {
-        // حفظ مباشر في المعرض باستخدام Gal
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/$fileName');
-        await tempFile.writeAsBytes(screenshot);
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(screenshot);
 
-        // محاولة حفظ في ألبوم مخصص أولاً
-        String? albumName;
-        try {
-          albumName = 'قسائم الرواتب';
-          await Gal.putImage(tempFile.path, album: albumName);
-          debugPrint('✅ Image saved to custom album: $albumName');
-        } catch (albumError) {
-          debugPrint('⚠️ Custom album failed: $albumError');
-          // حفظ في المعرض الرئيسي كبديل
-          await Gal.putImage(tempFile.path);
-          albumName = null;
-          debugPrint('✅ Image saved to main gallery');
-        }
+      try {
+        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
+        debugPrint('✅ Image saved to gallery successfully');
 
         if (mounted) {
           setState(() {
@@ -1527,24 +1290,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
           });
         }
 
-        // رسالة نجاح مع تفاصيل الموقع
-        String successMessage = albumName != null 
-            ? 'تم حفظ قسيمة الراتب في ألبوم "$albumName"'
-            : 'تم حفظ قسيمة الراتب في معرض الصور';
-            
-        _showMessage(successMessage);
+        _showMessage('تم حفظ قسيمة الراتب في المعرض');
 
-        // تنظيف الملف المؤقت
-        Future.delayed(const Duration(seconds: 3), () async {
+        // تنظيف بعد التأكد
+        await Future.delayed(const Duration(seconds: 2), () async {
           try {
-            if (await tempFile.exists()) {
-              await tempFile.delete();
-            }
+            await tempFile.delete();
           } catch (e) {
             debugPrint('⚠️ Error deleting temp file: $e');
           }
         });
-
       } catch (e) {
         debugPrint('❌ Error saving to gallery: $e');
 
@@ -1553,13 +1308,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             isLoading = false;
           });
         }
-        
-        // محاولة أخيرة بطريقة مختلفة
-        if (Platform.isIOS) {
-          _showMessage('فشل حفظ الصورة - تحقق من إعدادات الخصوصية للتطبيق');
-        } else {
-          _showMessage('فشل حفظ الصورة في المعرض');
-        }
+        _showMessage('فشل حفظ الصورة في المعرض');
       }
     } catch (e) {
       debugPrint('❌ Error in save process: $e');
@@ -1569,7 +1318,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           isLoading = false;
         });
       }
-      _showMessage('حدث خطأ أثناء حفظ الصورة');
+      _showMessage('حدث خطأ: ${e.toString().split(':')[0]}');
     }
   }
 
