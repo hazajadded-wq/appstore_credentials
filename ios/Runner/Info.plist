@@ -54,6 +54,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs network access to connect to the salary information server</string>
 
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>يحتاج التطبيق الوصول إلى مكتبة الصور لحفظ صور كشوفات الرواتب في الألبوم الخاص بك</string>
+
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 	<key>UILaunchStoryboardName</key>
