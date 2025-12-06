@@ -50,10 +50,7 @@
 
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-<key>NSPhotoLibraryAddUsageDescription</key>
-<string>نحتاج إلى حفظ قسيمة الراتب في معرض الصور</string>
-	
-	
+
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs network access to connect to the salary information server</string>
 
