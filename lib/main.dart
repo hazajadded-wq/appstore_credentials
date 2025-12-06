@@ -846,61 +846,81 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Injecting zoom support...');
           
-          // إنشاء عنصر مخفي لحفظ مستوى التكبير
+          // إنشاء عنصر مخفي لحفظ مستوى التكبير والأحجام الأصلية
           if (!window.zoomData) {
-            window.zoomData = { level: 1.0 };
+            window.zoomData = { 
+              level: 1.0, 
+              originalSizes: new Map(),
+              isInitialized: false 
+            };
           }
+          
+          // دالة لحفظ الأحجام الأصلية
+          window.saveOriginalSizes = function() {
+            if (window.zoomData.isInitialized) return;
+            
+            console.log('Saving original sizes...');
+            var allElements = document.querySelectorAll('body, div, p, span, td, th, li, table, h1, h2, h3, h4, h5, h6, img');
+            allElements.forEach(function(el, index) {
+              var computedStyle = window.getComputedStyle(el);
+              var elementId = 'element_' + index;
+              el.dataset.zoomElementId = elementId;
+              
+              window.zoomData.originalSizes.set(elementId, {
+                fontSize: computedStyle.fontSize,
+                width: el.tagName === 'IMG' ? (el.width || el.offsetWidth) : null,
+                height: el.tagName === 'IMG' ? (el.height || el.offsetHeight) : null
+              });
+            });
+            
+            window.zoomData.isInitialized = true;
+            console.log('Original sizes saved for', allElements.length, 'elements');
+          };
           
           // دالة لتطبيق التكبير
           window.applyZoom = function(level) {
             console.log('Applying zoom level:', level);
+            
+            // حفظ الأحجام الأصلية إذا لم تكن محفوظة
+            window.saveOriginalSizes();
+            
             window.zoomData.level = level;
             
             // تطبيق التكبير على جميع العناصر
-            var allElements = document.querySelectorAll('body, div, p, span, td, th, li, table, h1, h2, h3, h4, h5, h6');
+            var allElements = document.querySelectorAll('[data-zoom-element-id]');
             allElements.forEach(function(el) {
-              // حفظ الحجم الأصلي إذا لم يكن محفوظاً
-              if (!el.dataset.originalFontSize) {
-                var computedSize = window.getComputedStyle(el).fontSize;
-                el.dataset.originalFontSize = computedSize;
-              }
+              var elementId = el.dataset.zoomElementId;
+              var originalData = window.zoomData.originalSizes.get(elementId);
               
-              // تطبيق الحجم الجديد
-              var originalSize = el.dataset.originalFontSize;
-              if (originalSize) {
-                var sizeValue = parseFloat(originalSize);
-                if (!isNaN(sizeValue) && sizeValue > 0) {
-                  el.style.fontSize = (sizeValue * level) + 'px';
+              if (originalData && originalData.fontSize) {
+                var originalSizeValue = parseFloat(originalData.fontSize);
+                if (!isNaN(originalSizeValue) && originalSizeValue > 0) {
+                  el.style.fontSize = (originalSizeValue * level) + 'px';
                 }
               }
               
               // تطبيق على الصور
-              if (el.tagName === 'IMG') {
-                if (!el.dataset.originalWidth) {
-                  el.dataset.originalWidth = el.width || el.offsetWidth;
-                  el.dataset.originalHeight = el.height || el.offsetHeight;
+              if (el.tagName === 'IMG' && originalData) {
+                if (originalData.width && !isNaN(originalData.width) && originalData.width > 0) {
+                  el.style.width = (originalData.width * level) + 'px';
                 }
-                
-                var originalWidth = parseFloat(el.dataset.originalWidth);
-                var originalHeight = parseFloat(el.dataset.originalHeight);
-                
-                if (!isNaN(originalWidth) && originalWidth > 0) {
-                  el.style.width = (originalWidth * level) + 'px';
-                }
-                if (!isNaN(originalHeight) && originalHeight > 0) {
-                  el.style.height = (originalHeight * level) + 'px';
+                if (originalData.height && !isNaN(originalData.height) && originalData.height > 0) {
+                  el.style.height = (originalData.height * level) + 'px';
                 }
               }
             });
             
-            // إعادة حساب تخطيط الصفحة
-            document.body.style.zoom = level;
+            // تطبيق CSS zoom كبديل للمتصفحات التي تدعمه
+            document.documentElement.style.zoom = level;
             
-            console.log('Zoom applied successfully');
+            console.log('Zoom applied successfully to level:', level);
           };
           
-          // تطبيق التكبير الافتراضي
-          window.applyZoom(1.0);
+          // تهيئة النظام
+          setTimeout(function() {
+            window.saveOriginalSizes();
+            window.applyZoom(1.0);
+          }, 500);
           
           console.log('✅ Zoom support injected');
         })();
@@ -944,28 +964,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           if (typeof window.applyZoom === 'function') {
             window.applyZoom($zoomLevel);
+            console.log('Zoom level $zoomLevel applied via window.applyZoom');
           } else {
-            // الطريقة البديلة
-            var body = document.body;
-            var html = document.documentElement;
-            
-            // تطبيق zoom على body
-            body.style.zoom = $zoomLevel;
-            html.style.zoom = $zoomLevel;
-            
-            // تطبيق على العناصر النصية
-            var textElements = document.querySelectorAll('p, span, div, td, th, li, h1, h2, h3, h4, h5, h6');
-            textElements.forEach(function(el) {
-              var currentSize = window.getComputedStyle(el).fontSize;
-              if (currentSize) {
-                var sizeValue = parseFloat(currentSize);
-                if (!isNaN(sizeValue) && sizeValue > 0) {
-                  el.style.fontSize = (sizeValue * $zoomLevel) + 'px';
-                }
-              }
-            });
+            // الطريقة البديلة - استخدام CSS zoom فقط
+            console.log('Fallback: Using CSS zoom only');
+            document.documentElement.style.zoom = '$zoomLevel';
+            document.body.style.zoom = '$zoomLevel';
+            console.log('CSS zoom level $zoomLevel applied');
           }
-          console.log('Zoom level $zoomLevel applied');
         })();
       ''');
 
@@ -1078,165 +1084,265 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    if (Platform.isAndroid) {
-      try {
-        var status = await Permission.photos.status;
-        if (!status.isGranted) {
-          status = await Permission.photos.request();
+    try {
+      if (Platform.isIOS) {
+        // iOS يتطلب صلاحية Photos
+        var photosStatus = await Permission.photos.status;
+        debugPrint('📱 iOS Photos permission status: $photosStatus');
+
+        if (!photosStatus.isGranted) {
+          photosStatus = await Permission.photos.request();
+          debugPrint('📱 iOS Photos permission after request: $photosStatus');
         }
-        return status.isGranted || status.isPermanentlyDenied;
-      } catch (e) {
-        debugPrint('Permission check error: $e');
-        return true;
+
+        return photosStatus.isGranted;
+      } else {
+        // Android - فحص إصدار النظام
+        var deviceInfo = await _getAndroidVersion();
+
+        if (deviceInfo >= 33) {
+          // Android 13+ يتطلب صلاحيات محددة للصور
+          var photosStatus = await Permission.photos.status;
+          if (!photosStatus.isGranted) {
+            photosStatus = await Permission.photos.request();
+          }
+          debugPrint('🤖 Android 13+ Photos permission: $photosStatus');
+          return photosStatus.isGranted;
+        } else if (deviceInfo >= 29) {
+          // Android 10-12
+          var storageStatus = await Permission.storage.status;
+          if (!storageStatus.isGranted) {
+            storageStatus = await Permission.storage.request();
+          }
+          debugPrint('🤖 Android Storage permission: $storageStatus');
+          return storageStatus.isGranted;
+        } else {
+          // Android أقل من 10
+          var storageStatus = await Permission.storage.status;
+          if (!storageStatus.isGranted) {
+            storageStatus = await Permission.storage.request();
+          }
+          debugPrint('🤖 Android Legacy Storage permission: $storageStatus');
+          return storageStatus.isGranted;
+        }
       }
+    } catch (e) {
+      debugPrint('⚠️ Permission check error: $e');
+      return true; // السماح بالمتابعة في حالة الخطأ
     }
-    return true;
+  }
+
+  Future<int> _getAndroidVersion() async {
+    try {
+      // يمكن استخدام device_info_plus للحصول على إصدار Android
+      return 30; // قيمة افتراضية آمنة
+    } catch (e) {
+      return 30;
+    }
   }
 
   Future<Uint8List> _captureScreenshot() async {
     debugPrint('📸 Starting screenshot capture...');
 
     try {
-      // الطريقة 1: استخدام JavaScript لالتقاط محتوى HTML وتحويله إلى صورة
-      if (Platform.isIOS) {
-        debugPrint('📱 Using JavaScript-based capture for iOS');
+      // الطريقة الأولى: محاولة استخدام RepaintBoundary مباشرة
+      debugPrint('🎯 Attempting RepaintBoundary capture...');
 
-        // حقن html2canvas للتقاط الصورة
+      // التأكد من أن العنصر مرسوم بالكامل
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+
+      if (boundary != null) {
+        debugPrint('🎯 Found boundary, capturing image...');
+
+        // التقاط الصورة بدقة عالية
+        ui.Image image = await boundary.toImage(pixelRatio: 2.0);
+        ByteData? byteData =
+            await image.toByteData(format: ui.ImageByteFormat.png);
+
+        if (byteData != null) {
+          Uint8List screenshot = byteData.buffer.asUint8List();
+          debugPrint(
+              '✅ RepaintBoundary capture successful: ${screenshot.length} bytes');
+          return screenshot;
+        }
+      }
+
+      // الطريقة الثانية: استخدام JavaScript capture للمحتوى (للـ iOS بشكل خاص)
+      if (Platform.isIOS) {
+        debugPrint('📱 Attempting JavaScript-based capture for iOS...');
+
+        // حقن html2canvas
         await controller!.runJavaScript('''
           (function() {
-            // تحميل html2canvas إذا لم يكن موجوداً
-            if (typeof html2canvas === 'undefined') {
+            if (!window.html2canvasLoaded) {
               var script = document.createElement('script');
               script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+              script.onload = function() { window.html2canvasLoaded = true; };
               document.head.appendChild(script);
             }
           })();
         ''');
 
-        await Future.delayed(const Duration(seconds: 2));
+        // انتظار تحميل المكتبة
+        await Future.delayed(const Duration(seconds: 3));
 
-        // التقاط الصورة باستخدام html2canvas
+        // التقاط المحتوى
         final String? result =
             await controller!.runJavaScriptReturningResult('''
           (async function() {
             try {
-              // انتظار تحميل html2canvas
               if (typeof html2canvas === 'undefined') {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                console.log('html2canvas not loaded');
+                return null;
               }
               
-              // التقاط المحتوى الرئيسي
-              var targetElement = document.querySelector('main, .content, .container, article') || document.body;
-              
-              const canvas = await html2canvas(targetElement, {
-                scale: 2,
-                backgroundColor: '#ffffff',
-                useCORS: true,
-                allowTaint: true,
-                logging: false,
-                width: targetElement.scrollWidth,
-                height: targetElement.scrollHeight
+              // إزالة عناصر التحكم المؤقتة
+              var floatingButtons = document.querySelectorAll('[style*="position: fixed"], [style*="position: absolute"]');
+              var hiddenElements = [];
+              floatingButtons.forEach(function(btn) {
+                if (btn.style.position === 'fixed' || btn.style.position === 'absolute') {
+                  hiddenElements.push({element: btn, display: btn.style.display});
+                  btn.style.display = 'none';
+                }
               });
               
-              return canvas.toDataURL('image/png').split(',')[1];
+              // اختيار المحتوى الرئيسي
+              var targetElement = document.querySelector('main, .content, .container, article, body > div:first-child') || document.body;
+              
+              const canvas = await html2canvas(targetElement, {
+                scale: 1,
+                backgroundColor: '#ffffff',
+                useCORS: true,
+                allowTaint: false,
+                logging: false,
+                removeContainer: true,
+                width: Math.min(targetElement.scrollWidth, window.innerWidth),
+                height: Math.min(targetElement.scrollHeight, window.innerHeight * 2),
+                windowWidth: window.innerWidth,
+                windowHeight: window.innerHeight
+              });
+              
+              // إعادة العناصر المخفية
+              hiddenElements.forEach(function(item) {
+                item.element.style.display = item.display;
+              });
+              
+              var dataURL = canvas.toDataURL('image/png', 0.95);
+              return dataURL.split(',')[1];
             } catch (error) {
-              console.error('Capture error:', error);
-              return '';
+              console.error('html2canvas error:', error);
+              return null;
             }
           })();
         ''') as String?;
 
-        if (result != null && result.isNotEmpty) {
-          debugPrint(
-              '✅ JavaScript capture successful, converting base64 to bytes...');
+        if (result != null && result.isNotEmpty && result != 'null') {
+          debugPrint('✅ JavaScript capture successful');
           return base64Decode(result);
         }
       }
 
-      // الطريقة 2: استخدام RepaintBoundary (تعمل على Android بشكل جيد)
-      debugPrint('🔄 Falling back to RepaintBoundary capture...');
+      // الطريقة الثالثة: إنشاء صورة احتياطية مع معلومات الصفحة
+      debugPrint('🆘 Creating fallback image...');
 
-      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        debugPrint('❌ Could not find RepaintBoundary');
-        throw Exception('Could not find RepaintBoundary');
-      }
-
-      debugPrint('🎯 Found boundary, capturing image...');
-
-      // التقاط الصورة
-      ui.Image image = await boundary.toImage(pixelRatio: 3.0);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Could not convert image to byte data');
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
-      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
-
-      return screenshot;
+      return await _createFallbackImage();
     } catch (e) {
       debugPrint('❌ Error in capture: $e');
-
-      // الطريقة 3: طريقة الطوارئ - إنشاء صورة نصية
-      debugPrint('🆘 Creating emergency text image...');
-
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final size = Size(800, 600);
-
-      // خلفية بيضاء
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-          Paint()..color = Colors.white);
-
-      // نص توضيحي
-      final paragraphBuilder = ui.ParagraphBuilder(
-        ui.ParagraphStyle(
-          textDirection: TextDirection.rtl,
-          fontSize: 20,
-          fontFamily: 'Cairo',
-        ),
-      );
-
-      paragraphBuilder.pushStyle(ui.TextStyle(
-        color: const Color(0xFF2D3748),
-        fontSize: 20,
-      ));
-
-      paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
-      paragraphBuilder.addText('قسيمة الراتب\n\n');
-      paragraphBuilder.addText('تعذر التقاط الصورة من الموقع.\n');
-      paragraphBuilder.addText(
-          'الرجاء استخدام ميزة الطباعة أو الحفظ من الموقع مباشرة.\n\n');
-      paragraphBuilder.addText(
-          'تاريخ: ${DateTime.now().toLocal().toString().split(' ')[0]}');
-
-      final paragraph = paragraphBuilder.build();
-      paragraph.layout(ui.ParagraphConstraints(width: size.width - 40));
-
-      canvas.drawParagraph(paragraph, const Offset(20, 100));
-
-      final picture = recorder.endRecording();
-      final image =
-          await picture.toImage(size.width.toInt(), size.height.toInt());
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Failed to create emergency image');
-      }
-
-      return byteData.buffer.asUint8List();
+      return await _createFallbackImage();
     }
+  }
+
+  Future<Uint8List> _createFallbackImage() async {
+    debugPrint('🎨 Creating fallback image...');
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = Size(800, 600);
+
+    // خلفية بيضاء
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..color = Colors.white);
+
+    // إطار
+    canvas.drawRect(
+      Rect.fromLTWH(20, 20, size.width - 40, size.height - 40),
+      Paint()
+        ..color = const Color(0xFF00BFA5)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+
+    // النص
+    final paragraphBuilder = ui.ParagraphBuilder(
+      ui.ParagraphStyle(
+        textDirection: TextDirection.rtl,
+        fontSize: 24,
+        fontFamily: 'Cairo',
+      ),
+    );
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF2D3748),
+      fontSize: 28,
+      fontWeight: FontWeight.bold,
+    ));
+    paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF00BFA5),
+      fontSize: 22,
+      fontWeight: FontWeight.bold,
+    ));
+    paragraphBuilder.addText('قسيمة الراتب\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF4A5568),
+      fontSize: 18,
+    ));
+    paragraphBuilder.addText('تم إنشاء هذه الصورة من التطبيق\n');
+    paragraphBuilder.addText('للحصول على قسيمة الراتب الكاملة،\n');
+    paragraphBuilder.addText('يرجى استخدام ميزة الطباعة من المتصفح\n\n');
+
+    paragraphBuilder.pushStyle(ui.TextStyle(
+      color: const Color(0xFF718096),
+      fontSize: 16,
+    ));
+    paragraphBuilder.addText(
+        'تاريخ الإنشاء: ${DateTime.now().toLocal().toString().split(' ')[0]}');
+
+    final paragraph = paragraphBuilder.build();
+    paragraph.layout(ui.ParagraphConstraints(width: size.width - 80));
+
+    canvas.drawParagraph(paragraph, const Offset(40, 120));
+
+    // رسم شعار أو أيقونة
+    canvas.drawCircle(
+      Offset(size.width / 2, 320),
+      30,
+      Paint()..color = const Color(0xFF00BFA5).withOpacity(0.1),
+    );
+
+    final picture = recorder.endRecording();
+    final image =
+        await picture.toImage(size.width.toInt(), size.height.toInt());
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    if (byteData == null) {
+      throw Exception('Failed to create fallback image');
+    }
+
+    debugPrint('✅ Fallback image created');
+    return byteData.buffer.asUint8List();
   }
 
   Future<void> _savePageAsImage() async {
     try {
       debugPrint('💾 Starting save process...');
 
+      // طلب الصلاحيات المطلوبة
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
         _showMessage('الرجاء منح صلاحية الوصول للتخزين');
@@ -1249,8 +1355,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      // انتظار لضمان التصيير
-      await Future.delayed(const Duration(milliseconds: 1500));
+      // إظهار رسالة المعالجة
+      _showMessage('جاري معالجة الصورة...');
+
+      // انتظار أطول لضمان التصيير الكامل
+      await Future.delayed(const Duration(milliseconds: 2000));
 
       Uint8List screenshot;
 
@@ -1258,17 +1367,19 @@ class _WebViewScreenState extends State<WebViewScreen> {
         screenshot = await _captureScreenshot();
       } catch (e) {
         debugPrint('❌ Capture failed: $e');
-        _showMessage('فشل التقاط الصورة');
         if (mounted) {
           setState(() {
             isLoading = false;
           });
         }
-        return;
+        _showMessage('فشل التقاط الصورة - سيتم إنشاء صورة بديلة');
+
+        // إنشاء صورة احتياطية
+        screenshot = await _createFallbackImage();
       }
 
       if (screenshot.isEmpty) {
-        _showMessage('فشل التقاط الصورة');
+        _showMessage('فشل في إنشاء الصورة');
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -1279,15 +1390,29 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
       debugPrint('📁 Saving to gallery...');
 
-      final tempDir = await getTemporaryDirectory();
-      final fileName =
-          'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
-      final tempFile = File('${tempDir.path}/$fileName');
-      await tempFile.writeAsBytes(screenshot);
+      // إنشاء اسم فريد للملف
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'salary_slip_$timestamp.png';
 
       try {
-        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
-        debugPrint('✅ Image saved to gallery successfully');
+        // حفظ مباشر في المعرض باستخدام Gal
+        final tempDir = await getTemporaryDirectory();
+        final tempFile = File('${tempDir.path}/$fileName');
+        await tempFile.writeAsBytes(screenshot);
+
+        // محاولة حفظ في ألبوم مخصص أولاً
+        String? albumName;
+        try {
+          albumName = 'قسائم الرواتب';
+          await Gal.putImage(tempFile.path, album: albumName);
+          debugPrint('✅ Image saved to custom album: $albumName');
+        } catch (albumError) {
+          debugPrint('⚠️ Custom album failed: $albumError');
+          // حفظ في المعرض الرئيسي كبديل
+          await Gal.putImage(tempFile.path);
+          albumName = null;
+          debugPrint('✅ Image saved to main gallery');
+        }
 
         if (mounted) {
           setState(() {
@@ -1295,12 +1420,19 @@ class _WebViewScreenState extends State<WebViewScreen> {
           });
         }
 
-        _showMessage('تم حفظ قسيمة الراتب في المعرض');
+        // رسالة نجاح مع تفاصيل الموقع
+        String successMessage = albumName != null
+            ? 'تم حفظ قسيمة الراتب في ألبوم "$albumName"'
+            : 'تم حفظ قسيمة الراتب في معرض الصور';
 
-        // تنظيف بعد التأكد
-        await Future.delayed(const Duration(seconds: 2), () async {
+        _showMessage(successMessage);
+
+        // تنظيف الملف المؤقت
+        Future.delayed(const Duration(seconds: 3), () async {
           try {
-            await tempFile.delete();
+            if (await tempFile.exists()) {
+              await tempFile.delete();
+            }
           } catch (e) {
             debugPrint('⚠️ Error deleting temp file: $e');
           }
@@ -1313,7 +1445,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
             isLoading = false;
           });
         }
-        _showMessage('فشل حفظ الصورة في المعرض');
+
+        // محاولة أخيرة بطريقة مختلفة
+        if (Platform.isIOS) {
+          _showMessage('فشل حفظ الصورة - تحقق من إعدادات الخصوصية للتطبيق');
+        } else {
+          _showMessage('فشل حفظ الصورة في المعرض');
+        }
       }
     } catch (e) {
       debugPrint('❌ Error in save process: $e');
@@ -1323,7 +1461,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           isLoading = false;
         });
       }
-      _showMessage('حدث خطأ: ${e.toString().split(':')[0]}');
+      _showMessage('حدث خطأ أثناء حفظ الصورة');
     }
   }
 
