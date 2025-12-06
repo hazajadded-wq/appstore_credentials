@@ -1,10 +1,17 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:gal/gal.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:ui' as ui;
 import 'dart:async';
 
 void main() async {
@@ -600,6 +607,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   String errorMessage = '';
   String currentUrl = '';
   bool isLoggedIn = false;
+  String lastNavigatedUrl = ''; // Track last URL to prevent loops
+  int navigationCount = 0; // Count consecutive navigations to same URL
+
+  // GlobalKey for screenshot capture
+  final GlobalKey _webViewKey = GlobalKey();
 
   @override
   void initState() {
@@ -622,61 +634,129 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageStarted: (String url) {
-              debugPrint('📄 Page started: $url');
-              if (mounted) {
-                setState(() {
-                  isLoading = true;
-                  hasError = false;
-                  loadingProgress = 0.0;
-                  currentUrl = url;
-                  // Check if user is logged in (not on login page)
-                  isLoggedIn = !url.contains('/login');
-                });
-              }
-            },
-            onProgress: (int progress) {
-              debugPrint('⏳ Progress: $progress%');
-              if (mounted) {
-                setState(() {
-                  loadingProgress = progress / 100;
-                });
-              }
-            },
-            onPageFinished: (String url) {
-              debugPrint('✅ Page finished: $url');
-              if (mounted) {
-                setState(() {
-                  isLoading = false;
-                  loadingProgress = 1.0;
-                  currentUrl = url;
-                  isLoggedIn = !url.contains('/login');
-                });
-              }
-              _updateCanGoBack();
-            },
-            onWebResourceError: (WebResourceError error) {
-              debugPrint('❌ WebView Error:');
-              debugPrint('   Description: ${error.description}');
-              debugPrint('   Error code: ${error.errorCode}');
-              debugPrint('   Error type: ${error.errorType}');
-
-              if (mounted) {
-                setState(() {
-                  isLoading = false;
-                  hasError = true;
-                  errorMessage = error.description;
-                });
-              }
-            },
-            onNavigationRequest: (NavigationRequest request) {
-              debugPrint('🔗 Navigation: ${request.url}');
-              return NavigationDecision.navigate;
-            },
-          ),
+        ..addJavaScriptChannel(
+          'FlutterChannel',
+          onMessageReceived: (JavaScriptMessage message) {
+            debugPrint('📨 JavaScript message received: ${message.message}');
+            // Handle any JavaScript messages from the web page
+          },
         );
+
+      // Platform-specific settings for Android
+      if (Platform.isAndroid) {
+        debugPrint('🤖 Configuring Android WebView settings');
+
+        // Get the Android WebView controller
+        final androidController =
+            controller!.platform as AndroidWebViewController;
+
+        // Enable critical settings for proper HTML display
+        androidController.setMediaPlaybackRequiresUserGesture(false);
+
+        controller!.enableZoom(true);
+
+        debugPrint('✅ Android WebView settings configured');
+      }
+
+      controller!.setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (String url) {
+            debugPrint('📄 Page started: $url');
+
+            // Reset counter if it's a genuinely different page
+            if (!url.contains('download=1')) {
+              navigationCount = 0;
+              lastNavigatedUrl = '';
+            }
+
+            if (mounted) {
+              setState(() {
+                isLoading = true;
+                hasError = false;
+                loadingProgress = 0.0;
+                currentUrl = url;
+                // Check if user is logged in (not on login page)
+                isLoggedIn = !url.contains('/login');
+              });
+            }
+          },
+          onProgress: (int progress) {
+            debugPrint('⏳ Progress: $progress%');
+            if (mounted) {
+              setState(() {
+                loadingProgress = progress / 100;
+              });
+            }
+          },
+          onPageFinished: (String url) {
+            debugPrint('✅ Page finished: $url');
+
+            // Reset navigation counter on successful load
+            navigationCount = 0;
+
+            if (mounted) {
+              setState(() {
+                isLoading = false;
+                loadingProgress = 1.0;
+                currentUrl = url;
+                isLoggedIn = !url.contains('/login');
+              });
+            }
+            _updateCanGoBack();
+
+            // Inject JavaScript to fix HTML download on Android
+            if (Platform.isAndroid) {
+              _injectAndroidFix();
+            }
+          },
+          onWebResourceError: (WebResourceError error) {
+            debugPrint('❌ WebView Error:');
+            debugPrint('   Description: ${error.description}');
+            debugPrint('   Error code: ${error.errorCode}');
+            debugPrint('   Error type: ${error.errorType}');
+
+            if (mounted) {
+              setState(() {
+                isLoading = false;
+                hasError = true;
+                errorMessage = error.description;
+              });
+            }
+          },
+          onNavigationRequest: (NavigationRequest request) {
+            debugPrint('🔗 Navigation request: ${request.url}');
+
+            // Detect and prevent infinite reload loops
+            if (request.url == lastNavigatedUrl) {
+              navigationCount++;
+              debugPrint(
+                  '⚠️ Duplicate navigation detected. Count: $navigationCount');
+
+              // If same URL is being requested more than twice, block it
+              if (navigationCount > 2) {
+                debugPrint('🛑 Blocking repeated navigation to prevent loop');
+                return NavigationDecision.prevent;
+              }
+            } else {
+              // Different URL, reset counter
+              lastNavigatedUrl = request.url;
+              navigationCount = 1;
+            }
+
+            // Allow all navigation for HTML content display
+            // This ensures both iOS and Android can view HTML salary slips
+            if (request.url.contains('/login') ||
+                request.url.contains('/dashboard') ||
+                request.url.contains('/salary') ||
+                request.url.contains('/payslips') ||
+                request.url.contains('109.224.38.44')) {
+              return NavigationDecision.navigate;
+            }
+
+            return NavigationDecision.navigate;
+          },
+        ),
+      );
 
       // Load URL
       debugPrint('🚀 Loading URL: $loginUrl');
@@ -705,6 +785,216 @@ class _WebViewScreenState extends State<WebViewScreen> {
         canGoBack = canNavigateBack;
       });
     }
+  }
+
+  Future<void> _injectAndroidFix() async {
+    if (controller == null) return;
+
+    debugPrint('💉 Injecting Android fix for HTML downloads');
+
+    // JavaScript to handle download buttons and prevent reload loops
+    const String jsCode = '''
+      (function() {
+        console.log('Android WebView fix loading...');
+        
+        // Store original window.open
+        var originalOpen = window.open;
+        
+        // Override window.open to navigate in same window on Android
+        window.open = function(url, name, specs) {
+          console.log('Intercepted window.open:', url);
+          
+          // If it's an HTML download or new window, navigate in current window
+          if (url) {
+            // Remove download parameter to prevent reload loops
+            var cleanUrl = url.replace(/[?&]download=1/, '');
+            console.log('Cleaned URL:', cleanUrl);
+            
+            if (cleanUrl !== window.location.href) {
+              window.location.href = cleanUrl;
+            }
+            return window;
+          }
+          
+          // Fallback to original for other cases
+          return originalOpen.call(window, url, name, specs);
+        };
+        
+        // Intercept all download buttons
+        document.addEventListener('click', function(e) {
+          var target = e.target;
+          
+          // Check if clicked element or parent is a download button
+          for (var i = 0; i < 5; i++) {
+            if (!target) break;
+            
+            var href = target.getAttribute('href');
+            var onclick = target.getAttribute('onclick');
+            
+            // If it has download parameter, prevent default and navigate without it
+            if (href && href.includes('download=1')) {
+              e.preventDefault();
+              var cleanUrl = href.replace(/[?&]download=1/, '');
+              console.log('Download button clicked, navigating to:', cleanUrl);
+              
+              // Only navigate if different from current URL
+              if (cleanUrl !== window.location.href && cleanUrl !== window.location.pathname + window.location.search) {
+                window.location.href = cleanUrl;
+              }
+              return false;
+            }
+            
+            target = target.parentElement;
+          }
+        }, true);
+        
+        console.log('Android WebView fix injected successfully');
+      })();
+    ''';
+
+    try {
+      await controller!.runJavaScript(jsCode);
+      debugPrint('✅ Android fix injected successfully');
+    } catch (e) {
+      debugPrint('❌ Error injecting JavaScript: $e');
+    }
+  }
+
+  Future<bool> _requestPermissions() async {
+    if (Platform.isAndroid) {
+      // For Android, gal package handles permissions automatically on Android 13+
+      // For Android 12 and below, request storage permission
+      try {
+        var status = await Permission.photos.status;
+        if (!status.isGranted) {
+          status = await Permission.photos.request();
+        }
+        // Even if denied, gal might still work on Android 13+
+        return status.isGranted || status.isPermanentlyDenied;
+      } catch (e) {
+        debugPrint('Permission check error: $e');
+        // Continue anyway, gal will handle it
+        return true;
+      }
+    }
+    // iOS doesn't need permission for saving to gallery with gal
+    return true;
+  }
+
+  Future<void> _savePageAsImage() async {
+    try {
+      debugPrint('📸 Starting screenshot capture...');
+
+      // Request permissions
+      bool hasPermission = await _requestPermissions();
+      if (!hasPermission) {
+        _showMessage('الرجاء منح صلاحية الوصول للتخزين');
+        return;
+      }
+
+      // Show loading
+      if (mounted) {
+        setState(() {
+          isLoading = true;
+        });
+      }
+
+      // Wait a bit to ensure everything is rendered
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Capture screenshot using RepaintBoundary
+      RenderRepaintBoundary? boundary = _webViewKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+
+      if (boundary == null) {
+        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+        return;
+      }
+
+      // Capture the image
+      ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+      ByteData? byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        _showMessage('فشل التقاط الصورة');
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+        return;
+      }
+
+      Uint8List screenshot = byteData.buffer.asUint8List();
+      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
+
+      // Save to temporary file first
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(screenshot);
+
+      // Save to gallery using gal package
+      try {
+        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
+        debugPrint('💾 Image saved to gallery successfully');
+
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+
+        _showMessage('تم حفظ قسيمة الراتب في المعرض');
+
+        // Clean up temp file
+        await tempFile.delete();
+      } catch (e) {
+        debugPrint('❌ Error saving to gallery: $e');
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+        _showMessage('فشل حفظ الصورة في المعرض');
+      }
+    } catch (e) {
+      debugPrint('❌ Error saving screenshot: $e');
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+      _showMessage('حدث خطأ أثناء حفظ الصورة: ${e.toString()}');
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: GoogleFonts.cairo(fontSize: 16),
+          textAlign: TextAlign.center,
+        ),
+        backgroundColor: const Color(0xFF00BFA5),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<bool> _onWillPop() async {
@@ -843,9 +1133,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // WebView
+            // WebView wrapped with RepaintBoundary for screenshot
             if (controller != null && !hasError)
-              WebViewWidget(controller: controller!),
+              RepaintBoundary(
+                key: _webViewKey,
+                child: WebViewWidget(controller: controller!),
+              ),
 
             // Error screen
             if (hasError)
@@ -960,6 +1253,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
           ],
         ),
+        // Show save button only when viewing payslip
+        floatingActionButton: currentUrl.contains('/payslips/view') && !hasError
+            ? FloatingActionButton.extended(
+                onPressed: _savePageAsImage,
+                backgroundColor: const Color(0xFF00BFA5),
+                icon: const Icon(Icons.save_alt, color: Colors.white),
+                label: Text(
+                  'حفظ كصورة',
+                  style: GoogleFonts.cairo(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                elevation: 6,
+              )
+            : null,
       ),
     );
   }
