@@ -2,90 +2,84 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>SalaryInfo</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>salaryinfo</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
 
-    <key>CFBundleDevelopmentRegion</key>
-    <string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!-- iPhone only (1 = iPhone, 2 = iPad) -->
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
 
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
+	<!-- Disable iPad multitasking (iPhone-only apps don't need this, but it's harmless) -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	
+	<!-- HTTP PERMISSIONS -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsForMedia</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app needs network access to connect to the salary information server</string>
+	
+	<!-- ADD THESE FOR iOS SCREENSHOT SAVING PERMISSIONS -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs access to save salary slip screenshots to your photo library</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This app needs permission to add salary slip screenshots to your photo library</string>
 
-    <key>CFBundleName</key>
-    <string>SalaryInfo</string>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
 
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
+	<!-- Portrait only (iPhone) -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
-
-    <key>CFBundleVersion</key>
-    <string>1</string>
-
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-
-    <!-- مهم جدًا لحفظ الصور في ألبوم الصور -->
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>This app needs access to your photo library to save screenshots.</string>
-
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>Allow this app to save screenshots to your gallery.</string>
-
-    <!-- مهم جدًا لعمل WebView داخل Flutter -->
-    <key>io.flutter.embedded_views_preview</key>
-    <true/>
-
-    <!-- إصلاح مشاكل اللمس و Gesture داخل WebView -->
-    <key>UIViewControllerBasedStatusBarAppearance</key>
-    <false/>
-
-    <!-- السماح بالوصول للإنترنت -->
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-        <key>NSAllowsArbitraryLoadsInWebContent</key>
-        <true/>
-    </dict>
-
-    <!-- دعم الأجهزة -->
-    <key>UIDeviceFamily</key>
-    <array>
-        <integer>1</integer>
-        <integer>2</integer>
-    </array>
-
-    <key>UILaunchStoryboardName</key>
-    <string>LaunchScreen</string>
-
-    <key>UIMainStoryboardFile</key>
-    <string></string>
-
-    <key>UIRequiredDeviceCapabilities</key>
-    <array>
-        <string>armv7</string>
-    </array>
-
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>FlutterRoot</key>
+	<string>$(FLUTTER_ROOT)</string>
+	<key>io.flutter.embedded_views_preview</key>
+	<true/>
 </dict>
 </plist>
