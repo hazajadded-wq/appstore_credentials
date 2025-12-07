@@ -25,13 +25,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
-	<!-- iPhone only (1 = iPhone, 2 = iPad) -->
+	<!-- iPhone only -->
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
 	</array>
 
-	<!-- Disable iPad multitasking (iPhone-only apps don't need this, but it's harmless) -->
+	<!-- Disable iPad multitasking -->
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	
@@ -48,17 +48,15 @@
 		<true/>
 	</dict>
 
+	<!-- PHOTO LIBRARY PERMISSION (ADDED FOR IMAGE SAVING) -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This app needs access to save salary slips and images to your photo library.</string>
+
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs network access to connect to the salary information server</string>
-	
-	<!-- ADD THESE FOR iOS SCREENSHOT SAVING PERMISSIONS -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>This app needs access to save salary slip screenshots to your photo library</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>This app needs permission to add salary slip screenshots to your photo library</string>
 
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
@@ -67,7 +65,6 @@
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 
-	<!-- Portrait only (iPhone) -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
