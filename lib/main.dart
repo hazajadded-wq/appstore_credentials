@@ -1053,15 +1053,140 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    if (Platform.isAndroid) {
-      // Android storage permission
-      final status = await Permission.storage.request();
-      return status.isGranted;
-    } else {
-      // iOS photo library add permission
-      final status = await Permission.photosAddOnly.request();
-      return status.isGranted;
+    try {
+      if (Platform.isIOS) {
+        debugPrint('📱 iOS: Requesting photo library permissions...');
+
+        // On iOS, we only need photo library permission
+        var status = await Permission.photos.status;
+
+        if (status.isDenied || status.isRestricted || status.isLimited) {
+          debugPrint('🔄 iOS: Requesting photos permission...');
+          status = await Permission.photos.request();
+
+          if (status.isPermanentlyDenied) {
+            // If user permanently denied, open app settings
+            debugPrint(
+                '⚠️ iOS: Permission permanently denied, opening settings');
+            await openAppSettings();
+            return false;
+          }
+        }
+
+        debugPrint('✅ iOS: Photos permission status: $status');
+        return status.isGranted;
+      } else if (Platform.isAndroid) {
+        debugPrint('🤖 Android: Checking storage permission...');
+
+        // On Android, we request storage permission
+        var status = await Permission.storage.status;
+        if (!status.isGranted) {
+          status = await Permission.storage.request();
+        }
+
+        // Also request photos permission for older versions
+        var photosStatus = await Permission.photos.status;
+        if (!photosStatus.isGranted) {
+          photosStatus = await Permission.photos.request();
+        }
+
+        return status.isGranted || photosStatus.isGranted;
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error checking permissions: $e');
+      return false;
     }
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  Icons.photo_library,
+                  color: const Color(0xFF00BFA5),
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'صلاحية مكتبة الصور',
+                    style: GoogleFonts.cairo(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF2D3748),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'يحتاج التطبيق إلى إذن الوصول إلى مكتبة الصور لحفظ قسائم الراتب.\n\n'
+              'الرجاء:\n'
+              '1. الذهاب إلى إعدادات الهاتف\n'
+              '2. البحث عن "SalaryInfo"\n'
+              '3. تفعيل "الصور"\n'
+              '4. العودة إلى التطبيق',
+              style: GoogleFonts.cairo(
+                fontSize: 16,
+                color: const Color(0xFF4A5568),
+                height: 1.5,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+                child: Text(
+                  'إلغاء',
+                  style: GoogleFonts.cairo(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  await openAppSettings();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00BFA5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: Text(
+                  'فتح الإعدادات',
+                  style: GoogleFonts.cairo(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<Uint8List> _captureWebView() async {
@@ -1111,7 +1236,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
             })();
           ''') as String?;
 
-          if (jsResult != null) {
+          // ignore: unnecessary_type_check
+          if (jsResult != null && jsResult is String) {
             debugPrint('✅ JavaScript capture successful');
             return base64.decode(jsResult);
           }
@@ -1181,9 +1307,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
     try {
       debugPrint('📸 Starting screenshot capture...');
 
+      // Request permissions
       bool hasPermission = await _requestPermissions();
+
       if (!hasPermission) {
-        _showMessage('الرجاء منح صلاحية الوصول للتخزين');
+        if (Platform.isIOS) {
+          _showPermissionDialog();
+        } else {
+          _showMessage('الرجاء منح صلاحية الوصول للتخزين');
+        }
         return;
       }
 
@@ -1193,7 +1325,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      // انتظار أطول لضمان التصيير الكامل
+      // Wait for rendering
       await Future.delayed(const Duration(milliseconds: 1000));
 
       Uint8List screenshot;
@@ -1203,11 +1335,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
       } catch (e) {
         debugPrint('❌ WebView capture failed: $e');
 
-        // محاولة بديلة: التقاط باستخدام overlay
+        // Alternative method: capture using overlay
         try {
           debugPrint('🔄 Trying alternative capture method...');
 
-          // إنشاء overlay للتقاط محتوى WebView
+          // Create overlay to capture WebView content
           RenderBox? renderBox =
               _webViewKey.currentContext?.findRenderObject() as RenderBox?;
           if (renderBox == null) {
@@ -1219,11 +1351,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
           final canvas = Canvas(recorder,
               Rect.fromPoints(Offset.zero, Offset(size.width, size.height)));
 
-          // رسم خلفية بيضاء أولاً
+          // Draw white background first
           canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
               Paint()..color = Colors.white);
 
-          // رسم WebView
+          // Draw WebView
           renderBox.paint(canvas as PaintingContext, Offset.zero);
 
           final picture = recorder.endRecording();
@@ -1275,7 +1407,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
         _showMessage('تم حفظ قسيمة الراتب في المعرض');
 
-        // تنظيف الملف المؤقت بعد التأكد من الحفظ
+        // Clean up temp file after saving
         await Future.delayed(const Duration(seconds: 1), () async {
           try {
             await tempFile.delete();
