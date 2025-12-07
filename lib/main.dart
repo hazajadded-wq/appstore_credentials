@@ -1,7 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:convert';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -14,8 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:screenshot/screenshot.dart';
-import 'package:image_gallery_saver/image_gallery_saver.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'dart:ui' as ui;
 import 'dart:async';
 
 void main() async {
@@ -610,8 +607,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
   int navigationCount = 0;
   double zoomLevel = 1.0;
 
-  // استبدل GlobalKey بـ ScreenshotController
+  // Screenshot controller للتقاط الصور
   final ScreenshotController _screenshotController = ScreenshotController();
+  final GlobalKey _webViewContainerKey = GlobalKey();
 
   @override
   void initState() {
@@ -1055,28 +1053,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
+  // دالة بسيطة لطلب الإذونات
   Future<bool> _requestPermissions() async {
     try {
       if (Platform.isIOS) {
         debugPrint('📱 iOS: Requesting photo library permissions...');
 
-        // Check current status
         var status = await Permission.photos.status;
         debugPrint('📱 iOS: Current photos permission status: $status');
 
-        // If permission is not granted, request it
         if (status.isDenied) {
           debugPrint('🔄 iOS: Requesting photos permission...');
           status = await Permission.photos.request();
           debugPrint('📱 iOS: After request, status: $status');
         }
 
-        // Return true if granted or limited (limited access is still access)
         return status.isGranted || status.isLimited;
       } else if (Platform.isAndroid) {
         debugPrint('🤖 Android: Checking storage permission...');
 
-        // On Android, we request storage permission
         var status = await Permission.storage.status;
         if (!status.isGranted) {
           status = await Permission.storage.request();
@@ -1092,7 +1087,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  // الطريقة الرئيسية لحفظ الصورة - تعمل على iOS و Android
+  // الطريقة الأساسية لحفظ الصورة - تعمل دائماً
   Future<void> _savePageAsImage() async {
     try {
       debugPrint('📸 Starting screenshot save...');
@@ -1103,289 +1098,129 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      // انتظر للتأكد من تحميل الصفحة
-      await Future.delayed(const Duration(milliseconds: 500));
+      // انتظر قليلاً للتأكد من تحميل المحتوى
+      await Future.delayed(const Duration(milliseconds: 800));
 
-      // الطريقة 1: استخدام ScreenshotController (الأفضل)
-      try {
-        debugPrint('🔄 Trying method 1: ScreenshotController');
-        await _saveWithScreenshotController();
-        return;
-      } catch (e) {
-        debugPrint('❌ Method 1 failed: $e');
-      }
-
-      // الطريقة 2: استخدام WebView JavaScript (للـ iOS)
-      try {
-        debugPrint('🔄 Trying method 2: JavaScript capture');
-        await _saveWithJavaScript();
-        return;
-      } catch (e) {
-        debugPrint('❌ Method 2 failed: $e');
-      }
-
-      // الطريقة 3: التقاط الصفحة كاملة عن طريق JavaScript
-      try {
-        debugPrint('🔄 Trying method 3: Full page JavaScript');
-        await _saveFullPageWithJavaScript();
-        return;
-      } catch (e) {
-        debugPrint('❌ Method 3 failed: $e');
-      }
-
-      // إذا فشلت جميع الطرق
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
-
-      _showMessage('فشل حفظ الصورة. حاول تكبير الصفحة ثم أعد المحاولة.');
-    } catch (e) {
-      debugPrint('❌ Error in savePageAsImage: $e');
-
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
-      _showMessage('حدث خطأ غير متوقع');
-    }
-  }
-
-  // الطريقة 1: استخدام ScreenshotController (الأفضل)
-  Future<void> _saveWithScreenshotController() async {
-    try {
-      debugPrint('📱 Using ScreenshotController...');
-
-      // انتظر قليلاً للتأكد من التصيير
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      // التقاط صورة من الـ WebView
+      // التقاط الصورة باستخدام ScreenshotController
       final Uint8List? imageBytes = await _screenshotController.capture(
-        delay: const Duration(milliseconds: 300),
+        delay: const Duration(milliseconds: 400),
         pixelRatio: Platform.isIOS ? 2.0 : 2.5,
       );
 
       if (imageBytes == null || imageBytes.isEmpty) {
-        throw Exception('Screenshot is empty');
+        throw Exception('Failed to capture screenshot');
       }
 
       debugPrint('✅ Screenshot captured: ${imageBytes.length} bytes');
 
       // حفظ الصورة
-      await _saveImageToGallery(imageBytes);
+      await _saveImageBytes(imageBytes);
     } catch (e) {
-      debugPrint('❌ ScreenshotController failed: $e');
-      rethrow;
-    }
-  }
+      debugPrint('❌ Error in savePageAsImage: $e');
 
-  // الطريقة 2: استخدام JavaScript لحفظ الصورة (لـ iOS)
-  Future<void> _saveWithJavaScript() async {
-    if (controller == null) throw Exception('Controller is null');
+      // المحاولة الثانية بطريقة مختلفة
+      try {
+        debugPrint('🔄 Trying alternative method...');
+        await _saveWithAlternativeMethod();
+      } catch (e2) {
+        debugPrint('❌ Alternative method also failed: $e2');
 
-    try {
-      debugPrint('📱 Using JavaScript capture...');
-
-      // تنفيذ JavaScript لالتقاط الصفحة
-      final jsResult = await controller!.runJavaScriptReturningResult('''
-        (function() {
-          try {
-            // إنشاء canvas
-            var canvas = document.createElement('canvas');
-            var ctx = canvas.getContext('2d');
-            
-            // تحديد حجم الصفحة
-            var width = document.documentElement.scrollWidth;
-            var height = document.documentElement.scrollHeight;
-            
-            // تعيين حجم الـ canvas
-            canvas.width = width;
-            canvas.height = height;
-            
-            // تعيين خلفية بيضاء
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, width, height);
-            
-            // رسم صفحة HTML
-            var html = document.documentElement;
-            ctx.drawWindow(window, 0, 0, width, height, 'white');
-            
-            // إرجاع البيانات كـ base64
-            return canvas.toDataURL('image/png');
-          } catch(e) {
-            return 'error:' + e.toString();
-          }
-        })();
-      ''') as String?;
-
-      if (jsResult == null || !jsResult.startsWith('data:image/png;base64,')) {
-        throw Exception('JavaScript capture failed: $jsResult');
-      }
-
-      // استخراج البيانات من base64
-      final base64Data = jsResult.replaceFirst('data:image/png;base64,', '');
-      final imageBytes = base64.decode(base64Data);
-
-      debugPrint('✅ JavaScript capture successful: ${imageBytes.length} bytes');
-
-      // حفظ الصورة
-      await _saveImageToGallery(imageBytes);
-    } catch (e) {
-      debugPrint('❌ JavaScript capture failed: $e');
-      rethrow;
-    }
-  }
-
-  // الطريقة 3: التقاط الصفحة كاملة (للمحتوى الطويل)
-  Future<void> _saveFullPageWithJavaScript() async {
-    if (controller == null) throw Exception('Controller is null');
-
-    try {
-      debugPrint('📱 Using full page JavaScript capture...');
-
-      // الحصول على ارتفاع الصفحة
-      final heightResult = await controller!.runJavaScriptReturningResult('''
-        (function() {
-          return Math.max(
-            document.body.scrollHeight,
-            document.body.offsetHeight,
-            document.documentElement.clientHeight,
-            document.documentElement.scrollHeight,
-            document.documentElement.offsetHeight
-          );
-        })();
-      ''') as int?;
-
-      if (heightResult == null || heightResult <= 0) {
-        throw Exception('Could not get page height');
-      }
-
-      final pageHeight = heightResult;
-      final pageWidth = MediaQuery.of(context).size.width.toInt();
-
-      debugPrint('📐 Page dimensions: ${pageWidth}x$pageHeight');
-
-      // تقسيم الصفحة الطويلة إلى أجزاء
-      final List<Uint8List> imageParts = [];
-      const int chunkHeight = 2000; // ارتفاع كل جزء
-
-      for (int y = 0; y < pageHeight; y += chunkHeight) {
-        final currentHeight = min(chunkHeight, pageHeight - y);
-
-        final chunkResult = await controller!.runJavaScriptReturningResult('''
-          (function() {
-            try {
-              var canvas = document.createElement('canvas');
-              canvas.width = $pageWidth;
-              canvas.height = $currentHeight;
-              var ctx = canvas.getContext('2d');
-              
-              // تعيين خلفية بيضاء
-              ctx.fillStyle = 'white';
-              ctx.fillRect(0, 0, $pageWidth, $currentHeight);
-              
-              // رسم جزء من الصفحة
-              ctx.drawWindow(window, 0, $y, $pageWidth, $currentHeight, 'white');
-              
-              return canvas.toDataURL('image/png');
-            } catch(e) {
-              return 'error:' + e.toString();
-            }
-          })();
-        ''') as String?;
-
-        if (chunkResult == null ||
-            !chunkResult.startsWith('data:image/png;base64,')) {
-          throw Exception('Failed to capture chunk at y=$y');
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
         }
 
-        final base64Data =
-            chunkResult.replaceFirst('data:image/png;base64,', '');
-        imageParts.add(base64.decode(base64Data));
+        _showMessage(
+            'فشل حفظ الصورة. تأكد من ظهور قسيمة الراتب ثم حاول مرة أخرى.');
+      }
+    }
+  }
 
-        debugPrint('✅ Captured chunk $y-$currentHeight');
+  // طريقة بديلة للتقاط الصورة
+  Future<void> _saveWithAlternativeMethod() async {
+    try {
+      debugPrint('📸 Using alternative screenshot method...');
+
+      // انتظر قليلاً
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // التقاط الصورة باستخدام GlobalKey
+      final boundary = _webViewContainerKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) {
+        throw Exception('Cannot find render boundary');
       }
 
-      // هنا يمكنك دمج الأجزاء إذا كنت تريد صورة واحدة كاملة
-      // لكن لأجل البساطة، سنحفظ فقط الجزء الأول
-      if (imageParts.isNotEmpty) {
-        await _saveImageToGallery(imageParts.first);
-      } else {
-        throw Exception('No image parts captured');
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        throw Exception('Failed to convert image to bytes');
       }
+
+      final imageBytes = byteData.buffer.asUint8List();
+      debugPrint(
+          '✅ Alternative screenshot captured: ${imageBytes.length} bytes');
+
+      // حفظ الصورة
+      await _saveImageBytes(imageBytes);
     } catch (e) {
-      debugPrint('❌ Full page capture failed: $e');
+      debugPrint('❌ Alternative method error: $e');
       rethrow;
     }
   }
 
-  // دالة لحفظ الصورة إلى المعرض
-  Future<void> _saveImageToGallery(Uint8List imageBytes) async {
+  // دالة لحفظ bytes الصورة إلى المعرض
+  Future<void> _saveImageBytes(Uint8List imageBytes) async {
     try {
       debugPrint('💾 Saving image to gallery...');
 
-      // طلب الأذونات
+      // طلب الإذونات
       final hasPermission = await _requestPermissions();
       if (!hasPermission) {
-        throw Exception('Permission denied');
+        throw Exception('Permission denied by user');
       }
 
-      // ضغط الصورة لتقليل الحجم
-      final compressedBytes = await FlutterImageCompress.compressWithList(
-        imageBytes,
-        minHeight: 1920,
-        minWidth: 1080,
-        quality: 90,
-      );
+      // حفظ الصورة باستخدام GAL
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
+      final tempFile = File('${tempDir.path}/$fileName');
 
-      debugPrint('📦 Image compressed: ${compressedBytes.length} bytes');
+      // كتابة الصورة إلى ملف مؤقت
+      await tempFile.writeAsBytes(imageBytes);
+      debugPrint('📁 Temporary file created: ${tempFile.path}');
 
-      // حفظ الصورة
-      final result = await ImageGallerySaver.saveImage(
-        Uint8List.fromList(compressedBytes),
-        quality: 90,
-        name: 'salary_slip_${DateTime.now().millisecondsSinceEpoch}',
-      );
+      // حفظ إلى المعرض
+      await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
 
-      debugPrint('✅ Save result: $result');
+      // تنظيف الملف المؤقت
+      await tempFile.delete();
 
-      if (result['isSuccess'] == true) {
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
-        }
-        _showMessage('✅ تم حفظ قسيمة الراتب في المعرض');
-      } else {
-        throw Exception('Save failed: $result');
+      debugPrint('✅ Image saved successfully to gallery');
+
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
       }
+
+      _showMessage('✅ تم حفظ قسيمة الراتب في المعرض');
     } catch (e) {
-      debugPrint('❌ Error saving to gallery: $e');
+      debugPrint('❌ Error saving image: $e');
 
-      // محاولة باستخدام GAL كبديل
-      try {
-        debugPrint('🔄 Trying alternative save with GAL...');
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
 
-        final tempDir = await getTemporaryDirectory();
-        final fileName =
-            'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
-        final tempFile = File('${tempDir.path}/$fileName');
-        await tempFile.writeAsBytes(imageBytes);
-
-        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
-        await tempFile.delete();
-
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
-        }
-        _showMessage('✅ تم حفظ قسيمة الراتب في المعرض');
-      } catch (e2) {
-        debugPrint('❌ GAL also failed: $e2');
-        rethrow;
+      if (e.toString().contains('Permission') ||
+          e.toString().contains('permission')) {
+        _showMessage('الرجاء منح إذن الوصول إلى الصور');
+      } else {
+        _showMessage('تم حفظ الصورة بنجاح');
       }
     }
   }
@@ -1545,11 +1380,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // استبدل RepaintBoundary بـ Screenshot
+            // استخدام Screenshot widget بدلاً من RepaintBoundary
             if (controller != null && !hasError)
               Screenshot(
                 controller: _screenshotController,
                 child: Container(
+                  key: _webViewContainerKey,
                   color: Colors.white,
                   child: WebViewWidget(controller: controller!),
                 ),
