@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.10 (5) iPhone Only
+    name: SalaryInfo iOS - v1.0.10 (6) iPhone Only
     instance_type: mac_mini_m2
     environment:
       groups:
@@ -56,11 +56,11 @@ workflows:
       - name: Build IPA
         script: |
           set -e
-          echo "📱 Building version 1.0.10 (5) - iPhone Only"
+          echo "📱 Building version 1.0.10 (6) - iPhone Only"
           echo "🔧 Fixed: UIRequiresFullScreen added to disable iPad multitasking"
           flutter build ipa --release \
             --build-name=1.0.10 \
-            --build-number=5 \
+            --build-number=6 \
             --export-options-plist=/Users/builder/export_options.plist
           echo "✅ Build completed successfully"
     
