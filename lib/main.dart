@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -677,6 +678,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
           onPageFinished: (String url) {
             debugPrint('✅ Page finished: $url');
+// Inject html2canvas into the WebView (required for screenshot)
+            controller!.runJavaScript("""
+  var script = document.createElement('script');
+  script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+  document.head.appendChild(script);
+""");
 
             navigationCount = 0;
 
@@ -870,69 +877,37 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) {
-      debugPrint('⛔ Controller is null, cannot apply zoom');
+    if (controller == null) return;
+
+    debugPrint("🔍 Applying zoom: $zoomLevel");
+
+    if (Platform.isIOS) {
+      await controller!.runJavaScript("""
+      (function() {
+        let wrapper = document.getElementById('zoom_wrapper');
+        if (!wrapper) {
+          wrapper = document.createElement('div');
+          wrapper.id = 'zoom_wrapper';
+          
+          while (document.body.firstChild)
+            wrapper.appendChild(document.body.firstChild);
+          
+          document.body.appendChild(wrapper);
+        }
+
+        wrapper.style.transform = "scale($zoomLevel)";
+        wrapper.style.transformOrigin = "top left";
+        wrapper.style.width = (100 / $zoomLevel) + "%";
+      })();
+    """);
+
       return;
     }
 
-    debugPrint('🎯 Applying zoom: $zoomLevel');
-
-    try {
-      if (Platform.isIOS) {
-        // طريقة أبسط وأكثر فعالية لـ iOS
-        await controller!.runJavaScript('''
-          (function() {
-            // تغيير حجم الصفحة كلها باستخدام transform على body
-            var body = document.body;
-            var html = document.documentElement;
-            
-            // إزالة أي تحويلات سابقة
-            body.style.transform = '';
-            body.style.webkitTransform = '';
-            html.style.transform = '';
-            html.style.webkitTransform = '';
-            
-            // تطبيق التحويل الجديد
-            body.style.transform = 'scale(' + $zoomLevel + ')';
-            body.style.webkitTransform = 'scale(' + $zoomLevel + ')';
-            body.style.transformOrigin = 'top right';
-            body.style.webkitTransformOrigin = 'top right';
-            
-            // ضبط العرض والارتفاع
-            body.style.width = (100 / $zoomLevel) + '%';
-            body.style.height = (100 / $zoomLevel) + '%';
-            
-            // ضبط overflow للسماح بالتمرير
-            body.style.overflow = 'auto';
-            html.style.overflow = 'auto';
-            
-            console.log('✅ iOS zoom applied: scale(' + $zoomLevel + ')');
-          })();
-        ''');
-      } else {
-        // الطريقة الأصلية للاندرويد
-        await controller!.runJavaScript('''
-          (function() {
-            var html = document.documentElement;
-            var body = document.body;
-            
-            html.style.transformOrigin = '0 0';
-            body.style.transformOrigin = '0 0';
-            
-            html.style.transform = 'scale($zoomLevel)';
-            html.style.width = (100 / $zoomLevel) + '%';
-            
-            body.style.width = '100%';
-            body.style.minHeight = '100vh';
-            
-            console.log('✅ CSS transform zoom applied: $zoomLevel');
-          })();
-        ''');
-      }
-      debugPrint('✅ Zoom applied successfully: $zoomLevel');
-    } catch (e) {
-      debugPrint('❌ Error applying zoom: $e');
-    }
+    // Android zoom
+    await controller!.runJavaScript("""
+    document.body.style.zoom = "$zoomLevel";
+  """);
   }
 
   Future<void> _hideNotificationsOnLoginPage() async {
@@ -1055,64 +1030,33 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<Uint8List> _captureWebView() async {
     try {
-      debugPrint('📸 Capturing WebView screenshot...');
+      debugPrint("📸 Capturing WebView using html2canvas...");
 
-      // انتظار لضمان التصيير الكامل
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // تأكد من أن WebView معروض
-      if (!_webViewKey.currentContext!.mounted) {
-        throw Exception('WebView not mounted');
-      }
-
-      RenderRepaintBoundary? boundary = _webViewKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        throw Exception('Could not find render boundary');
-      }
-
-      debugPrint('🎯 Found render boundary, capturing image...');
-
-      // التقاط الصورة مع pixelRatio مناسب
-      double pixelRatio = Platform.isIOS ? 2.0 : 3.0;
-      debugPrint(
-          '📱 Using pixelRatio: $pixelRatio for ${Platform.isIOS ? 'iOS' : 'Android'}');
-
-      ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Could not convert image to byte data');
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
-
-      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
-
-      // تحقق من أن الصورة ليست سوداء (تحتوي على بيانات)
-      if (screenshot.isEmpty) {
-        throw Exception('Screenshot is empty');
-      }
-
-      // تحقق من أول بايتات لمعرفة إذا كانت سوداء
-      if (screenshot.length > 100) {
-        bool isAllBlack = true;
-        for (int i = 0; i < 100; i++) {
-          if (screenshot[i] != 0) {
-            isAllBlack = false;
-            break;
-          }
+      // WAIT until html2canvas is fully loaded
+      await controller!.runJavaScriptReturningResult("""
+      new Promise(resolve => {
+        if (window.html2canvas) resolve("ready");
+        else {
+          var check = setInterval(() => {
+            if (window.html2canvas) { clearInterval(check); resolve("ready"); }
+          }, 300);
         }
-        if (isAllBlack) {
-          debugPrint('⚠️ Warning: Screenshot may be black');
-        }
-      }
+      })
+    """);
 
-      return screenshot;
+      // CAPTURE screenshot FROM WEBVIEW (works on iOS)
+      final String base64Image =
+          await controller!.runJavaScriptReturningResult("""
+          html2canvas(document.body).then(canvas => {
+            return canvas.toDataURL("image/png").replace("data:image/png;base64,", "");
+          });
+        """) as String;
+
+      debugPrint("📸 Successfully captured HTML screenshot");
+
+      return Uint8List.fromList(base64Decode(base64Image));
     } catch (e) {
-      debugPrint('❌ Error capturing WebView: $e');
+      debugPrint("❌ Screenshot error: $e");
       rethrow;
     }
   }
