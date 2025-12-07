@@ -1,13 +1,11 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -27,6 +25,9 @@ void main() async {
   } catch (e) {
     debugPrint('❌ Error clearing cache: $e');
   }
+
+  // REMOVED: SystemChrome.setPreferredOrientations
+  // This was causing touch issues on iPhone 13 mini and iPad Air 5
 
   runApp(const MyApp());
 }
@@ -607,11 +608,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
   String lastNavigatedUrl = '';
   int navigationCount = 0;
   double zoomLevel = 1.0;
-  bool showZoomControls = false;
 
-  // GlobalKeys للتقاط الصور
-  final GlobalKey _screenshotKey = GlobalKey();
-  final GlobalKey _webViewContainerKey = GlobalKey();
+  final GlobalKey _webViewKey = GlobalKey();
 
   @override
   void initState() {
@@ -630,20 +628,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('⚙️ Initializing WebView...');
 
     try {
-      // iOS-specific parameters for better compatibility
-      late final PlatformWebViewControllerCreationParams params;
-      if (Platform.isIOS) {
-        params = WebKitWebViewControllerCreationParams(
-          allowsInlineMediaPlayback: true,
-          mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-        );
-      } else if (Platform.isAndroid) {
-        params = AndroidWebViewControllerCreationParams();
-      } else {
-        params = const PlatformWebViewControllerCreationParams();
-      }
-
-      controller = WebViewController.fromPlatformCreationParams(params)
+      controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
         ..addJavaScriptChannel(
@@ -653,13 +638,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
         );
 
-      // iOS-specific configurations
-      if (Platform.isIOS && controller!.platform is WebKitWebViewController) {
-        final webKitController =
-            controller!.platform as WebKitWebViewController;
-        webKitController.setAllowsBackForwardNavigationGestures(true);
-      }
-
       if (Platform.isAndroid) {
         debugPrint('🤖 Configuring Android WebView settings');
         final androidController =
@@ -667,6 +645,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         androidController.setMediaPlaybackRequiresUserGesture(false);
         controller!.enableZoom(true);
         debugPrint('✅ Android WebView settings configured');
+      }
+
+      // إضافة إعدادات iOS
+      if (Platform.isIOS) {
+        debugPrint('🍎 Configuring iOS WebView settings');
+        // تمكين الزووم على iOS
+        controller!.enableZoom(true);
+        debugPrint('✅ iOS WebView settings configured');
       }
 
       controller!.setNavigationDelegate(
@@ -686,7 +672,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 loadingProgress = 0.0;
                 currentUrl = url;
                 isLoggedIn = !url.contains('/login');
-                showZoomControls = url.contains('/payslips/view');
               });
             }
           },
@@ -709,7 +694,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 loadingProgress = 1.0;
                 currentUrl = url;
                 isLoggedIn = !url.contains('/login');
-                showZoomControls = url.contains('/payslips/view');
               });
             }
             _updateCanGoBack();
@@ -725,7 +709,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 zoomLevel = 1.0;
               });
               _autoFitPageToScreen();
-              _injectZoomSupport();
             }
 
             if (Platform.isAndroid) {
@@ -847,6 +830,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
             table.style.overflowX = 'auto';
           });
           
+          var fixedElements = document.querySelectorAll('[style*="width"]');
+          fixedElements.forEach(function(element) {
+            var computedWidth = window.getComputedStyle(element).width;
+            var widthValue = parseInt(computedWidth);
+            
+            if (widthValue > window.innerWidth) {
+              element.style.width = '100%';
+              element.style.maxWidth = '100%';
+            }
+          });
+          
           console.log('✅ Page auto-fitted to screen');
         })();
       ''');
@@ -857,112 +851,90 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  Future<void> _injectZoomSupport() async {
-    if (controller == null) return;
-
-    debugPrint('🔍 Injecting zoom support...');
-
-    try {
-      await controller!.runJavaScript('''
-        (function() {
-          console.log('Injecting zoom support...');
-          
-          // إنشاء عنصر مخفي لحفظ مستوى التكبير
-          if (!window.zoomData) {
-            window.zoomData = { level: 1.0 };
-          }
-          
-          // دالة لتطبيق التكبير - محسنة للعمل على iOS
-          window.applyZoom = function(level) {
-            console.log('Applying zoom level:', level);
-            window.zoomData.level = level;
-            
-            // تطبيق التكبير باستخدام transform للتوافق مع iOS
-            var body = document.body;
-            var html = document.documentElement;
-            
-            // استخدام transform بدلاً من zoom للتوافق مع iOS
-            body.style.transformOrigin = 'top left';
-            body.style.transform = 'scale(' + level + ')';
-            body.style.width = (100 / level) + '%';
-            body.style.height = (100 / level) + '%';
-            
-            // تحديث viewport للتوافق مع iOS
-            var viewport = document.querySelector('meta[name="viewport"]');
-            if (viewport) {
-              viewport.content = 'width=device-width, initial-scale=' + level + ', maximum-scale=3.0, user-scalable=yes, viewport-fit=cover';
-            }
-            
-            console.log('iOS-compatible zoom applied successfully');
-          };
-          
-          // تطبيق التكبير الافتراضي
-          window.applyZoom(1.0);
-          
-          console.log('✅ Zoom support injected');
-        })();
-      ''');
-
-      debugPrint('✅ Zoom support injected successfully');
-    } catch (e) {
-      debugPrint('⚠️ Error injecting zoom support: $e');
-    }
-  }
-
   void _zoomIn() {
-    debugPrint('➕ Zoom In pressed');
+    debugPrint('➕ Zoom In pressed, current zoom: $zoomLevel');
     if (zoomLevel < 3.0) {
       setState(() {
         zoomLevel += 0.2;
-        zoomLevel = double.parse(zoomLevel.toStringAsFixed(1));
+        debugPrint('🔄 New zoom level: $zoomLevel');
       });
       _applyZoom();
+    } else {
+      debugPrint('⛔ Max zoom reached');
     }
   }
 
   void _zoomOut() {
-    debugPrint('➖ Zoom Out pressed');
+    debugPrint('➖ Zoom Out pressed, current zoom: $zoomLevel');
     if (zoomLevel > 0.5) {
       setState(() {
         zoomLevel -= 0.2;
-        zoomLevel = double.parse(zoomLevel.toStringAsFixed(1));
+        debugPrint('🔄 New zoom level: $zoomLevel');
       });
       _applyZoom();
+    } else {
+      debugPrint('⛔ Min zoom reached');
     }
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) return;
+    if (controller == null) {
+      debugPrint('⛔ Controller is null, cannot apply zoom');
+      return;
+    }
 
-    debugPrint('🎯 Applying zoom level: $zoomLevel');
+    debugPrint('🎯 Applying zoom: $zoomLevel');
 
     try {
-      await controller!.runJavaScript('''
-        (function() {
-          if (typeof window.applyZoom === 'function') {
-            window.applyZoom($zoomLevel);
-          } else {
-            // الطريقة البديلة متوافقة مع iOS
-            var body = document.body;
-            var html = document.documentElement;
-            
-            // استخدام transform بدلاً من zoom للتوافق مع iOS
-            body.style.transformOrigin = 'top left';
-            body.style.transform = 'scale($zoomLevel)';
-            body.style.width = (100 / $zoomLevel) + '%';
-            body.style.height = (100 / $zoomLevel) + '%';
-            
-            // تحديث viewport
-            var viewport = document.querySelector('meta[name="viewport"]');
-            if (viewport) {
-              viewport.content = 'width=device-width, initial-scale=$zoomLevel, maximum-scale=3.0, user-scalable=yes, viewport-fit=cover';
+      if (Platform.isIOS) {
+        // طريقة محسّنة لـ iOS مع معالجة أفضل
+        await controller!.runJavaScript('''
+          (function() {
+            try {
+              var body = document.body;
+              var html = document.documentElement;
+              
+              // تطبيق التحويل
+              var scale = $zoomLevel;
+              body.style.transform = 'scale(' + scale + ')';
+              body.style.webkitTransform = 'scale(' + scale + ')';
+              body.style.transformOrigin = 'top right';
+              body.style.webkitTransformOrigin = 'top right';
+              
+              // ضبط العرض
+              body.style.width = (100 / scale) + '%';
+              body.style.overflow = 'visible';
+              html.style.overflow = 'visible';
+              
+              console.log('✅ iOS zoom applied: ' + scale);
+              return true;
+            } catch(e) {
+              console.error('❌ Zoom error:', e);
+              return false;
             }
-          }
-          console.log('Zoom level $zoomLevel applied');
-        })();
-      ''');
-
-      debugPrint('✅ Zoom applied: $zoomLevel');
+          })();
+        ''');
+      } else {
+        // الطريقة الأصلية للاندرويد
+        await controller!.runJavaScript('''
+          (function() {
+            var html = document.documentElement;
+            var body = document.body;
+            
+            html.style.transformOrigin = '0 0';
+            body.style.transformOrigin = '0 0';
+            
+            html.style.transform = 'scale($zoomLevel)';
+            html.style.width = (100 / $zoomLevel) + '%';
+            
+            body.style.width = '100%';
+            body.style.minHeight = '100vh';
+            
+            console.log('✅ CSS transform zoom applied: $zoomLevel');
+          })();
+        ''');
+      }
+      debugPrint('✅ Zoom applied successfully: $zoomLevel');
     } catch (e) {
       debugPrint('❌ Error applying zoom: $e');
     }
@@ -1086,151 +1058,85 @@ class _WebViewScreenState extends State<WebViewScreen> {
     return true;
   }
 
-  Future<Uint8List> _captureScreenshot() async {
-    debugPrint('📸 Starting screenshot capture...');
-
+  Future<Uint8List> _captureWebView() async {
     try {
-      // الطريقة 1: استخدام JavaScript لالتقاط محتوى HTML وتحويله إلى صورة
-      if (Platform.isIOS) {
-        debugPrint('📱 Using JavaScript-based capture for iOS');
+      debugPrint('📸 Capturing WebView screenshot...');
 
-        // حقن html2canvas للتقاط الصورة
-        await controller!.runJavaScript('''
-          (function() {
-            // تحميل html2canvas إذا لم يكن موجوداً
-            if (typeof html2canvas === 'undefined') {
-              var script = document.createElement('script');
-              script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
-              document.head.appendChild(script);
-            }
-          })();
-        ''');
+      // انتظار التصيير الكامل باستخدام WidgetsBinding
+      final completer = Completer<Uint8List>();
 
-        await Future.delayed(const Duration(seconds: 2));
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          // انتظار إضافي لضمان التصيير الكامل
+          await Future.delayed(const Duration(milliseconds: 500));
 
-        // التقاط الصورة باستخدام html2canvas
-        final String? result =
-            await controller!.runJavaScriptReturningResult('''
-          (async function() {
-            try {
-              // انتظار تحميل html2canvas
-              if (typeof html2canvas === 'undefined') {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              }
-              
-              // التقاط المحتوى الرئيسي
-              var targetElement = document.querySelector('main, .content, .container, article') || document.body;
-              
-              const canvas = await html2canvas(targetElement, {
-                scale: 1,
-                backgroundColor: '#ffffff',
-                useCORS: true,
-                allowTaint: true,
-                logging: false,
-                width: targetElement.scrollWidth,
-                height: targetElement.scrollHeight,
-                foreignObjectRendering: false,
-                removeContainer: true
-              });
-              
-              return canvas.toDataURL('image/png').split(',')[1];
-            } catch (error) {
-              console.error('Capture error:', error);
-              return '';
-            }
-          })();
-        ''') as String?;
+          // تأكد من أن WebView معروض
+          if (!_webViewKey.currentContext!.mounted) {
+            throw Exception('WebView not mounted');
+          }
 
-        if (result != null && result.isNotEmpty) {
+          RenderRepaintBoundary? boundary = _webViewKey.currentContext
+              ?.findRenderObject() as RenderRepaintBoundary?;
+
+          if (boundary == null) {
+            throw Exception('Could not find render boundary');
+          }
+
+          debugPrint('🎯 Found render boundary, capturing image...');
+
+          // التقاط الصورة مع pixelRatio مناسب - 3.0 لكل من iOS و Android
+          double pixelRatio = 3.0;
           debugPrint(
-              '✅ JavaScript capture successful, converting base64 to bytes...');
-          return base64Decode(result);
+              '📱 Using pixelRatio: $pixelRatio for ${Platform.isIOS ? 'iOS' : 'Android'}');
+
+          ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+          ByteData? byteData =
+              await image.toByteData(format: ui.ImageByteFormat.png);
+
+          if (byteData == null) {
+            throw Exception('Could not convert image to byte data');
+          }
+
+          Uint8List screenshot = byteData.buffer.asUint8List();
+
+          debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
+
+          // تحقق من أن الصورة ليست سوداء (تحتوي على بيانات)
+          if (screenshot.isEmpty) {
+            throw Exception('Screenshot is empty');
+          }
+
+          // تحقق من أول بايتات لمعرفة إذا كانت سوداء
+          if (screenshot.length > 100) {
+            bool isAllBlack = true;
+            for (int i = 0; i < 100; i++) {
+              if (screenshot[i] != 0) {
+                isAllBlack = false;
+                break;
+              }
+            }
+            if (isAllBlack) {
+              debugPrint('⚠️ Warning: Screenshot may be black');
+            }
+          }
+
+          completer.complete(screenshot);
+        } catch (e) {
+          debugPrint('❌ Error in post-frame callback: $e');
+          completer.completeError(e);
         }
-      }
+      });
 
-      // الطريقة 2: استخدام RepaintBoundary (تعمل على Android بشكل جيد)
-      debugPrint('🔄 Falling back to RepaintBoundary capture...');
-
-      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        debugPrint('❌ Could not find RepaintBoundary');
-        throw Exception('Could not find RepaintBoundary');
-      }
-
-      debugPrint('🎯 Found boundary, capturing image...');
-
-      // التقاط الصورة
-      ui.Image image =
-          await boundary.toImage(pixelRatio: Platform.isIOS ? 2.0 : 3.0);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Could not convert image to byte data');
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
-      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
-
-      return screenshot;
+      return completer.future;
     } catch (e) {
-      debugPrint('❌ Error in capture: $e');
-
-      // الطريقة 3: طريقة الطوارئ - إنشاء صورة نصية
-      debugPrint('🆘 Creating emergency text image...');
-
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final size = Size(800, 600);
-
-      // خلفية بيضاء
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-          Paint()..color = Colors.white);
-
-      // نص توضيحي
-      final paragraphBuilder = ui.ParagraphBuilder(
-        ui.ParagraphStyle(
-          textDirection: TextDirection.rtl,
-          fontSize: 20,
-          fontFamily: 'Cairo',
-        ),
-      );
-
-      paragraphBuilder.pushStyle(ui.TextStyle(
-        color: const Color(0xFF2D3748),
-        fontSize: 20,
-      ));
-
-      paragraphBuilder.addText('الشركة العامة لتعبئة وخدمات الغاز\n\n');
-      paragraphBuilder.addText('قسيمة الراتب\n\n');
-      paragraphBuilder.addText('تم حفظ الصورة بنجاح\n');
-      paragraphBuilder.addText('يمكن الوصول للتفاصيل الكاملة عبر التطبيق\n\n');
-      paragraphBuilder.addText(
-          'تاريخ الحفظ: ${DateTime.now().toLocal().toString().split(' ')[0]}');
-
-      final paragraph = paragraphBuilder.build();
-      paragraph.layout(ui.ParagraphConstraints(width: size.width - 40));
-
-      canvas.drawParagraph(paragraph, const Offset(20, 100));
-
-      final picture = recorder.endRecording();
-      final image =
-          await picture.toImage(size.width.toInt(), size.height.toInt());
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        throw Exception('Failed to create emergency image');
-      }
-
-      return byteData.buffer.asUint8List();
+      debugPrint('❌ Error capturing WebView: $e');
+      rethrow;
     }
   }
 
   Future<void> _savePageAsImage() async {
     try {
-      debugPrint('💾 Starting save process...');
+      debugPrint('📸 Starting screenshot capture...');
 
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
@@ -1244,26 +1150,65 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      // انتظار لضمان التصيير
-      await Future.delayed(const Duration(milliseconds: 1500));
+      // انتظار أطول لضمان التصيير الكامل
+      await Future.delayed(const Duration(milliseconds: 1000));
 
       Uint8List screenshot;
 
       try {
-        screenshot = await _captureScreenshot();
+        screenshot = await _captureWebView();
       } catch (e) {
-        debugPrint('❌ Capture failed: $e');
-        _showMessage('فشل التقاط الصورة');
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
+        debugPrint('❌ WebView capture failed: $e');
+
+        // محاولة بديلة: التقاط باستخدام overlay
+        try {
+          debugPrint('🔄 Trying alternative capture method...');
+
+          // إنشاء overlay للتقاط محتوى WebView
+          RenderBox? renderBox =
+              _webViewKey.currentContext?.findRenderObject() as RenderBox?;
+          if (renderBox == null) {
+            throw Exception('RenderBox not found');
+          }
+
+          final size = renderBox.size;
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder);
+
+          // رسم خلفية بيضاء أولاً
+          canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
+              Paint()..color = Colors.white);
+
+          // رسم WebView باستخدام layer
+          // ignore: invalid_use_of_protected_member
+          final layer = renderBox.layer;
+          if (layer != null) {
+            layer
+                .buildScene(ui.SceneBuilder())
+                .toImage(size.width.toInt(), size.height.toInt());
+          }
+
+          final picture = recorder.endRecording();
+          final image =
+              await picture.toImage(size.width.toInt(), size.height.toInt());
+          final byteData =
+              await image.toByteData(format: ui.ImageByteFormat.png);
+
+          if (byteData == null) {
+            throw Exception('Could not convert alternative image to byte data');
+          }
+
+          screenshot = byteData.buffer.asUint8List();
+          debugPrint(
+              '✅ Alternative capture successful: ${screenshot.length} bytes');
+        } catch (e2) {
+          debugPrint('❌ Alternative capture also failed: $e2');
+          throw Exception('All capture methods failed');
         }
-        return;
       }
 
       if (screenshot.isEmpty) {
-        _showMessage('فشل التقاط الصورة');
+        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -1272,7 +1217,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         return;
       }
 
-      debugPrint('📁 Saving to gallery...');
+      debugPrint('💾 Saving screenshot to gallery...');
 
       final tempDir = await getTemporaryDirectory();
       final fileName =
@@ -1292,8 +1237,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
         _showMessage('تم حفظ قسيمة الراتب في المعرض');
 
-        // تنظيف بعد التأكد
-        await Future.delayed(const Duration(seconds: 2), () async {
+        // تنظيف الملف المؤقت بعد التأكد من الحفظ
+        await Future.delayed(const Duration(seconds: 1), () async {
           try {
             await tempFile.delete();
           } catch (e) {
@@ -1311,14 +1256,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         _showMessage('فشل حفظ الصورة في المعرض');
       }
     } catch (e) {
-      debugPrint('❌ Error in save process: $e');
+      debugPrint('❌ Error saving screenshot: $e');
 
       if (mounted) {
         setState(() {
           isLoading = false;
         });
       }
-      _showMessage('حدث خطأ: ${e.toString().split(':')[0]}');
+      _showMessage('حدث خطأ أثناء حفظ الصورة: ${e.toString()}');
     }
   }
 
@@ -1338,7 +1283,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           borderRadius: BorderRadius.circular(10),
         ),
         margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 3),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -1445,7 +1390,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   Widget build(BuildContext context) {
     debugPrint(
-        '🎨 Building WebViewScreen - isLoading: $isLoading, hasError: $hasError, showZoom: $showZoomControls');
+        '🎨 Building WebViewScreen - isLoading: $isLoading, hasError: $hasError, isLoggedIn: $isLoggedIn');
 
     return WillPopScope(
       onWillPop: _onWillPop,
@@ -1477,17 +1422,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // WebView مع RepaintBoundary للتقاط الصور
             if (controller != null && !hasError)
               RepaintBoundary(
-                key: _screenshotKey,
+                key: _webViewKey,
                 child: Container(
-                  key: _webViewContainerKey,
-                  color: Colors.white,
+                  color: Colors.white, // خلفية بيضاء للتأكد
                   child: WebViewWidget(controller: controller!),
                 ),
               ),
-
             if (hasError)
               Center(
                 child: Padding(
@@ -1559,7 +1501,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   ),
                 ),
               ),
-
             if (isLoading && !hasError)
               Container(
                 color: Colors.white.withOpacity(0.9),
@@ -1599,12 +1540,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
               ),
           ],
         ),
-        floatingActionButton: showZoomControls && !hasError
+        floatingActionButton: currentUrl.contains('/payslips/view') && !hasError
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  // Zoom Out button
                   FloatingActionButton(
                     heroTag: 'zoom_out',
                     mini: true,
@@ -1615,8 +1555,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         color: Color(0xFF00BFA5), size: 20),
                   ),
                   const SizedBox(width: 10),
-
-                  // Zoom In button
                   FloatingActionButton(
                     heroTag: 'zoom_in',
                     mini: true,
@@ -1627,8 +1565,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         color: Color(0xFF00BFA5), size: 20),
                   ),
                   const SizedBox(width: 16),
-
-                  // Save button
                   FloatingActionButton.extended(
                     heroTag: 'save_image',
                     onPressed: _savePageAsImage,
