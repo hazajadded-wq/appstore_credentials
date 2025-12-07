@@ -1054,28 +1054,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<bool> _requestPermissions() async {
     if (Platform.isAndroid) {
-      try {
-        var status = await Permission.photos.status;
-        if (!status.isGranted) {
-          status = await Permission.photos.request();
-        }
-        return status.isGranted || status.isPermanentlyDenied;
-      } catch (e) {
-        debugPrint('Permission check error: $e');
-        return true;
-      }
-    }
-
-    // iOS: Request photo library permission
-    try {
-      var status = await Permission.photos.status;
-      if (!status.isGranted) {
-        status = await Permission.photos.request();
-      }
+      // Android storage permission
+      final status = await Permission.storage.request();
       return status.isGranted;
-    } catch (e) {
-      debugPrint('iOS Permission check error: $e');
-      return false;
+    } else {
+      // iOS photo library add permission
+      final status = await Permission.photosAddOnly.request();
+      return status.isGranted;
     }
   }
 
