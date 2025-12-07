@@ -48,7 +48,9 @@
 		<true/>
 	</dict>
 
-	<!-- PHOTO LIBRARY PERMISSION (ADDED FOR IMAGE SAVING) -->
+	<!-- PHOTO LIBRARY PERMISSIONS -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs access to your photo library to select salary slip images for processing.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app needs access to save salary slips and images to your photo library.</string>
 
