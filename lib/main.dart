@@ -1,6 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -26,9 +27,6 @@ void main() async {
   } catch (e) {
     debugPrint('❌ Error clearing cache: $e');
   }
-
-  // REMOVED: SystemChrome.setPreferredOrientations
-  // This was causing touch issues on iPhone 13 mini and iPad Air 5
 
   runApp(const MyApp());
 }
@@ -678,12 +676,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
           onPageFinished: (String url) {
             debugPrint('✅ Page finished: $url');
-// Inject html2canvas into the WebView (required for screenshot)
-            controller!.runJavaScript("""
-  var script = document.createElement('script');
-  script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
-  document.head.appendChild(script);
-""");
 
             navigationCount = 0;
 
@@ -796,48 +788,50 @@ class _WebViewScreenState extends State<WebViewScreen> {
         (function() {
           console.log('Auto-fit page script loading...');
           
+          // Remove existing viewport tags
           var existingViewports = document.querySelectorAll('meta[name="viewport"]');
           existingViewports.forEach(function(viewport) {
             viewport.remove();
           });
           
+          // Create new viewport meta tag
           var meta = document.createElement('meta');
           meta.name = 'viewport';
-          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
+          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, minimum-scale=0.5, user-scalable=yes';
           document.getElementsByTagName('head')[0].appendChild(meta);
           
+          // iOS-specific adjustments
+          if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
+            document.body.style.webkitOverflowScrolling = 'touch';
+            document.body.style.overflow = 'auto';
+            document.body.style.webkitTextSizeAdjust = '100%';
+          }
+          
+          // General adjustments
           document.body.style.margin = '0';
-          document.body.style.padding = '8px';
+          document.body.style.padding = '12px';
           document.body.style.boxSizing = 'border-box';
-          document.body.style.overflow = 'auto';
           document.body.style.width = '100%';
+          document.body.style.minHeight = '100vh';
           
-          var containers = document.querySelectorAll('div.container, div.content, main, article');
-          containers.forEach(function(container) {
-            container.style.maxWidth = '100%';
-            container.style.width = '100%';
-            container.style.padding = '8px';
-            container.style.boxSizing = 'border-box';
-          });
-          
+          // Adjust tables
           var tables = document.querySelectorAll('table');
           tables.forEach(function(table) {
             table.style.width = '100%';
             table.style.maxWidth = '100%';
             table.style.fontSize = '14px';
-            table.style.display = 'block';
             table.style.overflowX = 'auto';
+            table.style.display = 'block';
           });
           
-          var fixedElements = document.querySelectorAll('[style*="width"]');
-          fixedElements.forEach(function(element) {
-            var computedWidth = window.getComputedStyle(element).width;
-            var widthValue = parseInt(computedWidth);
-            
-            if (widthValue > window.innerWidth) {
-              element.style.width = '100%';
-              element.style.maxWidth = '100%';
-            }
+          // Adjust containers
+          var containers = document.querySelectorAll('.container, .content, main, article, section');
+          containers.forEach(function(container) {
+            container.style.maxWidth = '100%';
+            container.style.width = '100%';
+            container.style.padding = '0';
+            container.style.boxSizing = 'border-box';
+            container.style.overflow = 'visible';
           });
           
           console.log('✅ Page auto-fitted to screen');
@@ -877,37 +871,83 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) return;
-
-    debugPrint("🔍 Applying zoom: $zoomLevel");
-
-    if (Platform.isIOS) {
-      await controller!.runJavaScript("""
-      (function() {
-        let wrapper = document.getElementById('zoom_wrapper');
-        if (!wrapper) {
-          wrapper = document.createElement('div');
-          wrapper.id = 'zoom_wrapper';
-          
-          while (document.body.firstChild)
-            wrapper.appendChild(document.body.firstChild);
-          
-          document.body.appendChild(wrapper);
-        }
-
-        wrapper.style.transform = "scale($zoomLevel)";
-        wrapper.style.transformOrigin = "top left";
-        wrapper.style.width = (100 / $zoomLevel) + "%";
-      })();
-    """);
-
+    if (controller == null) {
+      debugPrint('⛔ Controller is null, cannot apply zoom');
       return;
     }
 
-    // Android zoom
-    await controller!.runJavaScript("""
-    document.body.style.zoom = "$zoomLevel";
-  """);
+    debugPrint('🎯 Applying zoom: $zoomLevel');
+
+    try {
+      if (Platform.isIOS) {
+        // iOS-specific zoom method
+        await controller!.runJavaScript('''
+          (function() {
+            var metaViewport = document.querySelector('meta[name="viewport"]');
+            var initialScale = $zoomLevel;
+            var minScale = 0.5;
+            var maxScale = 3.0;
+            
+            if (metaViewport) {
+              // Update existing viewport meta tag
+              var content = metaViewport.getAttribute('content');
+              content = content.replace(/initial-scale=[^,]*/, 'initial-scale=' + initialScale);
+              content = content.replace(/minimum-scale=[^,]*/, 'minimum-scale=' + minScale);
+              content = content.replace(/maximum-scale=[^,]*/, 'maximum-scale=' + maxScale);
+              
+              if (!content.includes('initial-scale')) {
+                content += ', initial-scale=' + initialScale;
+              }
+              if (!content.includes('minimum-scale')) {
+                content += ', minimum-scale=' + minScale;
+              }
+              if (!content.includes('maximum-scale')) {
+                content += ', maximum-scale=' + maxScale;
+              }
+              
+              metaViewport.setAttribute('content', content);
+            } else {
+              // Create new viewport meta tag
+              var meta = document.createElement('meta');
+              meta.name = 'viewport';
+              meta.content = 'width=device-width, initial-scale=' + initialScale + 
+                            ', minimum-scale=' + minScale + 
+                            ', maximum-scale=' + maxScale + 
+                            ', user-scalable=yes';
+              document.getElementsByTagName('head')[0].appendChild(meta);
+            }
+            
+            // Also apply CSS zoom for better control
+            document.body.style.zoom = $zoomLevel;
+            
+            console.log('✅ iOS zoom applied: ' + $zoomLevel + ' (viewport method)');
+          })();
+        ''');
+      } else {
+        // Android method
+        await controller!.runJavaScript('''
+          (function() {
+            var meta = document.querySelector('meta[name="viewport"]') || 
+                       document.createElement('meta');
+            
+            if (!meta.parentNode) {
+              meta.name = 'viewport';
+              document.head.appendChild(meta);
+            }
+            
+            meta.content = 'width=device-width, initial-scale=' + $zoomLevel + 
+                          ', maximum-scale=' + $zoomLevel + 
+                          ', user-scalable=no';
+            
+            console.log('✅ Android zoom applied: ' + $zoomLevel);
+          })();
+        ''');
+      }
+
+      debugPrint('✅ Zoom applied successfully: $zoomLevel');
+    } catch (e) {
+      debugPrint('❌ Error applying zoom: $e');
+    }
   }
 
   Future<void> _hideNotificationsOnLoginPage() async {
@@ -1025,38 +1065,129 @@ class _WebViewScreenState extends State<WebViewScreen> {
         return true;
       }
     }
-    return true;
+
+    // iOS: Request photo library permission
+    try {
+      var status = await Permission.photos.status;
+      if (!status.isGranted) {
+        status = await Permission.photos.request();
+      }
+      return status.isGranted;
+    } catch (e) {
+      debugPrint('iOS Permission check error: $e');
+      return false;
+    }
   }
 
   Future<Uint8List> _captureWebView() async {
     try {
-      debugPrint("📸 Capturing WebView using html2canvas...");
+      debugPrint('📸 Capturing WebView screenshot...');
 
-      // WAIT until html2canvas is fully loaded
-      await controller!.runJavaScriptReturningResult("""
-      new Promise(resolve => {
-        if (window.html2canvas) resolve("ready");
-        else {
-          var check = setInterval(() => {
-            if (window.html2canvas) { clearInterval(check); resolve("ready"); }
-          }, 300);
+      // Wait longer for iOS WebView rendering
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      // For iOS, use a different approach
+      if (Platform.isIOS) {
+        debugPrint('📱 Using iOS-specific capture method');
+
+        // Try to capture via JavaScript first (for iOS)
+        try {
+          final jsResult = await controller!.runJavaScriptReturningResult('''
+            (function() {
+              // Create a canvas element
+              var canvas = document.createElement('canvas');
+              var body = document.body;
+              var html = document.documentElement;
+              
+              // Get the actual content height
+              var height = Math.max(
+                body.scrollHeight,
+                body.offsetHeight,
+                html.clientHeight,
+                html.scrollHeight,
+                html.offsetHeight
+              );
+              
+              // Set canvas dimensions
+              canvas.width = document.documentElement.clientWidth;
+              canvas.height = height;
+              
+              var ctx = canvas.getContext('2d');
+              
+              // Fill with white background
+              ctx.fillStyle = 'white';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              
+              // Draw the entire page
+              ctx.drawWindow(window, 0, 0, canvas.width, canvas.height, 'white');
+              
+              // Return data URL
+              return canvas.toDataURL('image/png').split(',')[1];
+            })();
+          ''') as String?;
+
+          if (jsResult != null) {
+            debugPrint('✅ JavaScript capture successful');
+            return base64.decode(jsResult);
+          }
+        } catch (e) {
+          debugPrint('⚠️ JavaScript capture failed: $e');
         }
-      })
-    """);
+      }
 
-      // CAPTURE screenshot FROM WEBVIEW (works on iOS)
-      final String base64Image =
-          await controller!.runJavaScriptReturningResult("""
-          html2canvas(document.body).then(canvas => {
-            return canvas.toDataURL("image/png").replace("data:image/png;base64,", "");
-          });
-        """) as String;
+      // Fallback method for both platforms
+      debugPrint('🔄 Using fallback capture method...');
 
-      debugPrint("📸 Successfully captured HTML screenshot");
+      RenderRepaintBoundary? boundary = _webViewKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
 
-      return Uint8List.fromList(base64Decode(base64Image));
+      if (boundary == null) {
+        throw Exception('Could not find render boundary');
+      }
+
+      // Use higher pixel ratio for better quality on iOS
+      double pixelRatio = Platform.isIOS ? 3.0 : 2.5;
+      debugPrint('📱 Using pixelRatio: $pixelRatio');
+
+      // Ensure the boundary is painted
+      if (!boundary.debugNeedsPaint) {
+        debugPrint('🎨 Boundary is ready for painting');
+      }
+
+      // Capture the image
+      ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+
+      // Convert to PNG with compression
+      ByteData? byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        throw Exception('Could not convert image to byte data');
+      }
+
+      Uint8List screenshot = byteData.buffer.asUint8List();
+
+      // Verify the screenshot is not black/empty
+      if (screenshot.isEmpty) {
+        throw Exception('Screenshot is empty');
+      }
+
+      // Check first 100 bytes to ensure it's not all black/white
+      int nonZeroCount = 0;
+      for (int i = 0; i < min(100, screenshot.length); i++) {
+        if (screenshot[i] != 0 && screenshot[i] != 255) {
+          nonZeroCount++;
+        }
+      }
+
+      if (nonZeroCount < 10) {
+        debugPrint('⚠️ Warning: Screenshot may be mostly black/white');
+      }
+
+      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
+      return screenshot;
     } catch (e) {
-      debugPrint("❌ Screenshot error: $e");
+      debugPrint('❌ Error capturing WebView: $e');
       rethrow;
     }
   }
@@ -1348,7 +1479,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
               RepaintBoundary(
                 key: _webViewKey,
                 child: Container(
-                  color: Colors.white, // خلفية بيضاء للتأكد
+                  color: Colors.white,
                   child: WebViewWidget(controller: controller!),
                 ),
               ),
