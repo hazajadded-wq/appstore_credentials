@@ -2,7 +2,7 @@ name: salaryinfo
 description: Government salary information portal
 publish_to: 'none'
 
-version: 1.0.10+12  # Incremented from +1 to +2
+version: 1.0.9+22
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -18,8 +18,6 @@ dependencies:
   package_info_plus: ^8.0.0
   permission_handler: ^12.0.1
   gal: ^2.3.2
-  screenshot: ^3.0.0
-  flutter_image_compress: ^2.4.0
 
 dev_dependencies:
   flutter_test:
