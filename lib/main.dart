@@ -705,6 +705,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
               _autoFitPageToScreen();
             }
 
+            controller!.runJavaScript("""
+  if (!document.querySelector('meta[name=viewport]')) {
+    var meta = document.createElement('meta');
+    meta.name = 'viewport';
+    meta.content =
+      'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+    document.getElementsByTagName('head')[0].appendChild(meta);
+  }
+""");
+
             if (Platform.isAndroid) {
               _injectAndroidFix();
             }
@@ -872,68 +882,29 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) {
-      debugPrint('⛔ Controller is null, cannot apply zoom');
-      return;
-    }
-
-    debugPrint('🎯 Applying zoom: $zoomLevel');
+    if (controller == null) return;
 
     try {
       if (Platform.isIOS) {
-        // طريقة أبسط وأكثر فعالية لـ iOS
-        await controller!.runJavaScript('''
-          (function() {
-            // تغيير حجم الصفحة كلها باستخدام transform على body
-            var body = document.body;
-            var html = document.documentElement;
-            
-            // إزالة أي تحويلات سابقة
-            body.style.transform = '';
-            body.style.webkitTransform = '';
-            html.style.transform = '';
-            html.style.webkitTransform = '';
-            
-            // تطبيق التحويل الجديد
-            body.style.transform = 'scale(' + $zoomLevel + ')';
-            body.style.webkitTransform = 'scale(' + $zoomLevel + ')';
-            body.style.transformOrigin = 'top right';
-            body.style.webkitTransformOrigin = 'top right';
-            
-            // ضبط العرض والارتفاع
-            body.style.width = (100 / $zoomLevel) + '%';
-            body.style.height = (100 / $zoomLevel) + '%';
-            
-            // ضبط overflow للسماح بالتمرير
-            body.style.overflow = 'auto';
-            html.style.overflow = 'auto';
-            
-            console.log('✅ iOS zoom applied: scale(' + $zoomLevel + ')');
-          })();
-        ''');
+        await controller!.runJavaScript("""
+        document.documentElement.style.webkitTransform = 'scale($zoomLevel)';
+        document.documentElement.style.webkitTransformOrigin = '0 0';
+
+        document.body.style.webkitTransform = 'scale($zoomLevel)';
+        document.body.style.webkitTransformOrigin = '0 0';
+
+        document.documentElement.style.width = '${100 / zoomLevel}%';
+        document.body.style.width = '${100 / zoomLevel}%';
+      """);
       } else {
-        // الطريقة الأصلية للاندرويد
-        await controller!.runJavaScript('''
-          (function() {
-            var html = document.documentElement;
-            var body = document.body;
-            
-            html.style.transformOrigin = '0 0';
-            body.style.transformOrigin = '0 0';
-            
-            html.style.transform = 'scale($zoomLevel)';
-            html.style.width = (100 / $zoomLevel) + '%';
-            
-            body.style.width = '100%';
-            body.style.minHeight = '100vh';
-            
-            console.log('✅ CSS transform zoom applied: $zoomLevel');
-          })();
-        ''');
+        await controller!.runJavaScript("""
+        document.documentElement.style.transformOrigin = '0 0';
+        document.documentElement.style.transform = 'scale($zoomLevel)';
+        document.documentElement.style.width = '${100 / zoomLevel}%';
+      """);
       }
-      debugPrint('✅ Zoom applied successfully: $zoomLevel');
     } catch (e) {
-      debugPrint('❌ Error applying zoom: $e');
+      debugPrint("❌ Zoom error: $e");
     }
   }
 
