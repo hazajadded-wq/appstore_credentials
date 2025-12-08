@@ -599,6 +599,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   static const MethodChannel _channel = MethodChannel('snap_webview');
 
   final String loginUrl = 'http://109.224.38.44:5000/login';
+
   WebViewController? controller;
   bool isLoading = true;
   double loadingProgress = 0.0;
@@ -630,6 +631,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('⚙️ Initializing WebView...');
 
     try {
+      SystemChannels.platform.invokeMethod('FlutterWebViewCreated');
+
       controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
