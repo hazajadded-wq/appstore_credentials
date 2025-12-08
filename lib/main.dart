@@ -4,8 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart'; // تم الاستبدال
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -17,6 +16,11 @@ import 'dart:async';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // تهيئة InAppWebView (مهم!)
+  if (Platform.isAndroid) {
+    await AndroidInAppWebViewController.setWebContentsDebuggingEnabled(true);
+  }
+
   // Clear cache
   try {
     SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -25,9 +29,6 @@ void main() async {
   } catch (e) {
     debugPrint('❌ Error clearing cache: $e');
   }
-
-  // REMOVED: SystemChrome.setPreferredOrientations
-  // This was causing touch issues on iPhone 13 mini and iPad Air 5
 
   runApp(const MyApp());
 }
@@ -596,11 +597,8 @@ class WebViewScreen extends StatefulWidget {
 }
 
 class _WebViewScreenState extends State<WebViewScreen> {
-  static const MethodChannel _channel = MethodChannel('snap_webview');
-
   final String loginUrl = 'http://109.224.38.44:5000/login';
-
-  WebViewController? controller;
+  InAppWebViewController? controller;
   bool isLoading = true;
   double loadingProgress = 0.0;
   bool canGoBack = false;
@@ -613,6 +611,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   double zoomLevel = 1.0;
 
   final GlobalKey _webViewKey = GlobalKey();
+  PullToRefreshController? pullToRefreshController;
 
   @override
   void initState() {
@@ -620,169 +619,27 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('🌐 WebViewScreen initState');
     debugPrint('🔗 Login URL: $loginUrl');
 
+    // تهيئة Pull-to-Refresh
+    pullToRefreshController = PullToRefreshController(
+      options: PullToRefreshOptions(
+        color: const Color(0xFF00BFA5),
+      ),
+      onRefresh: () async {
+        if (Platform.isAndroid) {
+          controller?.reload();
+        } else if (Platform.isIOS) {
+          controller?.loadUrl(
+            urlRequest: URLRequest(url: await controller?.getUrl()),
+          );
+        }
+      },
+    );
+
     Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) {
-        _initializeWebView();
-      }
-    });
-  }
-
-  void _initializeWebView() {
-    debugPrint('⚙️ Initializing WebView...');
-
-    try {
-      SystemChannels.platform.invokeMethod('FlutterWebViewCreated');
-
-      controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(Colors.white)
-        ..addJavaScriptChannel(
-          'FlutterChannel',
-          onMessageReceived: (JavaScriptMessage message) {
-            debugPrint('📨 JavaScript message received: ${message.message}');
-          },
-        );
-
-      if (Platform.isAndroid) {
-        debugPrint('🤖 Configuring Android WebView settings');
-        final androidController =
-            controller!.platform as AndroidWebViewController;
-        androidController.setMediaPlaybackRequiresUserGesture(false);
-        controller!.enableZoom(true);
-        debugPrint('✅ Android WebView settings configured');
-      }
-
-      controller!.setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {
-            debugPrint('📄 Page started: $url');
-
-            if (!url.contains('download=1')) {
-              navigationCount = 0;
-              lastNavigatedUrl = '';
-            }
-
-            if (mounted) {
-              setState(() {
-                isLoading = true;
-                hasError = false;
-                loadingProgress = 0.0;
-                currentUrl = url;
-                isLoggedIn = !url.contains('/login');
-              });
-            }
-          },
-          onProgress: (int progress) {
-            debugPrint('⏳ Progress: $progress%');
-            if (mounted) {
-              setState(() {
-                loadingProgress = progress / 100;
-              });
-            }
-          },
-          onPageFinished: (String url) {
-            debugPrint('✅ Page finished: $url');
-
-            navigationCount = 0;
-
-            if (mounted) {
-              setState(() {
-                isLoading = false;
-                loadingProgress = 1.0;
-                currentUrl = url;
-                isLoggedIn = !url.contains('/login');
-              });
-            }
-            _updateCanGoBack();
-
-            if (url.contains('/login')) {
-              debugPrint('🔐 Login page detected - hiding notifications');
-              _hideNotificationsOnLoginPage();
-            }
-
-            if (url.contains('/payslips/view') || url.contains('/salary')) {
-              debugPrint('📄 Payslip page detected - auto-fitting to screen');
-              setState(() {
-                zoomLevel = 1.0;
-              });
-              _autoFitPageToScreen();
-            }
-
-            controller!.runJavaScript("""
-  if (!document.querySelector('meta[name=viewport]')) {
-    var meta = document.createElement('meta');
-    meta.name = 'viewport';
-    meta.content =
-      'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
-    document.getElementsByTagName('head')[0].appendChild(meta);
-  }
-""");
-
-            if (Platform.isAndroid) {
-              _injectAndroidFix();
-            }
-          },
-          onWebResourceError: (WebResourceError error) {
-            debugPrint('❌ WebView Error:');
-            debugPrint('   Description: ${error.description}');
-            debugPrint('   Error code: ${error.errorCode}');
-            debugPrint('   Error type: ${error.errorType}');
-
-            if (mounted) {
-              setState(() {
-                isLoading = false;
-                hasError = true;
-                errorMessage = error.description;
-              });
-            }
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            debugPrint('🔗 Navigation request: ${request.url}');
-
-            if (request.url == lastNavigatedUrl) {
-              navigationCount++;
-              debugPrint(
-                  '⚠️ Duplicate navigation detected. Count: $navigationCount');
-
-              if (navigationCount > 2) {
-                debugPrint('🛑 Blocking repeated navigation to prevent loop');
-                return NavigationDecision.prevent;
-              }
-            } else {
-              lastNavigatedUrl = request.url;
-              navigationCount = 1;
-            }
-
-            if (request.url.contains('/login') ||
-                request.url.contains('/dashboard') ||
-                request.url.contains('/salary') ||
-                request.url.contains('/payslips') ||
-                request.url.contains('109.224.38.44')) {
-              return NavigationDecision.navigate;
-            }
-
-            return NavigationDecision.navigate;
-          },
-        ),
-      );
-
-      debugPrint('🚀 Loading URL: $loginUrl');
-      controller!.loadRequest(Uri.parse(loginUrl));
-
       if (mounted) {
         setState(() {});
       }
-
-      debugPrint('✅ WebView initialized successfully');
-    } catch (e) {
-      debugPrint('❌ Error initializing WebView: $e');
-      if (mounted) {
-        setState(() {
-          hasError = true;
-          errorMessage = e.toString();
-        });
-      }
-    }
+    });
   }
 
   Future<void> _updateCanGoBack() async {
@@ -800,7 +657,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('📐 Auto-fitting page to screen...');
 
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           console.log('Auto-fit page script loading...');
           
@@ -888,26 +745,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
     if (controller == null) return;
 
     try {
-      if (Platform.isIOS) {
-        await controller!.runJavaScript("""
-        document.documentElement.style.webkitTransform = 'scale($zoomLevel)';
-        document.documentElement.style.webkitTransformOrigin = '0 0';
+      await controller!.evaluateJavascript(source: """
+      document.body.style.webkitTransform = 'scale($zoomLevel)';
+      document.body.style.webkitTransformOrigin = '0 0';
+      document.documentElement.style.overflow = 'hidden';
+    """);
 
-        document.body.style.webkitTransform = 'scale($zoomLevel)';
-        document.body.style.webkitTransformOrigin = '0 0';
-
-        document.documentElement.style.width = '${100 / zoomLevel}%';
-        document.body.style.width = '${100 / zoomLevel}%';
-      """);
-      } else {
-        await controller!.runJavaScript("""
-        document.documentElement.style.transformOrigin = '0 0';
-        document.documentElement.style.transform = 'scale($zoomLevel)';
-        document.documentElement.style.width = '${100 / zoomLevel}%';
-      """);
-      }
+      debugPrint("✅ Zoom applied with JS: $zoomLevel");
     } catch (e) {
-      debugPrint("❌ Zoom error: $e");
+      debugPrint("❌ Zoom JS error: $e");
     }
   }
 
@@ -917,7 +763,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('🔕 Hiding notifications on login page...');
 
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           console.log('Notification blocker loading...');
           
@@ -1006,7 +852,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     ''';
 
     try {
-      await controller!.runJavaScript(jsCode);
+      await controller!.evaluateJavascript(source: jsCode);
       debugPrint('✅ Android fix injected successfully');
     } catch (e) {
       debugPrint('❌ Error injecting JavaScript: $e');
@@ -1030,17 +876,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<Uint8List> _captureWebView() async {
-    if (Platform.isIOS) {
-      final bytes = await _channel.invokeMethod('takeSnapshot');
-      return Uint8List.fromList(List<int>.from(bytes));
-    }
+    // InAppWebView يوفر طريقة مباشرة لأخذ لقطة
+    try {
+      final screenshot = await controller?.takeScreenshot();
+      if (screenshot != null) {
+        return screenshot;
+      }
+      throw Exception('Screenshot is null');
+    } catch (e) {
+      debugPrint('❌ InAppWebView screenshot failed: $e');
 
-    // Android same as before
-    RenderRepaintBoundary boundary =
-        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-    ui.Image img = await boundary.toImage(pixelRatio: 3.0);
-    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
+      // طريقة بديلة باستخدام RenderRepaintBoundary
+      RenderRepaintBoundary boundary = _webViewKey.currentContext!
+          .findRenderObject() as RenderRepaintBoundary;
+      ui.Image img = await boundary.toImage(pixelRatio: 3.0);
+      ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+      return byteData!.buffer.asUint8List();
+    }
   }
 
   Future<void> _savePageAsImage() async {
@@ -1069,11 +921,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
       } catch (e) {
         debugPrint('❌ WebView capture failed: $e');
 
-        // محاولة بديلة: التقاط باستخدام overlay
+        // محاولة بديلة
         try {
           debugPrint('🔄 Trying alternative capture method...');
 
-          // إنشاء overlay للتقاط محتوى WebView
           RenderBox? renderBox =
               _webViewKey.currentContext?.findRenderObject() as RenderBox?;
           if (renderBox == null) {
@@ -1326,14 +1177,145 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            if (controller != null && !hasError)
-              RepaintBoundary(
-                key: _webViewKey,
-                child: Container(
-                  color: Colors.white, // خلفية بيضاء للتأكد
-                  child: WebViewWidget(controller: controller!),
+            InAppWebView(
+              key: _webViewKey,
+              initialUrlRequest: URLRequest(url: WebUri(loginUrl)),
+              initialOptions: InAppWebViewGroupOptions(
+                crossPlatform: InAppWebViewOptions(
+                  javaScriptEnabled: true,
+                  useShouldOverrideUrlLoading: true,
+                  mediaPlaybackRequiresUserGesture: false,
+                  supportZoom: true,
+                  disableVerticalScroll: false,
+                  disableHorizontalScroll: false,
+                  transparentBackground: true,
+                  cacheEnabled: true,
+                ),
+                android: AndroidInAppWebViewOptions(
+                  useHybridComposition: true,
+                  supportMultipleWindows: true,
+                  builtInZoomControls: true,
+                  displayZoomControls: false,
+                ),
+                ios: IOSInAppWebViewOptions(
+                  allowsInlineMediaPlayback: true,
+                  allowsBackForwardNavigationGestures: true,
+                  ignoresViewportScaleLimits: true,
+                  allowsLinkPreview: false,
                 ),
               ),
+              pullToRefreshController: pullToRefreshController,
+              onWebViewCreated: (InAppWebViewController c) {
+                controller = c;
+                debugPrint('✅ WebView created');
+              },
+              onLoadStart: (controller, url) {
+                debugPrint('📄 Page started: $url');
+
+                if (!url.toString().contains('download=1')) {
+                  navigationCount = 0;
+                  lastNavigatedUrl = '';
+                }
+
+                if (mounted) {
+                  setState(() {
+                    isLoading = true;
+                    hasError = false;
+                    loadingProgress = 0.0;
+                    currentUrl = url.toString();
+                    isLoggedIn = !url.toString().contains('/login');
+                  });
+                }
+              },
+              onLoadStop: (controller, url) async {
+                debugPrint('✅ Page finished: $url');
+
+                navigationCount = 0;
+
+                if (mounted) {
+                  setState(() {
+                    isLoading = false;
+                    loadingProgress = 1.0;
+                    currentUrl = url.toString();
+                    isLoggedIn = !url.toString().contains('/login');
+                  });
+                }
+
+                await _updateCanGoBack();
+                pullToRefreshController?.endRefreshing();
+
+                if (url.toString().contains('/login')) {
+                  debugPrint('🔐 Login page detected - hiding notifications');
+                  await _hideNotificationsOnLoginPage();
+                }
+
+                if (url.toString().contains('/payslips/view') ||
+                    url.toString().contains('/salary')) {
+                  debugPrint(
+                      '📄 Payslip page detected - auto-fitting to screen');
+                  setState(() {
+                    zoomLevel = 1.0;
+                  });
+                  await _autoFitPageToScreen();
+                }
+
+                if (Platform.isAndroid) {
+                  await _injectAndroidFix();
+                }
+              },
+              onProgressChanged: (controller, progress) {
+                debugPrint('⏳ Progress: $progress%');
+                if (mounted) {
+                  setState(() {
+                    loadingProgress = progress / 100;
+                  });
+                }
+              },
+              onLoadError: (controller, url, code, message) {
+                debugPrint('❌ WebView Error:');
+                debugPrint('   URL: $url');
+                debugPrint('   Code: $code');
+                debugPrint('   Message: $message');
+
+                if (mounted) {
+                  setState(() {
+                    isLoading = false;
+                    hasError = true;
+                    errorMessage = message;
+                  });
+                }
+                pullToRefreshController?.endRefreshing();
+              },
+              shouldOverrideUrlLoading: (controller, navigationAction) async {
+                final url = navigationAction.request.url?.toString() ?? '';
+                debugPrint('🔗 Navigation request: $url');
+
+                if (url == lastNavigatedUrl) {
+                  navigationCount++;
+                  debugPrint(
+                      '⚠️ Duplicate navigation detected. Count: $navigationCount');
+
+                  if (navigationCount > 2) {
+                    debugPrint(
+                        '🛑 Blocking repeated navigation to prevent loop');
+                    return NavigationActionPolicy.CANCEL;
+                  }
+                } else {
+                  lastNavigatedUrl = url;
+                  navigationCount = 1;
+                }
+
+                if (url.contains('/login') ||
+                    url.contains('/dashboard') ||
+                    url.contains('/salary') ||
+                    url.contains('/payslips') ||
+                    url.contains('109.224.38.44')) {
+                  return NavigationActionPolicy.ALLOW;
+                }
+
+                return NavigationActionPolicy.ALLOW;
+              },
+            ),
             if (hasError)
               Center(
                 child: Padding(
@@ -1379,7 +1361,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           setState(() {
                             hasError = false;
                           });
-                          _initializeWebView();
+                          controller?.reload();
                         },
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
