@@ -1,7 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:async';
-// Added for base64Decode in iOS capture
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -11,9 +9,10 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:ui' as ui;
+import 'dart:async';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +25,9 @@ void main() async {
   } catch (e) {
     debugPrint('❌ Error clearing cache: $e');
   }
+
+  // REMOVED: SystemChrome.setPreferredOrientations
+  // This was causing touch issues on iPhone 13 mini and iPad Air 5
 
   runApp(const MyApp());
 }
@@ -594,6 +596,8 @@ class WebViewScreen extends StatefulWidget {
 }
 
 class _WebViewScreenState extends State<WebViewScreen> {
+  static const MethodChannel _channel = MethodChannel('snap_webview');
+
   final String loginUrl = 'http://109.224.38.44:5000/login';
   WebViewController? controller;
   bool isLoading = true;
@@ -607,7 +611,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   int navigationCount = 0;
   double zoomLevel = 1.0;
 
-  final GlobalKey _screenshotKey = GlobalKey();
+  final GlobalKey _webViewKey = GlobalKey();
 
   @override
   void initState() {
@@ -877,24 +881,30 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     try {
       if (Platform.isIOS) {
+        // طريقة أبسط وأكثر فعالية لـ iOS
         await controller!.runJavaScript('''
           (function() {
+            // تغيير حجم الصفحة كلها باستخدام transform على body
             var body = document.body;
             var html = document.documentElement;
             
+            // إزالة أي تحويلات سابقة
             body.style.transform = '';
             body.style.webkitTransform = '';
             html.style.transform = '';
             html.style.webkitTransform = '';
             
+            // تطبيق التحويل الجديد
             body.style.transform = 'scale(' + $zoomLevel + ')';
-            body.style.webkitTransform = 'scale(' + $zoomLevel + ')
-                        body.style.transformOrigin = 'top right';
+            body.style.webkitTransform = 'scale(' + $zoomLevel + ')';
+            body.style.transformOrigin = 'top right';
             body.style.webkitTransformOrigin = 'top right';
             
+            // ضبط العرض والارتفاع
             body.style.width = (100 / $zoomLevel) + '%';
             body.style.height = (100 / $zoomLevel) + '%';
             
+            // ضبط overflow للسماح بالتمرير
             body.style.overflow = 'auto';
             html.style.overflow = 'auto';
             
@@ -902,6 +912,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           })();
         ''');
       } else {
+        // الطريقة الأصلية للاندرويد
         await controller!.runJavaScript('''
           (function() {
             var html = document.documentElement;
@@ -1029,130 +1040,44 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    try {
-      if (Platform.isAndroid) {
-        // image_gallery_saver_plus يستخدم PhotoManager
+    if (Platform.isAndroid) {
+      try {
         var status = await Permission.photos.status;
         if (!status.isGranted) {
           status = await Permission.photos.request();
         }
-        return status.isGranted || status.isLimited;
-      } else if (Platform.isIOS) {
-        var status = await Permission.photosAddOnly.status;
-        if (!status.isGranted) {
-          status = await Permission.photosAddOnly.request();
-        }
-        return status.isGranted;
+        return status.isGranted || status.isPermanentlyDenied;
+      } catch (e) {
+        debugPrint('Permission check error: $e');
+        return true;
       }
-      return true;
-    } catch (e) {
-      debugPrint('Permission check error: $e');
-      return false;
     }
+    return true;
   }
 
-  Future<Uint8List> _captureScreenshot() async {
-    try {
-      debugPrint('📸 Capturing screenshot...');
-
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      RenderRepaintBoundary? boundary = _screenshotKey.currentContext
-          ?.findRenderObject() as RenderRepaintBoundary?;
-
-      if (boundary == null) {
-        debugPrint('❌ Could not find render boundary');
-        throw Exception('Could not find render boundary');
-      }
-
-      debugPrint('✅ Found render boundary, capturing image...');
-
-      double pixelRatio = Platform.isIOS ? 2.0 : 3.0;
-      debugPrint('📱 Using pixelRatio: $pixelRatio');
-
-      ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-      ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-
-      if (byteData == null) {
-        debugPrint('❌ Could not convert image to byte data');
-        throw Exception('Could not convert image to byte data');
-      }
-
-      Uint8List screenshot = byteData.buffer.asUint8List();
-
-      debugPrint('✅ Screenshot captured: ${screenshot.length} bytes');
-
-      return screenshot;
-    } catch (e) {
-      debugPrint('❌ Error capturing screenshot: $e');
-      rethrow;
+  Future<Uint8List> _captureWebView() async {
+    if (Platform.isIOS) {
+      final bytes = await _channel.invokeMethod('takeSnapshot');
+      return Uint8List.fromList(List<int>.from(bytes));
     }
-  }
 
-  Future<void> _saveScreenshotToGallery(Uint8List imageData) async {
-    try {
-      debugPrint(
-          '💾 Saving screenshot to gallery using image_gallery_saver_plus...');
-
-      // طلب الإذن
-      bool hasPermission = await _requestPermissions();
-      if (!hasPermission) {
-        _showMessage('الرجاء منح إذن الوصول إلى الصور لحفظ الصورة');
-        return;
-      }
-
-      // حفظ الصورة باستخدام image_gallery_saver_plus
-      final fileName = 'salary_slip_${DateTime.now().millisecondsSinceEpoch}';
-      final result = await ImageGallerySaverPlus.saveImage(
-        imageData,
-        name: fileName,
-        quality: 100,
-        isReturnImagePathOfIOS: true,
-      );
-
-      debugPrint('📊 Save result: $result');
-
-      // التحقق من النتيجة بناءً على نوع النظام
-      bool success = false;
-      if (Platform.isAndroid) {
-        // نتيجة Android
-        success = result != null && result.containsKey('filePath');
-      } else if (Platform.isIOS) {
-        // نتيجة iOS
-        success = result != null && result != '';
-      }
-
-      if (success) {
-        debugPrint('✅ Image saved to gallery successfully');
-        _showMessage('تم حفظ قسيمة الراتب في معرض الصور بنجاح');
-      } else {
-        debugPrint('❌ Failed to save image: $result');
-        _showMessage('فشل حفظ الصورة. الرجاء المحاولة مرة أخرى.');
-      }
-    } catch (e) {
-      debugPrint('❌ Error saving to gallery: $e');
-
-      // محاولة بديلة: حفظ في مجلد المستندات
-      try {
-        final directory = await getApplicationDocumentsDirectory();
-        final fileName =
-            'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
-        final file = File('${directory.path}/$fileName');
-        await file.writeAsBytes(imageData);
-
-        debugPrint('📁 Image saved to app directory: ${file.path}');
-        _showMessage('تم حفظ الصورة في مجلد التطبيق');
-      } catch (e2) {
-        debugPrint('❌ Alternative save failed: $e2');
-        _showMessage('فشل حفظ الصورة. الرجاء المحاولة مرة أخرى.');
-      }
-    }
+    // Android same as before
+    RenderRepaintBoundary boundary =
+        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    ui.Image img = await boundary.toImage(pixelRatio: 3.0);
+    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 
   Future<void> _savePageAsImage() async {
     try {
-      debugPrint('📸 Starting screenshot process...');
+      debugPrint('📸 Starting screenshot capture...');
+
+      bool hasPermission = await _requestPermissions();
+      if (!hasPermission) {
+        _showMessage('الرجاء منح صلاحية الوصول للتخزين');
+        return;
+      }
 
       if (mounted) {
         setState(() {
@@ -1160,24 +1085,115 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       }
 
-      await Future.delayed(const Duration(milliseconds: 300));
+      // انتظار أطول لضمان التصيير الكامل
+      await Future.delayed(const Duration(milliseconds: 1000));
 
-      Uint8List screenshot = await _captureScreenshot();
-      await _saveScreenshotToGallery(screenshot);
+      Uint8List screenshot;
 
-      if (mounted) {
-        setState(() {
-          isLoading = false;
+      try {
+        screenshot = await _captureWebView();
+      } catch (e) {
+        debugPrint('❌ WebView capture failed: $e');
+
+        // محاولة بديلة: التقاط باستخدام overlay
+        try {
+          debugPrint('🔄 Trying alternative capture method...');
+
+          // إنشاء overlay للتقاط محتوى WebView
+          RenderBox? renderBox =
+              _webViewKey.currentContext?.findRenderObject() as RenderBox?;
+          if (renderBox == null) {
+            throw Exception('RenderBox not found');
+          }
+
+          final size = renderBox.size;
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder,
+              Rect.fromPoints(Offset.zero, Offset(size.width, size.height)));
+
+          // رسم خلفية بيضاء أولاً
+          canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
+              Paint()..color = Colors.white);
+
+          // رسم WebView
+          renderBox.paint(canvas as PaintingContext, Offset.zero);
+
+          final picture = recorder.endRecording();
+          final image =
+              await picture.toImage(size.width.toInt(), size.height.toInt());
+          final byteData =
+              await image.toByteData(format: ui.ImageByteFormat.png);
+
+          if (byteData == null) {
+            throw Exception('Could not convert alternative image to byte data');
+          }
+
+          screenshot = byteData.buffer.asUint8List();
+          debugPrint(
+              '✅ Alternative capture successful: ${screenshot.length} bytes');
+        } catch (e2) {
+          debugPrint('❌ Alternative capture also failed: $e2');
+          throw Exception('All capture methods failed');
+        }
+      }
+
+      if (screenshot.isEmpty) {
+        _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+        return;
+      }
+
+      debugPrint('💾 Saving screenshot to gallery...');
+
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(screenshot);
+
+      try {
+        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
+        debugPrint('✅ Image saved to gallery successfully');
+
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+
+        _showMessage('تم حفظ قسيمة الراتب في المعرض');
+
+        // تنظيف الملف المؤقت بعد التأكد من الحفظ
+        await Future.delayed(const Duration(seconds: 1), () async {
+          try {
+            await tempFile.delete();
+          } catch (e) {
+            debugPrint('⚠️ Error deleting temp file: $e');
+          }
         });
+      } catch (e) {
+        debugPrint('❌ Error saving to gallery: $e');
+
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+        _showMessage('فشل حفظ الصورة في المعرض');
       }
     } catch (e) {
-      debugPrint('❌ Error in savePageAsImage: $e');
+      debugPrint('❌ Error saving screenshot: $e');
+
       if (mounted) {
         setState(() {
           isLoading = false;
         });
       }
-      _showMessage('فشل التقاط الصورة. الرجاء المحاولة مرة أخرى.');
+      _showMessage('حدث خطأ أثناء حفظ الصورة: ${e.toString()}');
     }
   }
 
@@ -1197,7 +1213,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           borderRadius: BorderRadius.circular(10),
         ),
         margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 3),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -1303,6 +1319,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+        '🎨 Building WebViewScreen - isLoading: $isLoading, hasError: $hasError, isLoggedIn: $isLoggedIn');
+
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
@@ -1333,15 +1352,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            RepaintBoundary(
-              key: _screenshotKey,
-              child: Container(
-                color: Colors.white,
-                child: controller != null && !hasError
-                    ? WebViewWidget(controller: controller!)
-                    : Container(),
+            if (controller != null && !hasError)
+              RepaintBoundary(
+                key: _webViewKey,
+                child: Container(
+                  color: Colors.white, // خلفية بيضاء للتأكد
+                  child: WebViewWidget(controller: controller!),
+                ),
               ),
-            ),
             if (hasError)
               Center(
                 child: Padding(
