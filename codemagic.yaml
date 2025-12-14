@@ -1,0 +1,93 @@
+workflows:
+  salaryinfo-ios-final:
+    name: SalaryInfo iOS - v1.0.11 (2) iPhone Only
+    instance_type: mac_mini_m2
+
+    environment:
+      groups:
+        - appstore_credentials
+
+      vars:
+        BUNDLE_ID: "com.pocket.salaryinfo"
+        APP_STORE_APPLE_ID: 6756042000
+
+      xcode: latest
+      cocoapods: default
+      flutter: stable
+
+    scripts:
+      # -------------------------------------------------
+      # 🔐 Code Signing
+      # -------------------------------------------------
+      - name: Initialize keychain
+        script: |
+          set -e
+          keychain initialize
+
+      - name: Fetch signing files
+        script: |
+          set -e
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+
+      - name: Add certificates
+        script: |
+          set -e
+          keychain add-certificates
+
+      - name: Set up code signing
+        script: |
+          set -e
+          xcode-project use-profiles
+
+      # -------------------------------------------------
+      # 🧹 Clean & Packages
+      # -------------------------------------------------
+      - name: Clean Flutter build
+        script: |
+          set -e
+          flutter clean
+
+      - name: Get Flutter packages
+        script: |
+          set -e
+          flutter pub get
+
+      # -------------------------------------------------
+      # 📦 CocoaPods
+      # -------------------------------------------------
+      - name: Install CocoaPods
+        script: |
+          set -e
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      # -------------------------------------------------
+      # 📱 Build IPA
+      # -------------------------------------------------
+      - name: Build IPA (Release)
+        script: |
+          set -e
+          flutter build ipa \
+            --release \
+            --build-name=1.0.11 \
+            --build-number=2 \
+            --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - hazajadded@gmail.com
+        notify:
+          success: true
+          failure: true
+
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
