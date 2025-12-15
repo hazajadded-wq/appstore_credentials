@@ -1,6 +1,7 @@
 name: salaryinfo
 description: بوابة الموظف الرقمية - الشركة العامة لتعبئة وخدمات الغاز
 publish_to: 'none'
+
 version: 1.0.11+5
 
 environment:
@@ -9,35 +10,28 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  # 🔥 Firebase Core
+  # 🔥 Firebase
   firebase_core: ^2.24.2
   firebase_messaging: ^14.7.10
-  
-  # 🌐 WebView
+
+  # 🌐 WebView (لا تضف android / wkwebview يدويًا)
   webview_flutter: ^4.5.2
-  webview_flutter_android: ^2.12.3
-  webview_flutter_wkwebview: ^3.0.7
-  
+
   # 🎨 UI & Design
   google_fonts: ^6.1.0
   cached_network_image: ^3.3.0
-  
+
   # 💾 Storage & Permissions
   shared_preferences: ^2.2.2
   permission_handler: ^10.4.4
   device_info_plus: ^9.1.0
   gal: ^2.2.1
   path_provider: ^2.1.0
-  
-  # ⚙️ Utilities
-  intl: ^0.18.1
-  flutter_localizations:
-    sdk: flutter
-  
-  # 🔗 Other
+
+  # 🔗 Network & Utilities
   http: ^1.1.0
   url_launcher: ^6.2.0
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:
@@ -46,38 +40,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  
-  # Assets
+
   assets:
     - assets/images/
     - assets/images/logo.png
-  
-  generate: true
-  
-  # Fonts (optional)
-  # fonts:
-  #   - family: Cairo
-  #     fonts:
-  #       - asset: assets/fonts/Cairo-Regular.ttf
-  #       - asset: assets/fonts/Cairo-Bold.ttf
-  #         weight: 700
 
-# ⚠️ إزالة هذه الأقسام:
-# ios:
-#   bundleId: com.pocket.salaryinfo
-#   config:
-#     usesNonExemptEncryption: false
-#   minimumOSVersion: '12.0'
-  
-# android:
-#   compileSdkVersion: 34
-#   minSdkVersion: 21
-#   targetSdkVersion: 34
-#   applicationId: com.pocket.salaryinfo
-#   versionCode: 4
-#   versionName: '1.0.11'
-#   multiDexEnabled: true
-  
-# web:
-#   favicon: assets/images/favicon.png
-#   title: "بوابة الموظف الرقمية"
+  generate: true
