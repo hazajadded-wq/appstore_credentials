@@ -4,18 +4,47 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
+/// Default [FirebaseOptions] for use with your Firebase apps.
+///
+/// Example:
+/// ```dart
+/// import 'firebase_options.dart';
+/// // ...
+/// await Firebase.initializeApp(
+///   options: DefaultFirebaseOptions.currentPlatform,
+/// );
+/// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
-      return web;
+      throw UnsupportedError(
+        'DefaultFirebaseOptions have not been configured for web - '
+        'you can reconfigure this by running the FlutterFire CLI again.',
+      );
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-        return android;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for android - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.iOS:
         return ios;
       case TargetPlatform.macOS:
-        return macos;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for macos - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
+      case TargetPlatform.windows:
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for windows - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
+      case TargetPlatform.linux:
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for linux - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       default:
         throw UnsupportedError(
           'DefaultFirebaseOptions are not supported for this platform.',
@@ -23,33 +52,7 @@ class DefaultFirebaseOptions {
     }
   }
 
-  static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
-    appId: '1:625120325992:web:f96e4fac3656a8de4466dd',
-    messagingSenderId: '625120325992',
-    projectId: 'scgfs-salary-app',
-    authDomain: 'scgfs-salary-app.firebaseapp.com',
-    storageBucket: 'scgfs-salary-app.firebasestorage.app',
-  );
-
-  static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
-    appId: '1:625120325992:android:f96e4fac3656a8de4466dd',
-    messagingSenderId: '625120325992',
-    projectId: 'scgfs-salary-app',
-    storageBucket: 'scgfs-salary-app.firebasestorage.app',
-  );
-
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
-    appId: '1:625120325992:ios:f96e4fac3656a8de4466dd',
-    messagingSenderId: '625120325992',
-    projectId: 'scgfs-salary-app',
-    storageBucket: 'scgfs-salary-app.firebasestorage.app',
-    iosBundleId: 'com.pocket.salaryinfo',
-  );
-
-  static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
     appId: '1:625120325992:ios:f96e4fac3656a8de4466dd',
     messagingSenderId: '625120325992',

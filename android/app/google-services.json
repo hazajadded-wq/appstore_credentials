@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "987457974266",
+    "project_id": "aerial-freehold-365508",
+    "storage_bucket": "aerial-freehold-365508.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:987457974266:android:8d50854e26dd020a3cbe43",
+        "android_client_info": {
+          "package_name": "com.ila.salaryinfo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtE0ATbTMCgzqh6SmrEWxwAy2qH_KBH8c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:987457974266:android:5c00d989f0891be93cbe43",
+        "android_client_info": {
+          "package_name": "com.scgfs.salaryapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtE0ATbTMCgzqh6SmrEWxwAy2qH_KBH8c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
