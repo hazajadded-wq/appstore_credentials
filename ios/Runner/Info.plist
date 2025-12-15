@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 
@@ -38,7 +37,7 @@
     <!-- ================= Device ================= -->
     <key>UIDeviceFamily</key>
     <array>
-        <integer>1</integer> <!-- iPhone only -->
+        <integer>1</integer>
     </array>
 
     <key>UIRequiresFullScreen</key>
@@ -71,6 +70,9 @@
         <true/>
     </dict>
 
+    <key>WKWebViewOnly</key>
+    <false/>
+
     <!-- ================= Network ================= -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>يحتاج التطبيق إلى الاتصال بالإنترنت للوصول إلى نظام الرواتب.</string>
@@ -82,14 +84,37 @@
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>يحتاج التطبيق إلى حفظ قسائم الرواتب في معرض الصور.</string>
 
-    <!-- ================= Notifications ================= -->
+    <!-- ================= NOTIFICATIONS & APNs ================= -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
 
-    <!-- ================= Firebase ================= -->
+    <!-- ================= Firebase Configuration ================= -->
     <key>FirebaseAppDelegateProxyEnabled</key>
+    <true/>
+
+    <key>FirebaseMessagingAutoInitEnabled</key>
+    <true/>
+
+    <!-- ================= APNs Configuration ================= -->
+    <key>APNS_KEY_ID</key>
+    <string>F8G869W434</string>
+
+    <key>APNS_TEAM_ID</key>
+    <string>PH3LN58YFU</string>
+
+    <key>APNS_ENVIRONMENT</key>
+    <string>production</string>
+
+    <!-- ================= Additional Firebase Settings ================= -->
+    <key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key>
+    <true/>
+    
+    <key>FIREBASE_ANALYTICS_COLLECTION_DEACTIVATED</key>
+    <false/>
+    
+    <key>FirebaseCrashlyticsCollectionEnabled</key>
     <true/>
 
     <!-- ================= Encryption ================= -->

@@ -224,7 +224,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   debugPrint('📱 Background FCM Message received: ${message.messageId}');
+  debugPrint('📱 Message data: ${message.data}');
+
+  // Add to notification manager
   await NotificationManager.instance.addFirebaseMessage(message);
+
+  // You can also show a local notification here
+  debugPrint('✅ Background message processed successfully');
 }
 
 // GlobalKey للتنقل
@@ -236,16 +242,53 @@ void main() async {
   // Initialize date formatting for Arabic locale
   await initializeDateFormatting('ar_IQ', null);
 
+  // ✅ Initialize Firebase with APNs support
+  debugPrint('''
+  🚀 =================================
+  🚀 Starting SalaryInfo Application
+  🚀 Firebase Project: scgfs-salary-app
+  🚀 Bundle ID: com.pocket.salaryinfo
+  🚀 APNs Key ID: F8G869W434
+  🚀 =================================
+  ''');
+
   try {
-    await Firebase.initializeApp();
-    debugPrint('🔥 Firebase initialized successfully');
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
+    debugPrint('✅ Firebase initialized successfully');
+
+    // Test Firebase configuration
+    final app = Firebase.app();
+    debugPrint('✅ Firebase App Name: ${app.name}');
+    debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
+    debugPrint('✅ Firebase iOS Bundle ID: ${app.options.iosBundleId}');
+
+    // Initialize Notification Manager
     await NotificationManager.instance.loadNotifications();
+    debugPrint('✅ Notification Manager initialized');
 
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    // Configure Firebase Messaging
+    await configureFirebaseMessaging();
+  } catch (e, stackTrace) {
+    debugPrint('❌ Firebase initialization error: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('⚠️ Continuing without Firebase features');
+  }
 
+  // Register background message handler
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Run the app
+  runApp(const MyApp());
+}
+
+Future<void> configureFirebaseMessaging() async {
+  try {
     final messaging = FirebaseMessaging.instance;
 
+    // Request notification permissions
     NotificationSettings settings = await messaging.requestPermission(
       alert: true,
       announcement: false,
@@ -259,43 +302,58 @@ void main() async {
     debugPrint(
         '🔔 Notification permission status: ${settings.authorizationStatus}');
 
+    // Get FCM token
     String? token = await messaging.getToken();
-    debugPrint('🔑 FCM Token: $token');
+    if (token != null) {
+      debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
 
-    await messaging.subscribeToTopic('all_employees');
-    debugPrint('📧 Subscribed to topic: all_employees');
+      // Subscribe to topic
+      await messaging.subscribeToTopic('all_employees');
+      debugPrint('📧 Subscribed to topic: all_employees');
+    } else {
+      debugPrint('⚠️ No FCM token received - check APNs configuration');
+    }
 
+    // Foreground message handler
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
-      debugPrint('📱 Image URL: ${message.data['image_url']}');
+
       NotificationManager.instance.addFirebaseMessage(message);
     });
 
+    // Notification tapped handler
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('📱 Notification tapped! Opening notifications screen');
+      debugPrint('👆 Notification tapped! Opening notifications screen');
       NotificationManager.instance.addFirebaseMessage(message);
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-      );
+
+      // Navigate to notifications screen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
     });
 
+    // Check if app launched from notification
     RemoteMessage? initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('📱 App launched from notification');
       NotificationManager.instance.addFirebaseMessage(initialMessage);
+
       Future.delayed(const Duration(seconds: 1), () {
         navigatorKey.currentState?.push(
           MaterialPageRoute(builder: (context) => const NotificationsScreen()),
         );
       });
     }
-  } catch (e) {
-    debugPrint('❌ Firebase initialization error: $e');
-  }
 
-  runApp(const MyApp());
+    debugPrint('✅ Firebase Messaging configured successfully');
+  } catch (e) {
+    debugPrint('❌ Firebase Messaging configuration error: $e');
+    debugPrint('⚠️ Push notifications may not work');
+  }
 }
 
 final ThemeData appTheme = ThemeData(
@@ -640,8 +698,7 @@ class NotificationDetailScreen extends StatelessWidget {
               ),
             Text(
               notification.body,
-              textAlign: TextAlign.justify, // ✅ هنا
-
+              textAlign: TextAlign.justify,
               style: GoogleFonts.cairo(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
@@ -658,7 +715,6 @@ class NotificationDetailScreen extends StatelessWidget {
                     'الشركة العامة لتعبئة وخدمات الغاز',
                     style: GoogleFonts.cairo(
                       fontSize: 10,
-                      //fontWeight: FontWeight.bold,
                       color: const Color(0xFF2D3748),
                     ),
                   ),

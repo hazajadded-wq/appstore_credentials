@@ -1,80 +1,122 @@
 workflows:
-  salaryinfo-ios-final:
-    name: SalaryInfo iOS - v1.0.11 (2) iPhone Only
+  salaryinfo-ios-apns:
+    name: SalaryInfo iOS with APNs
     instance_type: mac_mini_m2
+    max_build_duration: 60
 
     environment:
       groups:
         - appstore_credentials
-
+      
       vars:
         BUNDLE_ID: "com.pocket.salaryinfo"
         APP_STORE_APPLE_ID: 6756042000
-
+        XCODE_WORKSPACE: "Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+        FLUTTER_BUILD_NAME: "1.0.11"
+        FLUTTER_BUILD_NUMBER: "4"
+        
+      flutter: stable
       xcode: latest
       cocoapods: default
-      flutter: stable
 
     scripts:
-      # -------------------------------------------------
-      # 🔐 Code Signing
-      # -------------------------------------------------
-      - name: Initialize keychain
+      # 🔐 Setup Code Signing
+      - name: Setup keychain and certificates
         script: |
           set -e
           keychain initialize
-
-      - name: Fetch signing files
-        script: |
-          set -e
+          
+          echo "🔐 Fetching signing certificates for $BUNDLE_ID"
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
-
-      - name: Add certificates
-        script: |
-          set -e
+          
           keychain add-certificates
-
-      - name: Set up code signing
-        script: |
-          set -e
           xcode-project use-profiles
+          
+          echo "✅ Code signing configured"
 
-      # -------------------------------------------------
-      # 🧹 Clean & Packages
-      # -------------------------------------------------
-      - name: Clean Flutter build
+      # 🧹 Clean Project
+      - name: Clean project
         script: |
           set -e
+          echo "🧹 Cleaning project..."
           flutter clean
+          rm -rf ios/Pods ios/Podfile.lock ios/build
+          
+          echo "✅ Project cleaned"
 
-      - name: Get Flutter packages
+      # 📦 Install Dependencies
+      - name: Install Flutter packages
         script: |
           set -e
+          echo "📦 Installing Flutter packages..."
           flutter pub get
+          
+          echo "✅ Flutter packages installed"
 
-      # -------------------------------------------------
-      # 📦 CocoaPods
-      # -------------------------------------------------
-      - name: Install CocoaPods
+      - name: Install iOS pods with APNs
         script: |
           set -e
+          echo "📱 Installing iOS pods with APNs support..."
           cd ios
-          pod install --repo-update
+          
+          # Clean pod cache
+          pod cache clean --all
+          
+          # Install pods
+          pod install --repo-update --verbose
+          
+          echo "✅ iOS pods installed"
           cd ..
 
-      # -------------------------------------------------
-      # 📱 Build IPA
-      # -------------------------------------------------
-      - name: Build IPA (Release)
+      # 🔍 Verify Firebase Configuration
+      - name: Verify Firebase setup
         script: |
           set -e
+          echo "🔍 Verifying Firebase configuration..."
+          
+          # Check GoogleService-Info.plist
+          if [ -f "ios/Runner/GoogleService-Info.plist" ]; then
+            echo "✅ GoogleService-Info.plist found"
+            
+            # Extract project ID
+            PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "")
+            if [ "$PROJECT_ID" = "scgfs-salary-app" ]; then
+              echo "✅ Correct Firebase Project: $PROJECT_ID"
+            else
+              echo "⚠️ Unexpected Firebase Project: $PROJECT_ID"
+            fi
+          else
+            echo "❌ GoogleService-Info.plist NOT FOUND!"
+            exit 1
+          fi
+          
+          # Check Podfile for Firebase pods
+          if grep -q "Firebase" ios/Podfile; then
+            echo "✅ Firebase pods found in Podfile"
+          else
+            echo "❌ Firebase pods NOT FOUND in Podfile!"
+            exit 1
+          fi
+          
+          echo "✅ Firebase configuration verified"
+
+      # 🏗️ Build iOS App
+      - name: Build iOS IPA
+        script: |
+          set -e
+          echo "🏗️ Building iOS IPA..."
+          
           flutter build ipa \
             --release \
-            --build-name=1.0.11 \
-            --build-number=2 \
-            --export-options-plist=/Users/builder/export_options.plist
+            --build-name="$FLUTTER_BUILD_NAME" \
+            --build-number="$FLUTTER_BUILD_NUMBER" \
+            --export-options-plist=/Users/builder/export_options.plist \
+            --verbose
+          
+          echo "✅ IPA built successfully"
 
     artifacts:
       - build/ios/ipa/*.ipa
@@ -87,7 +129,7 @@ workflows:
         notify:
           success: true
           failure: true
-
+      
       app_store_connect:
         auth: integration
         submit_to_testflight: true

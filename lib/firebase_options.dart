@@ -4,16 +4,6 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
-/// Default [FirebaseOptions] for use with your Firebase apps.
-///
-/// Example:
-/// ```dart
-/// import 'firebase_options.dart';
-/// // ...
-/// await Firebase.initializeApp(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
@@ -26,13 +16,6 @@ class DefaultFirebaseOptions {
         return ios;
       case TargetPlatform.macOS:
         return macos;
-      case TargetPlatform.windows:
-        return windows;
-      case TargetPlatform.linux:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for linux - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
       default:
         throw UnsupportedError(
           'DefaultFirebaseOptions are not supported for this platform.',
@@ -41,46 +24,37 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDhp0ox4shWBVtmdj_WdI7HVReNT7rc-Uc',
-    appId: '1:987457974266:web:84403775251d41873cbe43',
-    messagingSenderId: '987457974266',
-    projectId: 'aerial-freehold-365508',
-    authDomain: 'aerial-freehold-365508.firebaseapp.com',
-    storageBucket: 'aerial-freehold-365508.firebasestorage.app',
+    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
+    appId: '1:625120325992:web:f96e4fac3656a8de4466dd',
+    messagingSenderId: '625120325992',
+    projectId: 'scgfs-salary-app',
+    authDomain: 'scgfs-salary-app.firebaseapp.com',
+    storageBucket: 'scgfs-salary-app.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDtE0ATbTMCgzqh6SmrEWxwAy2qH_KBH8c',
-    appId: '1:987457974266:android:8d50854e26dd020a3cbe43',
-    messagingSenderId: '987457974266',
-    projectId: 'aerial-freehold-365508',
-    storageBucket: 'aerial-freehold-365508.firebasestorage.app',
+    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
+    appId: '1:625120325992:android:f96e4fac3656a8de4466dd',
+    messagingSenderId: '625120325992',
+    projectId: 'scgfs-salary-app',
+    storageBucket: 'scgfs-salary-app.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyA5Kzua_GpArhYBhDSvnP-83pJncFjzzMs',
-    appId: '1:987457974266:ios:e2213ea8328f14023cbe43',
-    messagingSenderId: '987457974266',
-    projectId: 'aerial-freehold-365508',
-    storageBucket: 'aerial-freehold-365508.firebasestorage.app',
+    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
+    appId: '1:625120325992:ios:f96e4fac3656a8de4466dd',
+    messagingSenderId: '625120325992',
+    projectId: 'scgfs-salary-app',
+    storageBucket: 'scgfs-salary-app.firebasestorage.app',
     iosBundleId: 'com.pocket.salaryinfo',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyA5Kzua_GpArhYBhDSvnP-83pJncFjzzMs',
-    appId: '1:987457974266:ios:e150aa0a9ae480003cbe43',
-    messagingSenderId: '987457974266',
-    projectId: 'aerial-freehold-365508',
-    storageBucket: 'aerial-freehold-365508.firebasestorage.app',
-    iosBundleId: 'com.example.salaryinfo',
-  );
-
-  static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyDhp0ox4shWBVtmdj_WdI7HVReNT7rc-Uc',
-    appId: '1:987457974266:web:f051fcb9d674ddce3cbe43',
-    messagingSenderId: '987457974266',
-    projectId: 'aerial-freehold-365508',
-    authDomain: 'aerial-freehold-365508.firebaseapp.com',
-    storageBucket: 'aerial-freehold-365508.firebasestorage.app',
+    apiKey: 'AIzaSyCo6n3xKlwC6qRat8sZnAf2pIOtwAD0mY4',
+    appId: '1:625120325992:ios:f96e4fac3656a8de4466dd',
+    messagingSenderId: '625120325992',
+    projectId: 'scgfs-salary-app',
+    storageBucket: 'scgfs-salary-app.firebasestorage.app',
+    iosBundleId: 'com.pocket.salaryinfo',
   );
 }
