@@ -12,18 +12,18 @@ dependencies:
     sdk: flutter
 
   # 🔥 Firebase - MINIMAL VERSION (JUST FOR TESTFLIGHT FIX)
-  firebase_core: 4.3.0
-  firebase_messaging: 16.0.4
-  # REMOVE firebase_crashlytics for now
+  firebase_core: ^2.27.0
+  firebase_messaging: ^16.0.4
+  # firebase_crashlytics REMOVED intentionally
 
   # 🌐 WebView
-  webview_flutter: 4.4.4
+  webview_flutter: ^4.4.4
 
   # 🎨 UI
-  google_fonts: 6.3.3
+  google_fonts: ^6.3.3
 
   # 💾 Storage
-  shared_preferences: 2.2.2
+  shared_preferences: ^2.2.2
 
 flutter:
   uses-material-design: true
