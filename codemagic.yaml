@@ -33,48 +33,31 @@ workflows:
           keychain add-certificates
           xcode-project use-profiles
 
-      - name: Deep clean
+      - name: Clean build
         script: |
           set -e
           flutter clean
           rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
           pod cache clean --all
-          rm -rf ~/Library/Caches/CocoaPods
 
       - name: Get Flutter packages
         script: |
           set -e
           flutter pub get
 
-      - name: Verify Firebase config
-        script: |
-          set -e
-          if [ ! -f "ios/Runner/GoogleService-Info.plist" ]; then
-            echo "❌ GoogleService-Info.plist NOT FOUND!"
-            exit 1
-          fi
-          echo "✅ Firebase configuration present"
-
       - name: Verify Podfile has Firebase fix
         script: |
           set -e
           if ! grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES" ios/Podfile; then
-            echo "❌ ERROR: Podfile missing Firebase modular header fix!"
-            echo ""
-            echo "Your ios/Podfile must include this in post_install:"
+            echo "❌ ERROR: Podfile missing Firebase fix!"
+            echo "Your ios/Podfile must have this line in post_install:"
             echo "config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'"
-            echo ""
             exit 1
           fi
           echo "✅ Podfile has Firebase fix"
 
-      - name: Update CocoaPods specs
-        script: |
-          set -e
-          pod repo update
-
-      - name: Install iOS pods (with retry)
+      - name: Install pods (with retry)
         script: |
           set -e
           cd ios
@@ -84,34 +67,31 @@ workflows:
             echo "Pod Install Attempt $ATTEMPT of 3"
             echo "════════════════════════════════════════"
             
-            if pod install --repo-update --verbose; then
+            if pod install --repo-update; then
               echo "✅ Pod install succeeded!"
               cd ..
               exit 0
             fi
             
-            echo "❌ Pod install failed on attempt $ATTEMPT"
-            
             if [ $ATTEMPT -lt 3 ]; then
-              echo "Cleaning for retry..."
-              rm -rf Pods Podfile.lock .symlinks/plugins
+              echo "Retrying..."
+              rm -rf Pods Podfile.lock
               pod cache clean --all
-              sleep 10
+              sleep 5
             fi
           done
           
-          echo "❌ Pod install failed after 3 attempts"
+          echo "❌ Pod install failed"
           cd ..
           exit 1
 
-      - name: Build iOS (no codesign)
+      - name: Build Flutter framework
         script: |
           set -e
-          # Build Flutter framework and app without creating IPA
-          # This WON'T upgrade Podfile because we already ran pod install
+          # Build WITHOUT creating IPA - this won't upgrade Podfile
           flutter build ios --release --no-codesign
 
-      - name: Create archive
+      - name: Create Xcode archive
         script: |
           set -e
           cd ios
@@ -122,7 +102,6 @@ workflows:
             -configuration Release \
             -archivePath build/Runner.xcarchive \
             -destination 'generic/platform=iOS' \
-            -allowProvisioningUpdates \
             archive
           
           echo "✅ Archive created"
@@ -137,14 +116,12 @@ workflows:
             -exportArchive \
             -archivePath build/Runner.xcarchive \
             -exportPath build/ipa \
-            -exportOptionsPlist /Users/builder/export_options.plist \
-            -allowProvisioningUpdates
+            -exportOptionsPlist /Users/builder/export_options.plist
           
-          # Copy to Flutter's expected location
           mkdir -p ../build/ios/ipa
           cp build/ipa/*.ipa ../build/ios/ipa/
           
-          echo "✅ IPA exported"
+          echo "✅ IPA exported successfully"
           ls -lh ../build/ios/ipa/
           
           cd ..
