@@ -1,7 +1,6 @@
 # Uncomment this line to define a global platform for your project
 platform :ios, '15.0'
 
-# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
@@ -28,35 +27,21 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  # ⚠️ CRITICAL: Changed from :static to :dynamic for Firebase compatibility
-  use_frameworks! :linkage => :dynamic
-  
+  # ✅ REQUIRED FOR FIREBASE
+  use_frameworks! :linkage => :static
+  use_modular_headers!
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-    
-    # Fix for Firebase and Xcode 15+
+
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-      
-      # Fix for simulator builds
-      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
-      
-      # Disable bitcode for faster builds
       config.build_settings['ENABLE_BITCODE'] = 'NO'
-      
-      # Enable library distribution for better compatibility
-      config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'YES'
-      
-      # Additional fixes for Firebase
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
-        'PERMISSION_NOTIFICATIONS=1',
-      ]
     end
   end
 end
