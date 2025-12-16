@@ -11,33 +11,33 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔥 Firebase - USE WORKING VERSIONS
-  firebase_core: ^4.3.0
-  firebase_messaging: ^16.1.1  # ✅ USE THIS EXACT VERSION
+  # 🔥 Firebase - USE THESE EXACT WORKING VERSIONS
+  firebase_core: 4.3.0  # No caret - exact version
+  firebase_messaging: 16.0.4  # No caret - exact version
 
   # 🌐 WebView
-  webview_flutter: ^4.4.4
-  webview_flutter_android: ^4.10.11
-  webview_flutter_wkwebview: ^3.23.5
+  webview_flutter: 4.4.4
+  webview_flutter_android: 4.10.11
+  webview_flutter_wkwebview: 3.23.5
 
   # 🎨 UI & Design
-  google_fonts: ^6.3.3
-  cached_network_image: ^3.3.1
+  google_fonts: 6.3.3
+  cached_network_image: 3.3.1
 
   # 💾 Storage & Permissions
-  shared_preferences: ^2.2.2
-  permission_handler: ^12.0.1
-  device_info_plus: ^10.1.2
-  gal: ^2.3.2
-  path_provider: ^2.1.2
+  shared_preferences: 2.2.2
+  permission_handler: 12.0.1
+  device_info_plus: 10.1.2
+  gal: 2.3.2
+  path_provider: 2.1.2
 
   # 🧰 Utilities
-  intl: ^0.19.0
+  intl: 0.19.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: 3.0.0
 
 flutter:
   uses-material-design: true
