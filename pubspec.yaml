@@ -1,43 +1,38 @@
 name: salaryinfo
 description: بوابة الموظف الرقمية - الشركة العامة لتعبئة وخدمات الغاز
-publish_to: 'none'
+publish_to: "none"
+
 version: 1.0.11+5
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: '>=3.0.0'
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  
-  # 🔥 Firebase Core
-  firebase_core: ^2.24.2
-  firebase_messaging: ^14.7.10
-  
-  # WebView
-  webview_flutter: ^4.4.2
-  webview_flutter_android: ^2.12.2
-  webview_flutter_wkwebview: ^2.16.2
-  
-  # UI & Design
-  google_fonts: ^6.1.0
-  cached_network_image: ^3.3.0
-  
-  # Storage & Permissions
-  shared_preferences: ^2.2.2
-  permission_handler: ^10.4.4
-  device_info_plus: ^9.1.0
-  gal: ^2.2.1
-  path_provider: ^2.1.0
-  
-  # Utilities
-  intl: ^0.18.1
-  flutter_localizations:
-    sdk: flutter
-  
-  # Other
-  http: ^1.1.0
+
+  # 🔥 Firebase - UPDATED
+  firebase_core: ^4.3.0
+  firebase_messaging: ^16.1.0
+
+  # 🌐 WebView
+  webview_flutter: ^4.7.0
+  webview_flutter_android: ^4.10.11
+  webview_flutter_wkwebview: ^3.23.5
+
+  # 🎨 UI & Design
+  google_fonts: ^6.3.3
+  cached_network_image: ^3.3.1
+
+  # 💾 Storage & Permissions
+  shared_preferences: ^2.5.4
+  permission_handler: ^12.0.1
+  device_info_plus: ^12.3.0
+  gal: ^5.0.1
+  path_provider: ^2.1.3
+
+  # 🧰 Utilities
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:
@@ -46,8 +41,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  
   assets:
     - assets/images/
-  
-  generate: true

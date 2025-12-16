@@ -217,24 +217,31 @@ class NotificationManager extends ChangeNotifier {
   }
 }
 
-// Background message handler
+// GlobalKey للتنقل
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// ✅ UPDATED: Background message handler for Firebase Messaging 16.x
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // IMPORTANT: Initialize Firebase in background handler
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
   debugPrint('📱 Background FCM Message received: ${message.messageId}');
   debugPrint('📱 Message data: ${message.data}');
 
   // Add to notification manager
   await NotificationManager.instance.addFirebaseMessage(message);
 
-  // You can also show a local notification here
+  // Show notification if needed
+  if (message.notification != null) {
+    debugPrint('📱 Notification Title: ${message.notification!.title}');
+    debugPrint('📱 Notification Body: ${message.notification!.body}');
+  }
+
   debugPrint('✅ Background message processed successfully');
 }
-
-// GlobalKey للتنقل
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -242,17 +249,17 @@ void main() async {
   // Initialize date formatting for Arabic locale
   await initializeDateFormatting('ar_IQ', null);
 
-  // ✅ Initialize Firebase with APNs support
+  // ✅ UPDATED: Initialize Firebase with APNs support
   debugPrint('''
   🚀 =================================
   🚀 Starting SalaryInfo Application
   🚀 Firebase Project: scgfs-salary-app
   🚀 Bundle ID: com.pocket.salaryinfo
-  🚀 APNs Key ID: F8G869W434
   🚀 =================================
   ''');
 
   try {
+    // ✅ UPDATED: Initialize Firebase BEFORE anything else
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
@@ -277,13 +284,14 @@ void main() async {
     debugPrint('⚠️ Continuing without Firebase features');
   }
 
-  // Register background message handler
+  // ✅ UPDATED: Register background message handler (MUST be after Firebase.initializeApp)
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Run the app
   runApp(const MyApp());
 }
 
+// ✅ UPDATED: Firebase Messaging configuration
 Future<void> configureFirebaseMessaging() async {
   try {
     final messaging = FirebaseMessaging.instance;
@@ -303,7 +311,9 @@ Future<void> configureFirebaseMessaging() async {
         '🔔 Notification permission status: ${settings.authorizationStatus}');
 
     // Get FCM token
-    String? token = await messaging.getToken();
+    String? token = await messaging.getToken(
+      vapidKey: null, // Remove vapidKey parameter for Firebase 16.x
+    );
     if (token != null) {
       debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
 
@@ -314,18 +324,23 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received - check APNs configuration');
     }
 
-    // Foreground message handler
+    // ✅ UPDATED: Foreground message handler for Firebase 16.x
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
+      debugPrint('📱 Data: ${message.data}');
 
+      // Add to notification manager
       NotificationManager.instance.addFirebaseMessage(message);
     });
 
-    // Notification tapped handler
+    // ✅ UPDATED: Notification opened handler
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       debugPrint('👆 Notification tapped! Opening notifications screen');
+      debugPrint('📱 Message data: ${message.data}');
+
+      // Add to notification manager
       NotificationManager.instance.addFirebaseMessage(message);
 
       // Navigate to notifications screen
@@ -336,10 +351,12 @@ Future<void> configureFirebaseMessaging() async {
       });
     });
 
-    // Check if app launched from notification
+    // ✅ UPDATED: Get initial message
     RemoteMessage? initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('📱 App launched from notification');
+      debugPrint('📱 Initial message data: ${initialMessage.data}');
+
       NotificationManager.instance.addFirebaseMessage(initialMessage);
 
       Future.delayed(const Duration(seconds: 1), () {
@@ -350,8 +367,9 @@ Future<void> configureFirebaseMessaging() async {
     }
 
     debugPrint('✅ Firebase Messaging configured successfully');
-  } catch (e) {
+  } catch (e, stackTrace) {
     debugPrint('❌ Firebase Messaging configuration error: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
     debugPrint('⚠️ Push notifications may not work');
   }
 }

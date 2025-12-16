@@ -130,6 +130,11 @@
 
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+<!-- Add to your existing Info.plist -->
+<key>FirebaseAppDelegateProxyEnabled</key>
+<false/> <!-- Set to false for Firebase 10+ -->
 
+<key>FirebaseMessagingAutoInitEnabled</key>
+<true/>
 </dict>
 </plist>
