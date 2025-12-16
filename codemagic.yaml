@@ -33,18 +33,38 @@ workflows:
           keychain add-certificates
           xcode-project use-profiles
 
+      - name: Force clean Flutter
+        script: |
+          set -e
+          echo "🧹 Force cleaning Flutter..."
+          
+          # Remove Flutter cached artifacts
+          rm -rf $FLUTTER_ROOT/.pub-cache
+          
+          # Clean Flutter build cache
+          flutter pub cache clean --force
+          
+          echo "✅ Flutter cleaned"
+
       - name: Clean build
         script: |
           set -e
           flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build ios/Runner.xcworkspace
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
           pod cache clean --all
+          
+          # Clean CocoaPods cache more aggressively
+          pod deintegrate || true
+          rm -rf ~/Library/Caches/CocoaPods
+          
+          echo "✅ Build cleaned"
 
       - name: Get Flutter packages
         script: |
           set -e
           flutter pub get
+          echo "✅ Flutter packages installed"
 
       - name: Verify Podfile has Firebase fix
         script: |
@@ -57,31 +77,45 @@ workflows:
           fi
           echo "✅ Podfile has Firebase fix"
 
-      - name: Install pods (with retry)
+      - name: Install pods (with retry and verbose)
         script: |
           set -e
           cd ios
+          
+          # First, ensure pod repo is updated
+          echo "📦 Updating CocoaPods repo..."
+          pod repo update
           
           for ATTEMPT in 1 2 3; do
             echo "════════════════════════════════════════"
             echo "Pod Install Attempt $ATTEMPT of 3"
             echo "════════════════════════════════════════"
             
-            if pod install --repo-update; then
+            # Try with verbose output
+            if pod install --repo-update --verbose; then
               echo "✅ Pod install succeeded!"
+              
+              # Verify the settings were applied
+              echo "🔍 Checking build settings..."
+              if xcodebuild -workspace Runner.xcworkspace -scheme Runner -showBuildSettings | grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES"; then
+                echo "✅ Build setting verified"
+              else
+                echo "⚠️ Build setting not found in project"
+              fi
+              
               cd ..
               exit 0
             fi
             
             if [ $ATTEMPT -lt 3 ]; then
-              echo "Retrying..."
+              echo "🔄 Retrying..."
               rm -rf Pods Podfile.lock
               pod cache clean --all
               sleep 5
             fi
           done
           
-          echo "❌ Pod install failed"
+          echo "❌ Pod install failed after 3 attempts"
           cd ..
           exit 1
 
@@ -90,6 +124,7 @@ workflows:
           set -e
           # Build WITHOUT creating IPA - this won't upgrade Podfile
           flutter build ios --release --no-codesign
+          echo "✅ Flutter framework built"
 
       - name: Create Xcode archive
         script: |

@@ -11,13 +11,14 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔥 Firebase (COMPATIBLE & STABLE)
-  firebase_core: ^2.27.0
-  firebase_messaging: ^14.7.10
-  # firebase_crashlytics REMOVED
+  # 🔥 Firebase (Updated to more compatible versions)
+  firebase_core: ^3.0.0  # Updated from 2.27.0
+  firebase_messaging: ^15.0.0  # Updated from 14.7.10
 
   # 🌐 WebView
   webview_flutter: ^4.4.4
+  webview_flutter_android: ^4.10.11
+  webview_flutter_wkwebview: ^3.23.5
 
   # 🎨 UI
   google_fonts: ^6.1.0
