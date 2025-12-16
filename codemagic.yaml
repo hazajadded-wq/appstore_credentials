@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios-fix:
-    name: SalaryInfo iOS Crash Fix
+    name: SalaryInfo iOS Build
     instance_type: mac_mini_m2
     max_build_duration: 75
 
@@ -16,196 +16,138 @@ workflows:
         FLUTTER_BUILD_NAME: "1.0.11"
         FLUTTER_BUILD_NUMBER: "6"
         
-      flutter: "3.22.0"  # ✅ SPECIFIC FLUTTER VERSION
+      flutter: "3.22.0"
       xcode: latest
       cocoapods: default
 
     scripts:
-      # 🔐 Setup Code Signing
-      - name: Setup keychain and certificates
+      - name: Setup code signing
         script: |
           set -e
           keychain initialize
           
-          echo "🔐 Fetching signing certificates for $BUNDLE_ID"
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
           
           keychain add-certificates
           xcode-project use-profiles
-          
-          echo "✅ Code signing configured"
 
-      # 🧹 DEEP Clean Project
-      - name: Deep clean project
+      - name: Deep clean
         script: |
           set -e
-          echo "🧹 Deep cleaning project..."
-          
-          # Clean Flutter
           flutter clean
-          
-          # Clean iOS build artifacts
-          rm -rf ios/Pods
-          rm -rf ios/Podfile.lock
-          rm -rf ios/build
-          rm -rf ios/.symlinks
-          rm -rf ios/Runner.xcworkspace
-          rm -rf ios/DerivedData
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          
-          # Clean CocoaPods cache
           pod cache clean --all
           rm -rf ~/Library/Caches/CocoaPods
-          
-          # Clean Flutter pub cache
-          rm -rf ~/.pub-cache
-          
-          echo "✅ Project deep cleaned"
 
-      # 📦 Install Flutter packages WITH RETRY
-      - name: Install Flutter packages
+      - name: Get Flutter packages
         script: |
           set -e
-          echo "📦 Installing Flutter packages..."
-          
-          MAX_ATTEMPTS=3
-          ATTEMPT=1
-          
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
-            
-            if flutter pub get --verbose; then
-              echo "✅ Flutter packages installed successfully"
-              break
-            else
-              echo "⚠️ Flutter pub get failed on attempt $ATTEMPT"
-              
-              if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                echo "Retrying in 5 seconds..."
-                rm -rf ~/.pub-cache
-                sleep 5
-              else
-                echo "❌ Failed after $MAX_ATTEMPTS attempts"
-                exit 1
-              fi
-              
-              ATTEMPT=$((ATTEMPT + 1))
-            fi
-          done
+          flutter pub get
 
-      # 🔧 Verify Firebase files
-      - name: Verify Firebase configuration
+      - name: Verify Firebase config
         script: |
           set -e
-          echo "🔍 Verifying Firebase configuration..."
-          
-          # Check GoogleService-Info.plist exists
-          if [ -f "ios/Runner/GoogleService-Info.plist" ]; then
-            echo "✅ GoogleService-Info.plist found"
-            
-            # Check content
-            PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "NOT_FOUND")
-            BUNDLE_ID_PLIST=$(/usr/libexec/PlistBuddy -c "Print :BUNDLE_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "NOT_FOUND")
-            
-            echo "📊 Firebase Project ID: $PROJECT_ID"
-            echo "📊 Bundle ID in plist: $BUNDLE_ID_PLIST"
-            
-            if [ "$PROJECT_ID" = "scgfs-salary-app" ]; then
-              echo "✅ Correct Firebase Project"
-            else
-              echo "⚠️ Unexpected Firebase Project"
-            fi
-          else
+          if [ ! -f "ios/Runner/GoogleService-Info.plist" ]; then
             echo "❌ GoogleService-Info.plist NOT FOUND!"
             exit 1
           fi
-          
-          echo "✅ Firebase configuration verified"
+          echo "✅ Firebase configuration present"
 
-      # 🔄 Update CocoaPods repository
+      - name: Verify Podfile has Firebase fix
+        script: |
+          set -e
+          if ! grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES" ios/Podfile; then
+            echo "❌ ERROR: Podfile missing Firebase modular header fix!"
+            echo ""
+            echo "Your ios/Podfile must include this in post_install:"
+            echo "config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'"
+            echo ""
+            exit 1
+          fi
+          echo "✅ Podfile has Firebase fix"
+
       - name: Update CocoaPods specs
         script: |
           set -e
-          echo "🔄 Updating CocoaPods repository..."
-          
-          # Update specs to ensure we have latest pod definitions
           pod repo update
-          
-          echo "✅ CocoaPods specs updated"
 
-      # 📱 Install iOS pods WITH RETRY LOGIC
-      - name: Install iOS pods with retry
+      - name: Install iOS pods (with retry)
         script: |
           set -e
-          echo "📱 Installing iOS pods with retry logic..."
           cd ios
           
-          MAX_ATTEMPTS=3
-          ATTEMPT=1
-          SUCCESS=false
-          
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo ""
+          for ATTEMPT in 1 2 3; do
             echo "════════════════════════════════════════"
-            echo "Pod Install Attempt $ATTEMPT of $MAX_ATTEMPTS"
+            echo "Pod Install Attempt $ATTEMPT of 3"
             echo "════════════════════════════════════════"
-            echo ""
             
-            # Try to install pods
             if pod install --repo-update --verbose; then
-              echo ""
-              echo "✅ Pod install succeeded on attempt $ATTEMPT!"
-              SUCCESS=true
-              break
-            else
-              echo ""
-              echo "❌ Pod install failed on attempt $ATTEMPT"
-              
-              if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                echo "🔧 Cleaning up for retry..."
-                
-                # Clean up for retry
-                rm -rf Pods
-                rm -rf Podfile.lock
-                rm -rf .symlinks/plugins
-                rm -rf ~/Library/Caches/CocoaPods
-                pod cache clean --all
-                
-                echo "⏳ Waiting 10 seconds before retry..."
-                sleep 10
-              fi
-              
-              ATTEMPT=$((ATTEMPT + 1))
+              echo "✅ Pod install succeeded!"
+              cd ..
+              exit 0
+            fi
+            
+            echo "❌ Pod install failed on attempt $ATTEMPT"
+            
+            if [ $ATTEMPT -lt 3 ]; then
+              echo "Cleaning for retry..."
+              rm -rf Pods Podfile.lock .symlinks/plugins
+              pod cache clean --all
+              sleep 10
             fi
           done
           
+          echo "❌ Pod install failed after 3 attempts"
           cd ..
-          
-          if [ "$SUCCESS" = false ]; then
-            echo ""
-            echo "════════════════════════════════════════"
-            echo "❌ FATAL: Pod install failed after $MAX_ATTEMPTS attempts"
-            echo "════════════════════════════════════════"
-            exit 1
-          fi
+          exit 1
 
-      # 🗂️ Build iOS App
-      - name: Build iOS IPA
+      - name: Build iOS (no codesign)
         script: |
           set -e
-          echo "🗂️ Building iOS IPA..."
+          # Build Flutter framework and app without creating IPA
+          # This WON'T upgrade Podfile because we already ran pod install
+          flutter build ios --release --no-codesign
+
+      - name: Create archive
+        script: |
+          set -e
+          cd ios
           
-          # Build with verbose output
-          flutter build ipa \
-            --release \
-            --build-name="$FLUTTER_BUILD_NAME" \
-            --build-number="$FLUTTER_BUILD_NUMBER" \
-            --export-options-plist=export_options.plist \
-            --verbose
+          xcodebuild \
+            -workspace "$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -archivePath build/Runner.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates \
+            archive
           
-          echo "✅ IPA built successfully"
+          echo "✅ Archive created"
+          cd ..
+
+      - name: Export IPA
+        script: |
+          set -e
+          cd ios
+          
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/Runner.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist /Users/builder/export_options.plist \
+            -allowProvisioningUpdates
+          
+          # Copy to Flutter's expected location
+          mkdir -p ../build/ios/ipa
+          cp build/ipa/*.ipa ../build/ios/ipa/
+          
+          echo "✅ IPA exported"
+          ls -lh ../build/ios/ipa/
+          
+          cd ..
 
     artifacts:
       - build/ios/ipa/*.ipa
