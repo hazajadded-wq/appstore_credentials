@@ -46,14 +46,20 @@ workflows:
           # Clean Flutter
           flutter clean
           
-          # Clean iOS
+          # Clean iOS build artifacts
           rm -rf ios/Pods
           rm -rf ios/Podfile.lock
           rm -rf ios/build
+          rm -rf ios/.symlinks
           rm -rf ios/Runner.xcworkspace
           rm -rf ios/DerivedData
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
           
-          # Clean Flutter cache
+          # Clean CocoaPods cache
+          pod cache clean --all
+          rm -rf ~/Library/Caches/CocoaPods
+          
+          # Clean Flutter pub cache
           rm -rf ~/.pub-cache
           
           echo "✅ Project deep cleaned"
@@ -64,16 +70,30 @@ workflows:
           set -e
           echo "📦 Installing Flutter packages..."
           
-          # Try with specific resolver
-          flutter pub get --verbose
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
           
-          # If fails, try alternative versions
-          if [ $? -ne 0 ]; then
-            echo "⚠️ First attempt failed, trying with --no-precompile..."
-            flutter pub get --no-precompile --verbose
-          fi
-          
-          echo "✅ Flutter packages installed"
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            
+            if flutter pub get --verbose; then
+              echo "✅ Flutter packages installed successfully"
+              break
+            else
+              echo "⚠️ Flutter pub get failed on attempt $ATTEMPT"
+              
+              if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                echo "Retrying in 5 seconds..."
+                rm -rf ~/.pub-cache
+                sleep 5
+              else
+                echo "❌ Failed after $MAX_ATTEMPTS attempts"
+                exit 1
+              fi
+              
+              ATTEMPT=$((ATTEMPT + 1))
+            fi
+          done
 
       # 🔧 Verify Firebase files
       - name: Verify Firebase configuration
@@ -104,30 +124,78 @@ workflows:
           
           echo "✅ Firebase configuration verified"
 
-      # 📱 Install iOS pods
-      - name: Install iOS pods
+      # 🔄 Update CocoaPods repository
+      - name: Update CocoaPods specs
         script: |
           set -e
-          echo "📱 Installing iOS pods..."
+          echo "🔄 Updating CocoaPods repository..."
+          
+          # Update specs to ensure we have latest pod definitions
+          pod repo update
+          
+          echo "✅ CocoaPods specs updated"
+
+      # 📱 Install iOS pods WITH RETRY LOGIC
+      - name: Install iOS pods with retry
+        script: |
+          set -e
+          echo "📱 Installing iOS pods with retry logic..."
           cd ios
           
-          # Clean pod cache
-          pod cache clean --all
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          SUCCESS=false
           
-          # Deintegrate if needed
-          pod deintegrate || true
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo ""
+            echo "════════════════════════════════════════"
+            echo "Pod Install Attempt $ATTEMPT of $MAX_ATTEMPTS"
+            echo "════════════════════════════════════════"
+            echo ""
+            
+            # Try to install pods
+            if pod install --repo-update --verbose; then
+              echo ""
+              echo "✅ Pod install succeeded on attempt $ATTEMPT!"
+              SUCCESS=true
+              break
+            else
+              echo ""
+              echo "❌ Pod install failed on attempt $ATTEMPT"
+              
+              if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                echo "🔧 Cleaning up for retry..."
+                
+                # Clean up for retry
+                rm -rf Pods
+                rm -rf Podfile.lock
+                rm -rf .symlinks/plugins
+                rm -rf ~/Library/Caches/CocoaPods
+                pod cache clean --all
+                
+                echo "⏳ Waiting 10 seconds before retry..."
+                sleep 10
+              fi
+              
+              ATTEMPT=$((ATTEMPT + 1))
+            fi
+          done
           
-          # Install pods with verbose output
-          pod install --repo-update --verbose
-          
-          echo "✅ iOS pods installed"
           cd ..
+          
+          if [ "$SUCCESS" = false ]; then
+            echo ""
+            echo "════════════════════════════════════════"
+            echo "❌ FATAL: Pod install failed after $MAX_ATTEMPTS attempts"
+            echo "════════════════════════════════════════"
+            exit 1
+          fi
 
-      # 🏗️ Build iOS App
+      # 🗂️ Build iOS App
       - name: Build iOS IPA
         script: |
           set -e
-          echo "🏗️ Building iOS IPA..."
+          echo "🗂️ Building iOS IPA..."
           
           # Build with verbose output
           flutter build ipa \
