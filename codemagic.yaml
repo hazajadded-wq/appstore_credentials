@@ -37,18 +37,13 @@ workflows:
           
           echo "✅ Code signing configured"
 
-      # 🧹 Deep Clean Project
-      - name: Deep clean project
+      # 🧹 Clean Project
+      - name: Clean project
         script: |
           set -e
-          echo "🧹 Deep cleaning project..."
+          echo "🧹 Cleaning project..."
           flutter clean
-          
-          # Clean everything
-          rm -rf ios/Pods
-          rm -rf ios/Podfile.lock
-          rm -rf ios/build
-          rm -rf ios/DerivedData
+          rm -rf ios/Pods ios/Podfile.lock ios/build
           
           echo "✅ Project cleaned"
 
@@ -61,20 +56,27 @@ workflows:
           
           echo "✅ Flutter packages installed"
 
-      - name: Install iOS pods with Firebase
+      # 🔧 Update iOS Deployment Target for Firebase 16+
+      - name: Update iOS deployment target
         script: |
           set -e
-          echo "📱 Installing iOS pods with Firebase..."
+          echo "🔧 Updating iOS deployment target to 15.0 for Firebase..."
+          
+          # Update Podfile to iOS 15.0
+          sed -i '' "s/platform :ios, '[0-9]*\.[0-9]*'/platform :ios, '15.0'/g" ios/Podfile
+          echo "✅ Updated Podfile to iOS 15.0"
+
+      - name: Install iOS pods
+        script: |
+          set -e
+          echo "📱 Installing iOS pods..."
           cd ios
           
           # Clean pod cache
           pod cache clean --all
           
-          # Update CocoaPods repo
-          pod repo update
-          
-          # Install pods with verbose output
-          pod install --repo-update --clean-install --verbose
+          # Install pods
+          pod install --repo-update --verbose
           
           echo "✅ iOS pods installed"
           cd ..
@@ -109,10 +111,6 @@ workflows:
           set -e
           echo "🏗️ Building iOS IPA..."
           
-          # First build to generate files
-          flutter build ios --release --no-codesign --verbose
-          
-          # Then build IPA
           flutter build ipa \
             --release \
             --build-name="$FLUTTER_BUILD_NAME" \
