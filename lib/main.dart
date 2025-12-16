@@ -220,7 +220,7 @@ class NotificationManager extends ChangeNotifier {
 // GlobalKey للتنقل
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-// ✅ UPDATED: Background message handler for Firebase Messaging 16.x
+// ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // IMPORTANT: Initialize Firebase in background handler
@@ -249,7 +249,6 @@ void main() async {
   // Initialize date formatting for Arabic locale
   await initializeDateFormatting('ar_IQ', null);
 
-  // ✅ UPDATED: Initialize Firebase with APNs support
   debugPrint('''
   🚀 =================================
   🚀 Starting SalaryInfo Application
@@ -259,7 +258,9 @@ void main() async {
   ''');
 
   try {
-    // ✅ UPDATED: Initialize Firebase BEFORE anything else
+    // ✅ Initialize Firebase
+    debugPrint('🔄 Initializing Firebase...');
+
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
@@ -284,14 +285,14 @@ void main() async {
     debugPrint('⚠️ Continuing without Firebase features');
   }
 
-  // ✅ UPDATED: Register background message handler (MUST be after Firebase.initializeApp)
+  // ✅ Register background message handler
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Run the app
   runApp(const MyApp());
 }
 
-// ✅ UPDATED: Firebase Messaging configuration
+// ✅ Firebase Messaging configuration
 Future<void> configureFirebaseMessaging() async {
   try {
     final messaging = FirebaseMessaging.instance;
@@ -311,9 +312,7 @@ Future<void> configureFirebaseMessaging() async {
         '🔔 Notification permission status: ${settings.authorizationStatus}');
 
     // Get FCM token
-    String? token = await messaging.getToken(
-      vapidKey: null, // Remove vapidKey parameter for Firebase 16.x
-    );
+    String? token = await messaging.getToken();
     if (token != null) {
       debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
 
@@ -321,10 +320,10 @@ Future<void> configureFirebaseMessaging() async {
       await messaging.subscribeToTopic('all_employees');
       debugPrint('📧 Subscribed to topic: all_employees');
     } else {
-      debugPrint('⚠️ No FCM token received - check APNs configuration');
+      debugPrint('⚠️ No FCM token received');
     }
 
-    // ✅ UPDATED: Foreground message handler for Firebase 16.x
+    // Foreground message handler
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
@@ -335,7 +334,7 @@ Future<void> configureFirebaseMessaging() async {
       NotificationManager.instance.addFirebaseMessage(message);
     });
 
-    // ✅ UPDATED: Notification opened handler
+    // Notification opened handler
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       debugPrint('👆 Notification tapped! Opening notifications screen');
       debugPrint('📱 Message data: ${message.data}');
@@ -351,7 +350,7 @@ Future<void> configureFirebaseMessaging() async {
       });
     });
 
-    // ✅ UPDATED: Get initial message
+    // Get initial message
     RemoteMessage? initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('📱 App launched from notification');

@@ -1,8 +1,8 @@
 workflows:
-  salaryinfo-ios-apns:
-    name: SalaryInfo iOS with APNs
+  salaryinfo-ios-fix:
+    name: SalaryInfo iOS Crash Fix
     instance_type: mac_mini_m2
-    max_build_duration: 60
+    max_build_duration: 75
 
     environment:
       groups:
@@ -14,7 +14,7 @@ workflows:
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.11"
-        FLUTTER_BUILD_NUMBER: "5"
+        FLUTTER_BUILD_NUMBER: "6"
         
       flutter: stable
       xcode: latest
@@ -37,17 +37,28 @@ workflows:
           
           echo "✅ Code signing configured"
 
-      # 🧹 Clean Project
-      - name: Clean project
+      # 🧹 DEEP Clean Project
+      - name: Deep clean project
         script: |
           set -e
-          echo "🧹 Cleaning project..."
-          flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/build
+          echo "🧹 Deep cleaning project..."
           
-          echo "✅ Project cleaned"
+          # Clean Flutter
+          flutter clean
+          
+          # Clean iOS
+          rm -rf ios/Pods
+          rm -rf ios/Podfile.lock
+          rm -rf ios/build
+          rm -rf ios/Runner.xcworkspace
+          rm -rf ios/DerivedData
+          
+          # Clean Flutter cache
+          rm -rf ~/.pub-cache
+          
+          echo "✅ Project deep cleaned"
 
-      # 📦 Install Dependencies
+      # 📦 Install Flutter packages
       - name: Install Flutter packages
         script: |
           set -e
@@ -56,16 +67,36 @@ workflows:
           
           echo "✅ Flutter packages installed"
 
-      # 🔧 Update iOS Deployment Target for Firebase 16+
-      - name: Update iOS deployment target
+      # 🔧 Verify Firebase files
+      - name: Verify Firebase configuration
         script: |
           set -e
-          echo "🔧 Updating iOS deployment target to 15.0 for Firebase..."
+          echo "🔍 Verifying Firebase configuration..."
           
-          # Update Podfile to iOS 15.0
-          sed -i '' "s/platform :ios, '[0-9]*\.[0-9]*'/platform :ios, '15.0'/g" ios/Podfile
-          echo "✅ Updated Podfile to iOS 15.0"
+          # Check GoogleService-Info.plist exists
+          if [ -f "ios/Runner/GoogleService-Info.plist" ]; then
+            echo "✅ GoogleService-Info.plist found"
+            
+            # Check content
+            PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "NOT_FOUND")
+            BUNDLE_ID_PLIST=$(/usr/libexec/PlistBuddy -c "Print :BUNDLE_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "NOT_FOUND")
+            
+            echo "📊 Firebase Project ID: $PROJECT_ID"
+            echo "📊 Bundle ID in plist: $BUNDLE_ID_PLIST"
+            
+            if [ "$PROJECT_ID" = "scgfs-salary-app" ]; then
+              echo "✅ Correct Firebase Project"
+            else
+              echo "⚠️ Unexpected Firebase Project"
+            fi
+          else
+            echo "❌ GoogleService-Info.plist NOT FOUND!"
+            exit 1
+          fi
+          
+          echo "✅ Firebase configuration verified"
 
+      # 📱 Install iOS pods
       - name: Install iOS pods
         script: |
           set -e
@@ -75,35 +106,14 @@ workflows:
           # Clean pod cache
           pod cache clean --all
           
-          # Install pods
+          # Deintegrate if needed
+          pod deintegrate || true
+          
+          # Install pods with verbose output
           pod install --repo-update --verbose
           
           echo "✅ iOS pods installed"
           cd ..
-
-      # 🔍 Verify Firebase Configuration
-      - name: Verify Firebase setup
-        script: |
-          set -e
-          echo "🔍 Verifying Firebase configuration..."
-          
-          # Check GoogleService-Info.plist
-          if [ -f "ios/Runner/GoogleService-Info.plist" ]; then
-            echo "✅ GoogleService-Info.plist found"
-            
-            # Extract project ID
-            PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" ios/Runner/GoogleService-Info.plist 2>/dev/null || echo "")
-            if [ "$PROJECT_ID" = "scgfs-salary-app" ]; then
-              echo "✅ Correct Firebase Project: $PROJECT_ID"
-            else
-              echo "⚠️ Unexpected Firebase Project: $PROJECT_ID"
-            fi
-          else
-            echo "❌ GoogleService-Info.plist NOT FOUND!"
-            exit 1
-          fi
-          
-          echo "✅ Firebase configuration verified"
 
       # 🏗️ Build iOS App
       - name: Build iOS IPA
@@ -111,11 +121,12 @@ workflows:
           set -e
           echo "🏗️ Building iOS IPA..."
           
+          # Build with verbose output
           flutter build ipa \
             --release \
             --build-name="$FLUTTER_BUILD_NAME" \
             --build-number="$FLUTTER_BUILD_NUMBER" \
-            --export-options-plist=/Users/builder/export_options.plist \
+            --export-options-plist=export_options.plist \
             --verbose
           
           echo "✅ IPA built successfully"
@@ -123,6 +134,7 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+      - ios/Podfile.lock
 
     publishing:
       email:

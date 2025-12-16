@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>compileBitcode</key>
-    <true/>
+    <false/> <!-- Set to false for faster builds -->
     <key>destination</key>
     <string>export</string>
     <key>method</key>
@@ -24,7 +24,7 @@
     <key>thinning</key>
     <string>&lt;none&gt;</string>
     <key>uploadBitcode</key>
-    <true/>
+    <false/> <!-- Set to false -->
     <key>uploadSymbols</key>
     <true/>
 </dict>
