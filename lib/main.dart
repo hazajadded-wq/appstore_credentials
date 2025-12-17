@@ -248,9 +248,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('📱 Background FCM Message received: ${message.messageId}');
   debugPrint('📱 Message data: ${message.data}');
 
-  // Add to notification manager
-  await NotificationManager.instance.addFirebaseMessage(message);
-
   // Show notification if needed
   if (message.notification != null) {
     debugPrint('📱 Notification Title: ${message.notification!.title}');
@@ -264,7 +261,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize date formatting for Arabic locale
-  await initializeDateFormatting('ar_IQ', null);
+  await initializeDateFormatting('ar', null);
 
   debugPrint('''
   🚀 =================================
@@ -2059,8 +2056,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
-        ..setUserAgent(
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1')
         ..addJavaScriptChannel(
           'FlutterChannel',
           onMessageReceived: (JavaScriptMessage message) {
