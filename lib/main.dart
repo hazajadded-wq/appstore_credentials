@@ -16,7 +16,6 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:ui' as ui;
 import 'dart:async';
 import 'package:intl/intl.dart';
-import 'package:intl/date_symbol_data_local.dart';
 
 // Firebase imports
 import 'package:firebase_core/firebase_core.dart';
@@ -221,21 +220,6 @@ class NotificationManager extends ChangeNotifier {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
-Future<void> _setupNativeFirebaseDelegate() async {
-  if (Platform.isIOS) {
-    try {
-      // Now that Firebase is initialized, we can safely set up native delegates
-      final messaging = FirebaseMessaging.instance;
-
-      // This call will trigger the native AppDelegate MessagingDelegate methods
-      String? token = await messaging.getToken();
-      debugPrint(
-          "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
-    } catch (e) {
-      debugPrint("❌ Error setting up native Firebase delegate: $e");
-    }
-  }
-}
 
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
@@ -260,52 +244,24 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize date formatting for Arabic locale
-  await initializeDateFormatting('ar', null);
-
-  debugPrint('''
-  🚀 =================================
-  🚀 Starting SalaryInfo Application
-  🚀 Firebase Project: scgfs-salary-app
-  🚀 Bundle ID: com.pocket.salaryinfo
-  🚀 =================================
-  ''');
+  FlutterError.onError = (details) {
+    FlutterError.dumpErrorToConsole(details);
+  };
 
   try {
-    // ✅ Initialize Firebase
-    debugPrint('🔄 Initializing Firebase...');
-
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-
-    debugPrint('✅ Firebase initialized successfully');
-
-    // Test Firebase configuration
-    final app = Firebase.app();
-    debugPrint('✅ Firebase App Name: ${app.name}');
-    debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
-    debugPrint('✅ Firebase iOS Bundle ID: ${app.options.iosBundleId}');
-
-    // ✅ CRITICAL FIX: Setup native Firebase delegate after initialization
-    await _setupNativeFirebaseDelegate();
-
-    // Initialize Notification Manager
-    await NotificationManager.instance.loadNotifications();
-    debugPrint('✅ Notification Manager initialized');
-
-    // Configure Firebase Messaging
-    await configureFirebaseMessaging();
-  } catch (e, stackTrace) {
-    debugPrint('❌ Firebase initialization error: $e');
-    debugPrint('❌ Stack trace: $stackTrace');
-    debugPrint('⚠️ Continuing without Firebase features');
+    debugPrint('✅ Firebase initialized');
+  } catch (e, s) {
+    debugPrint('❌ Firebase init failed: $e');
+    debugPrintStack(stackTrace: s);
   }
 
-  // ✅ Register background message handler
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  // ❌ لا Messaging هنا
+  // ❌ لا SharedPreferences هنا
+  // ❌ لا Navigation هنا
 
-  // Run the app
   runApp(const MyApp());
 }
 
@@ -985,6 +941,9 @@ class _SplashScreenState extends State<SplashScreen>
           ),
         );
       }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await configureFirebaseMessaging();
     });
   }
 

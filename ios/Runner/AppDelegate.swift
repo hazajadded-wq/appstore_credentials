@@ -5,7 +5,7 @@ import FirebaseMessaging
 import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
+@objc class AppDelegate: FlutterAppDelegate, MessagingDelegate {
 
     override func application(
         _ application: UIApplication,
@@ -20,17 +20,16 @@ import UserNotifications
         ================================
         """)
 
-        // ✅ CRITICAL: Initialize Firebase FIRST (FIXES BLACK SCREEN)
+        // ✅ CRITICAL: Firebase init (FIXES BLACK SCREEN)
         FirebaseApp.configure()
-        print("Firebase configured successfully")
+        print("Firebase configured")
 
-        // ✅ Notification delegate
+        // ✅ Notification delegate (FlutterAppDelegate already conforms)
         if #available(iOS 10.0, *) {
             UNUserNotificationCenter.current().delegate = self
-            print("UNUserNotificationCenter delegate set")
         }
 
-        // ✅ Request notification permissions
+        // ✅ Request permission
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .badge, .sound]
         ) { granted, error in
@@ -41,16 +40,14 @@ import UserNotifications
             }
         }
 
-        // ✅ Register for APNs
+        // ✅ APNs
         application.registerForRemoteNotifications()
-        print("Registered for remote notifications")
 
-        // ✅ Firebase Messaging delegate (SAFE here)
+        // ✅ Firebase Messaging delegate
         Messaging.messaging().delegate = self
 
         // ✅ Flutter plugins
         GeneratedPluginRegistrant.register(with: self)
-        print("Flutter plugins registered")
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
@@ -63,7 +60,7 @@ import UserNotifications
         Messaging.messaging().apnsToken = deviceToken
 
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("APNs Device Token: \(tokenString)")
+        print("APNs token: \(tokenString)")
 
         super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
     }
@@ -72,29 +69,21 @@ import UserNotifications
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        print("Failed to register for remote notifications: \(error.localizedDescription)")
+        print("APNs registration failed: \(error.localizedDescription)")
         super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
     }
 
-    // MARK: - Firebase Messaging Token
+    // MARK: - FCM Token
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let token = fcmToken else {
             print("FCM token is nil")
             return
         }
 
-        print("FCM Token received: \(token)")
-
+        print("FCM token received: \(token)")
         UserDefaults.standard.set(token, forKey: "fcm_token")
 
-        // Subscribe to topic
-        Messaging.messaging().subscribe(toTopic: "all_employees") { error in
-            if let error = error {
-                print("Topic subscription failed: \(error.localizedDescription)")
-            } else {
-                print("Subscribed to topic: all_employees")
-            }
-        }
+        Messaging.messaging().subscribe(toTopic: "all_employees")
     }
 
     // MARK: - Foreground Notification
@@ -110,24 +99,23 @@ import UserNotifications
         }
     }
 
-    // MARK: - Background / Tap Notification
+    // MARK: - Notification Tap
     override func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let userInfo = response.notification.request.content.userInfo
-        print("Notification tapped: \(userInfo)")
+        print("Notification tapped")
         completionHandler()
     }
 
-    // MARK: - Silent Notifications
+    // MARK: - Silent Notification
     override func application(
         _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        print("Silent notification received: \(userInfo)")
+        print("Silent notification received")
         completionHandler(.newData)
     }
 }
