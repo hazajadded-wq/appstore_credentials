@@ -239,8 +239,13 @@ Future<void> _setupNativeFirebaseDelegate() async {
 
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const MyApp());
 }
 
@@ -379,12 +384,11 @@ class _MyAppState extends State<MyApp> {
   Future<void> _initializeApp() async {
     try {
       await initializeDateFormatting('ar', null);
-      await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform);
-      debugPrint('✅ Firebase initialized successfully');
+
       await _setupNativeFirebaseDelegate();
       await NotificationManager.instance.loadNotifications();
       await configureFirebaseMessaging();
+
       debugPrint('✅ App initialization completed');
     } catch (e, stackTrace) {
       debugPrint('❌ App initialization error: $e');

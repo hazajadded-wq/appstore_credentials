@@ -14,7 +14,7 @@ workflows:
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "5"
+        FLUTTER_BUILD_NUMBER: "6"
 
       flutter: "3.22.0"
       xcode: latest
