@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:ui' as ui;
 import 'dart:async';
 import 'package:intl/intl.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 // Firebase imports
 import 'package:firebase_core/firebase_core.dart';
@@ -220,48 +221,26 @@ class NotificationManager extends ChangeNotifier {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
+Future<void> _setupNativeFirebaseDelegate() async {
+  if (Platform.isIOS) {
+    try {
+      // Now that Firebase is initialized, we can safely set up native delegates
+      final messaging = FirebaseMessaging.instance;
+
+      // This call will trigger the native AppDelegate MessagingDelegate methods
+      String? token = await messaging.getToken();
+      debugPrint(
+          "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
+    } catch (e) {
+      debugPrint("❌ Error setting up native Firebase delegate: $e");
+    }
+  }
+}
 
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // IMPORTANT: Initialize Firebase in background handler
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  debugPrint('📱 Background FCM Message received: ${message.messageId}');
-  debugPrint('📱 Message data: ${message.data}');
-
-  // Show notification if needed
-  if (message.notification != null) {
-    debugPrint('📱 Notification Title: ${message.notification!.title}');
-    debugPrint('📱 Notification Body: ${message.notification!.body}');
-  }
-
-  debugPrint('✅ Background message processed successfully');
-}
-
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  FlutterError.onError = (details) {
-    FlutterError.dumpErrorToConsole(details);
-  };
-
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    debugPrint('✅ Firebase initialized');
-  } catch (e, s) {
-    debugPrint('❌ Firebase init failed: $e');
-    debugPrintStack(stackTrace: s);
-  }
-
-  // ❌ لا Messaging هنا
-  // ❌ لا SharedPreferences هنا
-  // ❌ لا Navigation هنا
-
   runApp(const MyApp());
 }
 
@@ -383,8 +362,35 @@ final ThemeData appTheme = ThemeData(
   ),
 );
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({Key? key}) : super(key: key);
+
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    try {
+      await initializeDateFormatting('ar', null);
+      await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform);
+      debugPrint('✅ Firebase initialized successfully');
+      await _setupNativeFirebaseDelegate();
+      await NotificationManager.instance.loadNotifications();
+      await configureFirebaseMessaging();
+      debugPrint('✅ App initialization completed');
+    } catch (e, stackTrace) {
+      debugPrint('❌ App initialization error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -941,10 +947,6 @@ class _SplashScreenState extends State<SplashScreen>
           ),
         );
       }
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await configureFirebaseMessaging();
     });
   }
 
@@ -2016,6 +2018,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
+        ..setUserAgent(
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1')
         ..setUserAgent(
             'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1')
         ..addJavaScriptChannel(
