@@ -942,6 +942,7 @@ class _SplashScreenState extends State<SplashScreen>
         );
       }
     });
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await configureFirebaseMessaging();
     });
