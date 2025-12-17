@@ -2686,7 +2686,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   if (Platform.isAndroid) {
                     SystemNavigator.pop();
                   } else if (Platform.isIOS) {
-                    exit(0);
+                    Navigator.of(context).popUntil((route) => route.isFirst);
                   }
                 },
                 style: ElevatedButton.styleFrom(
