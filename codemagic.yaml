@@ -1,136 +1,89 @@
 workflows:
-  salaryinfo-ios-fix:
-    name: SalaryInfo iOS Build
+  salaryinfo-ios:
+    name: SalaryInfo iOS (Stable)
     instance_type: mac_mini_m2
     max_build_duration: 75
 
     environment:
       groups:
         - appstore_credentials
-      
+
       vars:
         BUNDLE_ID: "com.pocket.salaryinfo"
         APP_STORE_APPLE_ID: 6756042000
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.11"
-        FLUTTER_BUILD_NUMBER: "8"
-        
+        FLUTTER_BUILD_NUMBER: "9"
+
       flutter: "3.22.0"
       xcode: latest
       cocoapods: default
 
     scripts:
+      # --------------------------------------------------
+      # 1) Code signing
+      # --------------------------------------------------
       - name: Setup code signing
         script: |
           set -e
           keychain initialize
-          
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
-          
+
           keychain add-certificates
           xcode-project use-profiles
 
-      - name: Force clean Flutter
-        script: |
-          set -e
-          echo "🧹 Force cleaning Flutter..."
-          
-          # Remove Flutter cached artifacts
-          rm -rf $FLUTTER_ROOT/.pub-cache
-          
-          # Clean Flutter build cache
-          flutter pub cache clean --force
-          
-          echo "✅ Flutter cleaned"
-
-      - name: Clean build
+      # --------------------------------------------------
+      # 2) Clean project (SAFE CLEAN ONLY)
+      # --------------------------------------------------
+      - name: Clean project
         script: |
           set -e
           flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build ios/Runner.xcworkspace
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          pod cache clean --all
-          
-          # Clean CocoaPods cache more aggressively
-          pod deintegrate || true
-          rm -rf ~/Library/Caches/CocoaPods
-          
-          echo "✅ Build cleaned"
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build
+          echo "✅ Safe clean completed"
 
+      # --------------------------------------------------
+      # 3) Get Flutter packages
+      # --------------------------------------------------
       - name: Get Flutter packages
         script: |
           set -e
           flutter pub get
           echo "✅ Flutter packages installed"
 
-      - name: Verify Podfile has Firebase fix
-        script: |
-          set -e
-          if ! grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES" ios/Podfile; then
-            echo "❌ ERROR: Podfile missing Firebase fix!"
-            echo "Your ios/Podfile must have this line in post_install:"
-            echo "config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'"
-            exit 1
-          fi
-          echo "✅ Podfile has Firebase fix"
-
-      - name: Install pods (with retry and verbose)
+      # --------------------------------------------------
+      # 4) Install CocoaPods (NO aggressive cache delete)
+      # --------------------------------------------------
+      - name: Install CocoaPods
         script: |
           set -e
           cd ios
-          
-          # First, ensure pod repo is updated
-          echo "📦 Updating CocoaPods repo..."
           pod repo update
-          
-          for ATTEMPT in 1 2 3; do
-            echo "════════════════════════════════════════"
-            echo "Pod Install Attempt $ATTEMPT of 3"
-            echo "════════════════════════════════════════"
-            
-            # Try with verbose output
-            if pod install --repo-update --verbose; then
-              echo "✅ Pod install succeeded!"
-              
-              # Verify the settings were applied
-              echo "🔍 Checking build settings..."
-              if xcodebuild -workspace Runner.xcworkspace -scheme Runner -showBuildSettings | grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES"; then
-                echo "✅ Build setting verified"
-              else
-                echo "⚠️ Build setting not found in project"
-              fi
-              
-              cd ..
-              exit 0
-            fi
-            
-            if [ $ATTEMPT -lt 3 ]; then
-              echo "🔄 Retrying..."
-              rm -rf Pods Podfile.lock
-              pod cache clean --all
-              sleep 5
-            fi
-          done
-          
-          echo "❌ Pod install failed after 3 attempts"
+          pod install --repo-update
           cd ..
-          exit 1
+          echo "✅ Pods installed"
 
+      # --------------------------------------------------
+      # 5) Build Flutter iOS framework
+      # --------------------------------------------------
       - name: Build Flutter framework
         script: |
           set -e
-          # Build WITHOUT creating IPA - this won't upgrade Podfile
           flutter build ios --release --no-codesign
           echo "✅ Flutter framework built"
 
+      # --------------------------------------------------
+      # 6) Create Xcode archive
+      # --------------------------------------------------
       - name: Create Xcode archive
         script: |
           set -e
           cd ios
-          
+
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -138,32 +91,33 @@ workflows:
             -archivePath build/Runner.xcarchive \
             -destination 'generic/platform=iOS' \
             archive
-          
-          echo "✅ Archive created"
-          cd ..
 
+          cd ..
+          echo "✅ Archive created"
+
+      # --------------------------------------------------
+      # 7) Export IPA
+      # --------------------------------------------------
       - name: Export IPA
         script: |
           set -e
           cd ios
-          
+
           xcodebuild \
             -exportArchive \
             -archivePath build/Runner.xcarchive \
             -exportPath build/ipa \
             -exportOptionsPlist /Users/builder/export_options.plist
-          
+
           mkdir -p ../build/ios/ipa
           cp build/ipa/*.ipa ../build/ios/ipa/
-          
-          echo "✅ IPA exported successfully"
-          ls -lh ../build/ios/ipa/
-          
+
           cd ..
+          echo "✅ IPA exported"
+          ls -lh build/ios/ipa/
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
       - ios/Podfile.lock
 
     publishing:
@@ -173,7 +127,7 @@ workflows:
         notify:
           success: true
           failure: true
-      
+
       app_store_connect:
         auth: integration
         submit_to_testflight: true

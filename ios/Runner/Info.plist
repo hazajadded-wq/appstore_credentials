@@ -1,26 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+
     <!-- ================= App Identity ================= -->
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
+
     <key>CFBundleDisplayName</key>
     <string>بوابة الموظف الرقمية</string>
+
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
+
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+
     <key>CFBundleName</key>
     <string>salaryinfo</string>
+
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+
     <key>CFBundleShortVersionString</key>
     <string>$(FLUTTER_BUILD_NAME)</string>
+
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
+
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
@@ -29,6 +40,7 @@
     <array>
         <integer>1</integer>
     </array>
+
     <key>UIRequiresFullScreen</key>
     <true/>
 
@@ -46,6 +58,13 @@
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
 
+    <!-- ================= Scene Configuration (CRITICAL FIX) ================= -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+
     <!-- ================= WebView / HTTP ================= -->
     <key>NSAppTransportSecurity</key>
     <dict>
@@ -62,30 +81,27 @@
     <!-- ================= Photos ================= -->
     <key>NSPhotoLibraryUsageDescription</key>
     <string>يحتاج التطبيق إلى الوصول إلى الصور لعرض وحفظ قسائم الرواتب.</string>
+
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>يحتاج التطبيق إلى حفظ قسائم الرواتب في معرض الصور.</string>
 
-    <!-- ================= NOTIFICATIONS & APNs ================= -->
+    <!-- ================= Notifications ================= -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
 
-    <!-- ⚠️ IMPORTANT: REMOVE ALL FirebaseAppDelegateProxyEnabled entries -->
-    <!-- Let FlutterFire handle Firebase initialization automatically -->
-
-    <!-- ================= APNs Configuration ================= -->
-    <key>APNS_KEY_ID</key>
-    <string>F8G869W434</string>
-    <key>APNS_TEAM_ID</key>
-    <string>PH3LN58YFU</string>
-    <key>APNS_ENVIRONMENT</key>
-    <string>production</string>
-
-    <!-- ================= Additional Settings ================= -->
-    <key>ITSAppUsesNonExemptEncryption</key>
+    <!-- ================= Firebase ================= -->
+    <key>FirebaseAppDelegateProxyEnabled</key>
     <false/>
+
+    <!-- ================= Flutter ================= -->
     <key>io.flutter.embedded_views_preview</key>
     <true/>
+
+    <!-- ================= Security ================= -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+
 </dict>
 </plist>
