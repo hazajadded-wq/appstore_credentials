@@ -220,6 +220,23 @@ class NotificationManager extends ChangeNotifier {
 // GlobalKey للتنقل
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+// ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
+Future<void> _setupNativeFirebaseDelegate() async {
+  if (Platform.isIOS) {
+    try {
+      // Now that Firebase is initialized, we can safely set up native delegates
+      final messaging = FirebaseMessaging.instance;
+
+      // This call will trigger the native AppDelegate MessagingDelegate methods
+      String? token = await messaging.getToken();
+      debugPrint(
+          "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
+    } catch (e) {
+      debugPrint("❌ Error setting up native Firebase delegate: $e");
+    }
+  }
+}
+
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -272,6 +289,9 @@ void main() async {
     debugPrint('✅ Firebase App Name: ${app.name}');
     debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
     debugPrint('✅ Firebase iOS Bundle ID: ${app.options.iosBundleId}');
+
+    // ✅ CRITICAL FIX: Setup native Firebase delegate after initialization
+    await _setupNativeFirebaseDelegate();
 
     // Initialize Notification Manager
     await NotificationManager.instance.loadNotifications();
