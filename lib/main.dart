@@ -237,99 +237,6 @@ Future<void> _setupNativeFirebaseDelegate() async {
   }
 }
 
-// ✅ Background message handler for Firebase Messaging
-@pragma('vm:entry-point')
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  runApp(const MyApp());
-}
-
-// ✅ Firebase Messaging configuration
-Future<void> configureFirebaseMessaging() async {
-  try {
-    final messaging = FirebaseMessaging.instance;
-
-    // Request notification permissions
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      announcement: false,
-      badge: true,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
-      sound: true,
-    );
-
-    debugPrint(
-        '🔔 Notification permission status: ${settings.authorizationStatus}');
-
-    // Get FCM token
-    String? token = await messaging.getToken();
-    if (token != null) {
-      debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
-
-      // Subscribe to topic
-      await messaging.subscribeToTopic('all_employees');
-      debugPrint('📧 Subscribed to topic: all_employees');
-    } else {
-      debugPrint('⚠️ No FCM token received');
-    }
-
-    // Foreground message handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
-      debugPrint('📱 Title: ${message.notification?.title}');
-      debugPrint('📱 Body: ${message.notification?.body}');
-      debugPrint('📱 Data: ${message.data}');
-
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-    });
-
-    // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('👆 Notification tapped! Opening notifications screen');
-      debugPrint('📱 Message data: ${message.data}');
-
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-
-      // Navigate to notifications screen
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-      });
-    });
-
-    // Get initial message
-    RemoteMessage? initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint('📱 App launched from notification');
-      debugPrint('📱 Initial message data: ${initialMessage.data}');
-
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
-
-      Future.delayed(const Duration(seconds: 1), () {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-      });
-    }
-
-    debugPrint('✅ Firebase Messaging configured successfully');
-  } catch (e, stackTrace) {
-    debugPrint('❌ Firebase Messaging configuration error: $e');
-    debugPrint('❌ Stack trace: $stackTrace');
-    debugPrint('⚠️ Push notifications may not work');
-  }
-}
-
 final ThemeData appTheme = ThemeData(
   primarySwatch: Colors.teal,
   useMaterial3: true,
@@ -375,6 +282,9 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  bool _initialized =
+      false; // Add this flag to prevent multiple initializations
+
   @override
   void initState() {
     super.initState();
@@ -382,14 +292,18 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _initializeApp() async {
+    if (_initialized) return; // Prevent multiple initializations
+
     try {
       await initializeDateFormatting('ar', null);
-
+      await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform);
+      debugPrint('✅ Firebase initialized successfully');
       await _setupNativeFirebaseDelegate();
       await NotificationManager.instance.loadNotifications();
       await configureFirebaseMessaging();
-
       debugPrint('✅ App initialization completed');
+      _initialized = true; // Mark as initialized
     } catch (e, stackTrace) {
       debugPrint('❌ App initialization error: $e');
       debugPrint('❌ Stack trace: $stackTrace');
@@ -1288,6 +1202,92 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
           ],
         ));
+  }
+}
+
+// ✅ Firebase Messaging configuration
+Future<void> configureFirebaseMessaging() async {
+  bool configured = false; // Add static flag to prevent multiple configurations
+  // ignore: dead_code
+  if (configured) return;
+
+  try {
+    final messaging = FirebaseMessaging.instance;
+
+    // Request notification permissions
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
+      provisional: false,
+      sound: true,
+    );
+
+    debugPrint(
+        '🔔 Notification permission status: ${settings.authorizationStatus}');
+
+    // Get FCM token
+    String? token = await messaging.getToken();
+    if (token != null) {
+      debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
+
+      // Subscribe to topic
+      await messaging.subscribeToTopic('all_employees');
+      debugPrint('📧 Subscribed to topic: all_employees');
+    } else {
+      debugPrint('⚠️ No FCM token received');
+    }
+
+    // Foreground message handler
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
+      debugPrint('📱 Title: ${message.notification?.title}');
+      debugPrint('📱 Body: ${message.notification?.body}');
+      debugPrint('📱 Data: ${message.data}');
+
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
+    });
+
+    // Notification opened handler
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('👆 Notification tapped! Opening notifications screen');
+      debugPrint('📱 Message data: ${message.data}');
+
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
+
+      // Navigate to notifications screen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
+    });
+
+    // Get initial message
+    RemoteMessage? initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('📱 App launched from notification');
+      debugPrint('📱 Initial message data: ${initialMessage.data}');
+
+      NotificationManager.instance.addFirebaseMessage(initialMessage);
+
+      Future.delayed(const Duration(seconds: 1), () {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
+    }
+
+    configured = true; // Mark as configured
+    debugPrint('✅ Firebase Messaging configured successfully');
+  } catch (e, stackTrace) {
+    debugPrint('❌ Firebase Messaging configuration error: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('⚠️ Push notifications may not work');
   }
 }
 
@@ -2916,4 +2916,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
       ),
     );
   }
+}
+
+// ✅ Add the correct main function at the bottom of the file
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const MyApp());
 }
