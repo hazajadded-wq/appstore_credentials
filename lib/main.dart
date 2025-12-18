@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -18,8 +19,22 @@ import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 // Firebase imports
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+// ✅ Background message handler for Firebase Messaging (MUST be top-level function)
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  debugPrint('📱 Background message: ${message.messageId}');
+  debugPrint('📱 Title: ${message.notification?.title}');
+  debugPrint('📱 Body: ${message.notification?.body}');
+  debugPrint('📱 Data: ${message.data}');
+
+  // Add notification to local storage
+  await NotificationManager.instance.addFirebaseMessage(message);
+}
 
 // نموذج بيانات الإشعار
 class NotificationItem {
@@ -293,8 +308,8 @@ class _MyAppState extends State<MyApp> {
     if (_initialized) return; // Prevent multiple initializations
 
     try {
-      // ✅ Firebase is initialized in AppDelegate.swift (line 24)
-      // No need for Firebase.initializeApp() here to prevent double initialization
+      // ✅ Firebase is already initialized in main() function
+      // No need for Firebase.initializeApp() here to prevent double initialization crash
 
       await initializeDateFormatting('ar', null);
 
@@ -2919,7 +2934,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
 }
 
 // ✅ Add the correct main function at the bottom of the file
-void main() {
+// ✅ Main function - CRASH-FREE Firebase initialization
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    // ✅ Initialize Firebase first (CRITICAL for iOS)
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    debugPrint('🔥 Firebase initialized successfully');
+
+    // ✅ Set background message handler AFTER Firebase init
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    debugPrint('📱 Background message handler set');
+
+    debugPrint('✅ App main initialization completed successfully');
+  } catch (e, stackTrace) {
+    debugPrint('❌ App main initialization error: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
+  }
+
   runApp(const MyApp());
 }

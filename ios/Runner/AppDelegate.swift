@@ -1,11 +1,8 @@
 import UIKit
 import Flutter
-import Firebase
-import FirebaseMessaging
-import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, MessagingDelegate {
+@objc class AppDelegate: FlutterAppDelegate {
 
     override func application(
         _ application: UIApplication,
@@ -16,108 +13,39 @@ import UserNotifications
         ================================
         SalaryInfo App Launching
         Bundle ID: com.pocket.salaryinfo
-        Firebase Project: scgfs-salary-app
+        Mode: CRASH-FREE (Firebase in Dart)
+        Version: 1.0.12 Build 8
         ================================
         """)
 
-        // ✅ CRITICAL: Firebase init (FIXES BLACK SCREEN)
-        // This is the ONLY place Firebase should be initialized
-        // Do NOT add Firebase.initializeApp() in main.dart to prevent double initialization crash
-        FirebaseApp.configure()
-        print("Firebase configured")
-
-        // ✅ Notification delegate (FlutterAppDelegate already conforms)
-        if #available(iOS 10.0, *) {
-            UNUserNotificationCenter.current().delegate = self
-        }
-
-        // ✅ Request permission
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: [.alert, .badge, .sound]
-        ) { granted, error in
-            if let error = error {
-                print("Notification permission error: \(error.localizedDescription)")
-            } else {
-                print("Notification permission granted: \(granted)")
-            }
-        }
-
-        // ✅ APNs
-        application.registerForRemoteNotifications()
-
-        // ✅ Firebase Messaging delegate
-        Messaging.messaging().delegate = self
-
-        // ✅ Flutter plugins
+        // Generate plugins for Flutter
         GeneratedPluginRegistrant.register(with: self)
 
-        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+        // Call super implementation
+        let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+        
+        print("App initialization completed successfully")
+        
+        return result
     }
-
-    // MARK: - APNs Token
-    override func application(
-        _ application: UIApplication,
-        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-    ) {
-        Messaging.messaging().apnsToken = deviceToken
-
-        let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("APNs token: \(tokenString)")
-
-        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    
+    override func applicationDidEnterBackground(_ application: UIApplication) {
+        print("App entered background")
+        super.applicationDidEnterBackground(application)
     }
-
-    override func application(
-        _ application: UIApplication,
-        didFailToRegisterForRemoteNotificationsWithError error: Error
-    ) {
-        print("APNs registration failed: \(error.localizedDescription)")
-        super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+    
+    override func applicationWillEnterForeground(_ application: UIApplication) {
+        print("App will enter foreground")
+        super.applicationWillEnterForeground(application)
     }
-
-    // MARK: - FCM Token
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        guard let token = fcmToken else {
-            print("FCM token is nil")
-            return
-        }
-
-        print("FCM token received: \(token)")
-        UserDefaults.standard.set(token, forKey: "fcm_token")
-
-        Messaging.messaging().subscribe(toTopic: "all_employees")
+    
+    override func applicationDidBecomeActive(_ application: UIApplication) {
+        print("App became active")
+        super.applicationDidBecomeActive(application)
     }
-
-    // MARK: - Foreground Notification
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge])
-        } else {
-            completionHandler([.alert, .sound, .badge])
-        }
-    }
-
-    // MARK: - Notification Tap
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
-    ) {
-        print("Notification tapped")
-        completionHandler()
-    }
-
-    // MARK: - Silent Notification
-    override func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        print("Silent notification received")
-        completionHandler(.newData)
+    
+    override func applicationWillTerminate(_ application: UIApplication) {
+        print("App will terminate")
+        super.applicationWillTerminate(application)
     }
 }
