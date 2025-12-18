@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -19,7 +18,6 @@ import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 // Firebase imports
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -295,13 +293,15 @@ class _MyAppState extends State<MyApp> {
     if (_initialized) return; // Prevent multiple initializations
 
     try {
+      // ✅ Firebase is initialized in AppDelegate.swift (line 24)
+      // No need for Firebase.initializeApp() here to prevent double initialization
+
       await initializeDateFormatting('ar', null);
-      await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform);
-      debugPrint('✅ Firebase initialized successfully');
+
       await _setupNativeFirebaseDelegate();
       await NotificationManager.instance.loadNotifications();
       await configureFirebaseMessaging();
+
       debugPrint('✅ App initialization completed');
       _initialized = true; // Mark as initialized
     } catch (e, stackTrace) {

@@ -21,6 +21,8 @@ import UserNotifications
         """)
 
         // ✅ CRITICAL: Firebase init (FIXES BLACK SCREEN)
+        // This is the ONLY place Firebase should be initialized
+        // Do NOT add Firebase.initializeApp() in main.dart to prevent double initialization crash
         FirebaseApp.configure()
         print("Firebase configured")
 
