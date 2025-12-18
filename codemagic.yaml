@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios:
-    name: SalaryInfo iOS (Firebase Fixed)
+    name: SalaryInfo iOS (Firebase Modular Headers Fixed)
     instance_type: mac_mini_m2
     max_build_duration: 90
 
@@ -23,28 +23,34 @@ workflows:
 
     scripts:
       # --------------------------------------------------
-      # 1) Enhanced Clean Process
+      # 1) AGGRESSIVE Clean Process for Firebase Issues
       # --------------------------------------------------
-      - name: Enhanced Clean
+      - name: Aggressive Clean for Firebase
         script: |
           set -e
-          echo "🧹 Enhanced cleaning process..."
+          echo "🧹 AGGRESSIVE cleaning for Firebase modular headers issue..."
           
           # Flutter clean
           flutter clean
           
-          # Remove iOS build artifacts
+          # Remove ALL iOS build artifacts
           rm -rf ios/Pods
           rm -rf ios/.symlinks
           rm -rf ios/Flutter/Flutter.framework
           rm -rf ios/Flutter/Flutter.podspec
           rm -rf ios/Runner.xcworkspace
+          rm -rf ios/build
           rm -f ios/Podfile.lock
           
-          # Clear pod cache
-          pod cache clean --all || true
+          # Remove derived data and other caches
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+          rm -rf ~/.pub-cache/hosted/pub.dev/firebase_messaging*
           
-          echo "✅ Enhanced clean completed"
+          # Clear ALL pod caches
+          pod cache clean --all
+          pod repo update
+          
+          echo "✅ AGGRESSIVE clean completed"
 
       # --------------------------------------------------
       # 2) Setup code signing
@@ -60,38 +66,161 @@ workflows:
           xcode-project use-profiles
 
       # --------------------------------------------------
-      # 3) Get Flutter packages
+      # 3) Get Flutter packages with clean cache
       # --------------------------------------------------
       - name: Get Flutter packages
         script: |
           set -e
+          echo "📦 Getting Flutter packages with clean cache..."
+          
+          # Clear pub cache for problematic packages
+          flutter pub cache clean
           flutter pub get
+          
           echo "✅ Flutter packages fetched"
 
       # --------------------------------------------------
-      # 4) Copy fixed Podfile and install CocoaPods
+      # 4) Apply Firebase Modular Headers Fix
       # --------------------------------------------------
-      - name: Setup CocoaPods with Firebase fixes
+      - name: Apply Firebase Modular Headers Fix
+        script: |
+          set -e
+          echo "🔧 Applying Firebase modular headers fix..."
+          
+          cd ios
+          
+          # Create backup of original Podfile
+          if [ -f "Podfile" ]; then
+            cp Podfile Podfile.backup
+            echo "📄 Original Podfile backed up"
+          fi
+          
+          # Create enhanced Podfile with Firebase fixes
+          cat > Podfile << 'EOF'
+          # Uncomment this line to define a global platform for your project
+          platform :ios, '12.0'
+
+          # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+          project 'Runner', {
+            'Debug' => :debug,
+            'Profile' => :release,
+            'Release' => :release,
+          }
+
+          def flutter_root
+            generated_xcode_build_settings_path = File.expand_path(
+              File.join('..', 'Flutter', 'Generated.xcconfig'),
+              __FILE__
+            )
+            unless File.exist?(generated_xcode_build_settings_path)
+              raise "#{generated_xcode_build_settings_path} must exist. Run flutter pub get first."
+            end
+
+            File.foreach(generated_xcode_build_settings_path) do |line|
+              matches = line.match(/FLUTTER_ROOT\=(.*)/)
+              return matches[1].strip if matches
+            end
+
+            raise "FLUTTER_ROOT not found in Generated.xcconfig"
+          end
+
+          require File.expand_path(
+            File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
+            flutter_root
+          )
+
+          flutter_ios_podfile_setup
+
+          target 'Runner' do
+            use_frameworks! :linkage => :static
+            use_modular_headers!
+
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+            
+            target 'RunnerTests' do
+              inherit! :search_paths
+            end
+          end
+
+          # CRITICAL: Enhanced post_install for Firebase modular headers fix
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+
+              target.build_configurations.each do |config|
+                # Basic iOS settings
+                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '12.0'
+                config.build_settings['ENABLE_BITCODE'] = 'NO'
+                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+                
+                # CRITICAL: Main fix for Firebase modular headers
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                config.build_settings['DEFINES_MODULE'] = 'YES'
+                config.build_settings['SWIFT_VERSION'] = '5.0'
+                
+                # Additional Xcode 14+ compatibility fixes
+                config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386'
+                
+                # CRITICAL: Specific Firebase messaging fixes
+                if target.name == 'firebase_messaging' || target.name.include?('firebase_messaging')
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                  config.build_settings['CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF'] = 'NO'
+                end
+                
+                # Apply to all Firebase pods
+                if target.name.start_with?('Firebase') || target.name.include?('Firebase')
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                  config.build_settings['CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF'] = 'NO'
+                end
+                
+                # Apply to FlutterFire related pods
+                if target.name.include?('FLTFirebase') || target.name.include?('flutterfire')
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                end
+              end
+            end
+            
+            # ADDITIONAL: Fix for specific header path issues
+            installer.pods_project.build_configurations.each do |config|
+              config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+            end
+          end
+          EOF
+          
+          echo "✅ Enhanced Podfile with Firebase fixes created"
+          cd ..
+
+      # --------------------------------------------------
+      # 5) Install CocoaPods with Firebase fixes
+      # --------------------------------------------------
+      - name: Install CocoaPods with Firebase fixes
         script: |
           set -e
           cd ios
           
-          # Copy the fixed Podfile (make sure it's in your repository)
-          echo "📄 Using fixed Podfile for Firebase compatibility"
+          echo "📦 Installing CocoaPods with Firebase modular headers fixes..."
           
-          # Update CocoaPods repo
-          echo "🔄 Updating CocoaPods repo..."
-          pod repo update
+          # Install with clean, verbose output for debugging
+          pod install --clean-install --verbose --repo-update
           
-          # Install with verbose output for debugging
-          echo "📦 Installing CocoaPods dependencies..."
-          pod install --verbose --clean-install
+          # Verify workspace was created
+          if [ -f "Runner.xcworkspace/contents.xcworkspacedata" ]; then
+            echo "✅ Xcode workspace created successfully"
+          else
+            echo "❌ Xcode workspace not found"
+            exit 1
+          fi
           
           cd ..
           echo "✅ CocoaPods setup completed with Firebase fixes"
 
       # --------------------------------------------------
-      # 5) Firebase Configuration Check
+      # 6) Verify Firebase Configuration
       # --------------------------------------------------
       - name: Verify Firebase Configuration
         script: |
@@ -106,34 +235,37 @@ workflows:
             exit 1
           fi
           
-          # Check iOS workspace
-          if [ -f "ios/Runner.xcworkspace/contents.xcworkspacedata" ]; then
-            echo "✅ Xcode workspace created successfully"
+          # Check for Firebase pods in workspace
+          if grep -q "firebase_messaging" ios/Podfile.lock; then
+            echo "✅ Firebase messaging pod found"
           else
-            echo "❌ Xcode workspace not found"
-            exit 1
+            echo "⚠️ Firebase messaging pod not found in Podfile.lock"
           fi
           
           echo "✅ Firebase configuration verified"
 
       # --------------------------------------------------
-      # 6) Build iOS app with enhanced settings
+      # 7) Build iOS app with enhanced settings
       # --------------------------------------------------
-      - name: Build iOS app
+      - name: Build iOS app with Firebase fixes
         script: |
           set -e
-          echo "🔨 Building iOS app with Firebase fixes..."
+          echo "🔨 Building iOS app with Firebase modular headers fixes..."
+          
+          # Set additional environment variables for Firebase
+          export CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES
           
           flutter build ipa \
             --release \
             --export-options-plist=/Users/builder/export_options.plist \
             --verbose
             
-          echo "✅ iOS build completed successfully"
+          echo "✅ iOS build completed successfully with Firebase fixes"
 
     artifacts:
       - build/ios/ipa/*.ipa
       - ios/Runner.xcarchive/**/*
+      - ios/Podfile.lock
 
     publishing:
       app_store_connect:
