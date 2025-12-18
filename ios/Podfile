@@ -28,25 +28,18 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  use_frameworks! :linkage => :static  # ✅ Use static frameworks
-  
-  # ✅ IMPORTANT: Install all Flutter pods
+  use_frameworks!
+  use_modular_headers!
+
+  # ✅ Let FlutterFire handle Firebase dependencies automatically
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-  
-  # ✅ CRITICAL: Firebase pods (if not already included by FlutterFire)
-  pod 'Firebase/Core', '~> 10.20.0'
-  pod 'Firebase/Messaging', '~> 10.20.0'
-  pod 'Firebase/Analytics', '~> 10.20.0'
 end
 
+# ✅ SIMPLIFIED post_install hook
 post_install do |installer|
-  # ✅ CRITICAL FIX: Apply Flutter settings first
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-  end
-  
-  # ✅ Apply additional settings for all pods
-  installer.pods_project.targets.each do |target|
+    
     target.build_configurations.each do |config|
       # Set deployment target
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
@@ -57,37 +50,8 @@ post_install do |installer|
       # Disable bitcode
       config.build_settings['ENABLE_BITCODE'] = 'NO'
       
-      # ✅ CRITICAL: Fix for Firebase non-modular headers
+      # Fix for Firebase
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-      
-      # Explicitly set Swift version
-      config.build_settings['SWIFT_VERSION'] = '5.0'
-      
-      # Build for all architectures
-      config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
-      
-      # ✅ CRITICAL: Enable Always Embed Swift Standard Libraries
-      config.build_settings['ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES'] = 'YES'
-      
-      # ✅ CRITICAL: Set build library for distribution to NO
-      config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'NO'
     end
   end
-  
-  # ✅ Additional Firebase-specific fix at project level
-  installer.pods_project.build_configurations.each do |config|
-    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-    config.build_settings['DEFINES_MODULE'] = 'YES'
-  end
-  
-  # ✅ Also apply to Runner project
-  runner_project = installer.aggregate_targets.first.user_project
-  runner_project.build_configurations.each do |config|
-    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-    config.build_settings['DEFINES_MODULE'] = 'YES'
-    config.build_settings['ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES'] = 'YES'
-    config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'NO'
-    config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
-  end
-  runner_project.save
 end

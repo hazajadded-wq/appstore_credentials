@@ -1,6 +1,6 @@
 workflows:
   salaryinfo-ios:
-    name: SalaryInfo iOS (Stable - FIXED)
+    name: SalaryInfo iOS (Simplified Build)
     instance_type: mac_mini_m2
     max_build_duration: 75
 
@@ -14,7 +14,7 @@ workflows:
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "12"  # ✅ Increment build number
+        FLUTTER_BUILD_NUMBER: "12"
 
       flutter: "3.22.0"
       xcode: latest
@@ -22,17 +22,14 @@ workflows:
 
     scripts:
       # --------------------------------------------------
-      # 1) Deep Clean (IMPORTANT)
+      # 1) Basic Clean (No deep clean needed)
       # --------------------------------------------------
-      - name: Deep Clean
+      - name: Basic Clean
         script: |
           set -e
-          echo "🧹 Performing deep clean..."
+          echo "🧹 Basic clean..."
           flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build ios/Runner.xcworkspace
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          rm -rf .packages .flutter-plugins
-          echo "✅ Deep clean completed"
+          echo "✅ Clean completed"
 
       # --------------------------------------------------
       # 2) Setup code signing
@@ -54,75 +51,33 @@ workflows:
         script: |
           set -e
           flutter pub get
+          echo "✅ Flutter packages fetched"
 
       # --------------------------------------------------
-      # 4) Install CocoaPods (WITH VERBOSE)
+      # 4) Simple pod install
       # --------------------------------------------------
       - name: Install CocoaPods
         script: |
           set -e
           cd ios
-          pod repo update
-          pod install --repo-update --verbose
+          # Simple pod install without verbose output
+          pod install --repo-update
           cd ..
+          echo "✅ CocoaPods installed"
 
       # --------------------------------------------------
-      # 5) Create Xcode Archive
+      # 5) Build iOS app (Simplified)
       # --------------------------------------------------
-      - name: Create Xcode archive
+      - name: Build iOS app
         script: |
           set -e
-          cd ios
-          
-          # ✅ Build with specific settings
-          xcodebuild clean \
-            -workspace "$XCODE_WORKSPACE" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release
-
-          xcodebuild \
-            -workspace "$XCODE_WORKSPACE" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -archivePath build/Runner.xcarchive \
-            -destination 'generic/platform=iOS' \
-            -allowProvisioningUpdates \
-            archive
-
-          cd ..
-
-      # --------------------------------------------------
-      # 6) Verify architectures
-      # --------------------------------------------------
-      - name: Verify architectures
-        script: |
-          lipo -info ios/build/Runner.xcarchive/Products/Applications/Runner.app/Runner
-
-      # --------------------------------------------------
-      # 7) Export IPA with custom export options
-      # --------------------------------------------------
-      - name: Export IPA
-        script: |
-          set -e
-          cd ios
-          
-          # Copy export_options.plist from project root
-          cp ../export_options.plist export_options.plist
-          
-          xcodebuild \
-            -exportArchive \
-            -archivePath build/Runner.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist export_options.plist \
-            -allowProvisioningUpdates
-
-          mkdir -p ../build/ios/ipa
-          cp build/ipa/*.ipa ../build/ios/ipa/
-          cd ..
+          flutter build ipa \
+            --release \
+            --export-options-plist=/Users/builder/export_options.plist
+          echo "✅ iOS build completed"
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - ios/Podfile.lock
 
     publishing:
       app_store_connect:

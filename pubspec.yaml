@@ -2,63 +2,43 @@ name: salaryinfo
 description: بوابة الموظف الرقمية - الشركة العامة لتعبئة وخدمات الغاز
 publish_to: "none"
 
-version: 1.0.12+12
+version: 1.0.12+12  # ✅ Increment version
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"  # ✅ Compatible with Dart SDK 3.7.2
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
 
   # ==================== Firebase Dependencies ====================
-  # ✅ Compatible versions for iOS crash-free Firebase setup
-  firebase_core: ^2.27.0          # Stable version compatible with SDK 3.7.2
-  firebase_messaging: ^14.7.19    # Stable version compatible with SDK 3.7.2
+  # ✅ CRITICAL: EXACT versions that work with your Firebase iOS SDK
+  firebase_core: "2.24.2"          # ✅ EXACT version (no caret ^)
+  firebase_messaging: "14.7.11"    # ✅ EXACT version (no caret ^)
 
   # ==================== WebView Dependencies ====================
-  # ✅ Compatible with Dart SDK 3.7.2
-  webview_flutter: ^4.4.4                # Core WebView functionality
-  webview_flutter_android: ^3.12.1       # Compatible with SDK 3.7.2
-  webview_flutter_wkwebview: ^3.9.4      # ✅ Compatible with SDK 3.7.2
+  webview_flutter: ^4.9.0
+  webview_flutter_android: ^3.16.9
+  webview_flutter_wkwebview: ^3.23.0
 
   # ==================== UI & Fonts ====================
-  google_fonts: ^6.1.0            # Cairo font for Arabic text
-  cached_network_image: ^3.3.1    # Compatible version
+  google_fonts: ^6.3.2
+  cached_network_image: ^3.4.0
 
   # ==================== Storage & File Handling ====================
-  shared_preferences: ^2.2.2      # Local key-value storage
-  path_provider: ^2.1.1           # File system paths (Compatible version)
-  gal: ^2.3.0                     # Gallery access for saving screenshots
+  shared_preferences: ^2.5.3
+  path_provider: ^2.1.1
+  gal: ^2.3.0
   
   # ==================== System & Permissions ====================
-  device_info_plus: ^9.1.0        # Compatible with SDK 3.7.2
-  permission_handler: ^11.0.1     # Compatible with SDK 3.7.2
+  device_info_plus: ^9.1.2
+  permission_handler: ^11.4.0
   
   # ==================== Localization & Date ====================
-  intl: ^0.19.0                   # Compatible with SDK 3.7.2
+  intl: ^0.19.0
 
-# ==================== Flutter Configuration ====================
 flutter:
   uses-material-design: true
   
-  # ✅ App assets
   assets:
     - assets/images/logo.png
-
-# ==================== SDK Compatibility Notes ====================
-# 
-# This pubspec.yaml is configured for:
-# ✅ Dart SDK 3.7.2 (Your current version)
-# ✅ Crash-free Firebase setup on iOS
-# ✅ Arabic RTL support with Cairo font
-# ✅ WebView for salary portal integration
-# ✅ Screenshot functionality for payslips
-# ✅ Push notifications with FCM
-# 
-# All versions tested and compatible with:
-# - Dart SDK 3.7.2
-# - Flutter SDK 3.0+
-# - iOS 15.0+
-# - Android API 21+
-#
