@@ -308,20 +308,41 @@ class _MyAppState extends State<MyApp> {
     if (_initialized) return; // Prevent multiple initializations
 
     try {
-      // ✅ Firebase is already initialized in main() function
-      // No need for Firebase.initializeApp() here to prevent double initialization crash
-
+      // ✅ Initialize Arabic date formatting first (fast operation)
       await initializeDateFormatting('ar', null);
+      debugPrint('🌍 Arabic formatting initialized');
 
-      await _setupNativeFirebaseDelegate();
+      // ✅ Load notifications (fast operation)
       await NotificationManager.instance.loadNotifications();
-      await configureFirebaseMessaging();
+      debugPrint('📱 Notifications loaded');
+
+      // ✅ Setup Firebase and messaging in background to avoid blocking UI
+      _setupFirebaseInBackground();
 
       debugPrint('✅ App initialization completed');
       _initialized = true; // Mark as initialized
     } catch (e, stackTrace) {
       debugPrint('❌ App initialization error: $e');
       debugPrint('❌ Stack trace: $stackTrace');
+      _initialized =
+          true; // Mark as initialized even on error to prevent hanging
+    }
+  }
+
+  // ✅ Setup Firebase operations in background to prevent UI blocking
+  void _setupFirebaseInBackground() async {
+    try {
+      // Wait for Firebase to be ready
+      await Future.delayed(Duration(milliseconds: 500));
+
+      await _setupNativeFirebaseDelegate();
+      debugPrint('🔗 Native Firebase delegate setup');
+
+      await configureFirebaseMessaging();
+      debugPrint('📡 Firebase messaging configured');
+    } catch (e) {
+      debugPrint('❌ Background Firebase setup error: $e');
+      // Don't block the UI even if Firebase setup fails
     }
   }
 
@@ -2038,15 +2059,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
         ..setUserAgent(
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1')
-        ..setUserAgent(
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1')
-        ..addJavaScriptChannel(
-          'FlutterChannel',
-          onMessageReceived: (JavaScriptMessage message) {
-            debugPrint('📨 JavaScript message received: ${message.message}');
-          },
-        );
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1');
 
       if (Platform.isAndroid) {
         debugPrint('🤖 Configuring Android WebView settings');
@@ -2934,25 +2947,28 @@ class _WebViewScreenState extends State<WebViewScreen> {
 }
 
 // ✅ Add the correct main function at the bottom of the file
-// ✅ Main function - CRASH-FREE Firebase initialization
-Future<void> main() async {
+// ✅ SIMPLIFIED Main function to fix BLACK SCREEN issue on iOS
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // ✅ Initialize Firebase first (CRITICAL for iOS)
-    await Firebase.initializeApp(
+    // ✅ Initialize Firebase in background to avoid blocking UI
+    Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
-    );
-    debugPrint('🔥 Firebase initialized successfully');
+    ).then((_) {
+      debugPrint('🔥 Firebase initialized successfully');
 
-    // ✅ Set background message handler AFTER Firebase init
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    debugPrint('📱 Background message handler set');
+      // Setup background message handler after Firebase init
+      FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler);
+      debugPrint('📱 Background message handler set');
+    }).catchError((e) {
+      debugPrint('❌ Firebase initialization error: $e');
+    });
 
-    debugPrint('✅ App main initialization completed successfully');
-  } catch (e, stackTrace) {
-    debugPrint('❌ App main initialization error: $e');
-    debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('✅ App launching...');
+  } catch (e) {
+    debugPrint('❌ App initialization error: $e');
   }
 
   runApp(const MyApp());
