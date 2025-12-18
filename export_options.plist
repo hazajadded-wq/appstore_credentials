@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>compileBitcode</key>
-    <false/> <!-- Set to false for faster builds -->
+    <false/>
     <key>destination</key>
     <string>export</string>
     <key>method</key>
@@ -24,8 +24,13 @@
     <key>thinning</key>
     <string>&lt;none&gt;</string>
     <key>uploadBitcode</key>
-    <false/> <!-- Set to false -->
+    <false/>
     <key>uploadSymbols</key>
+    <true/>
+    <!-- ✅ ADD THESE NEW KEYS -->
+    <key>generateAppStoreInformation</key>
+    <true/>
+    <key>manageAppVersionAndBuildNumber</key>
     <true/>
 </dict>
 </plist>

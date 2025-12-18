@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
- "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-
     <!-- ================= App Identity ================= -->
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -42,36 +40,52 @@
         <integer>2</integer> <!-- iPad -->
     </array>
 
+    <!-- ✅ CRITICAL FIX 1: Set to false for WebView apps -->
     <key>UIRequiresFullScreen</key>
-    <true/>
+    <false/>
 
     <!-- ================= Orientation ================= -->
     <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-    </array>
-
-    <!-- REQUIRED FOR APP STORE -->
-    <key>UISupportedInterfaceOrientations~ipad</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
 
-    <!-- ================= Status Bar ================= -->
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- ✅ CRITICAL FIX 2: Set to true (NOT false) -->
     <key>UIViewControllerBasedStatusBarAppearance</key>
-    <false/>
+    <true/>
 
     <!-- ================= Launch Screen ================= -->
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
 
     <!-- ================= Scene Configuration ================= -->
+    <!-- ✅ IMPORTANT: Add this for iOS 13+ -->
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
         <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneConfigurationName</key>
+                    <string>Default Configuration</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                </dict>
+            </array>
+        </dict>
     </dict>
 
     <!-- ================= WebView / HTTP ================= -->
@@ -81,6 +95,16 @@
         <true/>
         <key>NSAllowsArbitraryLoadsInWebContent</key>
         <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>109.224.38.44</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+        </dict>
     </dict>
 
     <!-- ================= Network ================= -->
@@ -101,8 +125,9 @@
     </array>
 
     <!-- ================= Firebase ================= -->
+    <!-- ✅ CRITICAL FIX 3: Set to true (NOT false) -->
     <key>FirebaseAppDelegateProxyEnabled</key>
-    <false/>
+    <true/>
 
     <!-- ================= Flutter ================= -->
     <key>io.flutter.embedded_views_preview</key>

@@ -14,7 +14,7 @@ workflows:
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "11"
+        FLUTTER_BUILD_NUMBER: "12"  # ✅ Increment build number
 
       flutter: "3.22.0"
       xcode: latest
@@ -22,7 +22,20 @@ workflows:
 
     scripts:
       # --------------------------------------------------
-      # 1) Code signing
+      # 1) Deep Clean (IMPORTANT)
+      # --------------------------------------------------
+      - name: Deep Clean
+        script: |
+          set -e
+          echo "🧹 Performing deep clean..."
+          flutter clean
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build ios/Runner.xcworkspace
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          rm -rf .packages .flutter-plugins
+          echo "✅ Deep clean completed"
+
+      # --------------------------------------------------
+      # 2) Setup code signing
       # --------------------------------------------------
       - name: Setup code signing
         script: |
@@ -35,16 +48,6 @@ workflows:
           xcode-project use-profiles
 
       # --------------------------------------------------
-      # 2) Clean project (SAFE)
-      # --------------------------------------------------
-      - name: Clean project
-        script: |
-          set -e
-          flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build
-          echo "✅ Clean completed"
-
-      # --------------------------------------------------
       # 3) Get Flutter packages
       # --------------------------------------------------
       - name: Get Flutter packages
@@ -53,23 +56,29 @@ workflows:
           flutter pub get
 
       # --------------------------------------------------
-      # 4) Install CocoaPods
+      # 4) Install CocoaPods (WITH VERBOSE)
       # --------------------------------------------------
       - name: Install CocoaPods
         script: |
           set -e
           cd ios
           pod repo update
-          pod install --repo-update
+          pod install --repo-update --verbose
           cd ..
 
       # --------------------------------------------------
-      # 5) Create Xcode Archive (THIS BUILDS FLUTTER!)
+      # 5) Create Xcode Archive
       # --------------------------------------------------
       - name: Create Xcode archive
         script: |
           set -e
           cd ios
+          
+          # ✅ Build with specific settings
+          xcodebuild clean \
+            -workspace "$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release
 
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
@@ -77,30 +86,35 @@ workflows:
             -configuration Release \
             -archivePath build/Runner.xcarchive \
             -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates \
             archive
 
           cd ..
 
       # --------------------------------------------------
-      # 6) Verify architectures (IMPORTANT)
+      # 6) Verify architectures
       # --------------------------------------------------
       - name: Verify architectures
         script: |
           lipo -info ios/build/Runner.xcarchive/Products/Applications/Runner.app/Runner
 
       # --------------------------------------------------
-      # 7) Export IPA
+      # 7) Export IPA with custom export options
       # --------------------------------------------------
       - name: Export IPA
         script: |
           set -e
           cd ios
-
+          
+          # Copy export_options.plist from project root
+          cp ../export_options.plist export_options.plist
+          
           xcodebuild \
             -exportArchive \
             -archivePath build/Runner.xcarchive \
             -exportPath build/ipa \
-            -exportOptionsPlist /Users/builder/export_options.plist
+            -exportOptionsPlist export_options.plist \
+            -allowProvisioningUpdates
 
           mkdir -p ../build/ios/ipa
           cp build/ipa/*.ipa ../build/ios/ipa/
