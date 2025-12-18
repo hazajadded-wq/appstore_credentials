@@ -25,15 +25,32 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 // ✅ Background message handler for Firebase Messaging (MUST be top-level function)
 @pragma('vm:entry-point')
+@pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // ✅ CRITICAL FIX: Check if Firebase is already initialized to avoid duplicate initialization
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform);
+      debugPrint('🔥 Firebase initialized in background handler');
+    } else {
+      debugPrint('🔥 Firebase already initialized, skipping');
+    }
+  } catch (e) {
+    debugPrint('⚠️ Firebase initialization in background handler failed: $e');
+  }
+
   debugPrint('📱 Background message: ${message.messageId}');
   debugPrint('📱 Title: ${message.notification?.title}');
   debugPrint('📱 Body: ${message.notification?.body}');
   debugPrint('📱 Data: ${message.data}');
 
-  // Add notification to local storage
-  await NotificationManager.instance.addFirebaseMessage(message);
+  // Add notification to local storage with error handling
+  try {
+    await NotificationManager.instance.addFirebaseMessage(message);
+  } catch (e) {
+    debugPrint('⚠️ Failed to save background notification: $e');
+  }
 }
 
 // نموذج بيانات الإشعار
@@ -305,16 +322,20 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _initializeApp() async {
     try {
-      // ✅ Initialize Firebase first
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
-      debugPrint('🔥 Firebase initialized successfully');
+      debugPrint('🔥 Starting Firebase initialization...');
 
-      // Setup background message handler
-      FirebaseMessaging.onBackgroundMessage(
-          _firebaseMessagingBackgroundHandler);
-      debugPrint('📱 Background message handler set');
+      // ✅ CRITICAL FIX: Check if Firebase is already initialized
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+        debugPrint('🔥 Firebase initialized successfully');
+      } else {
+        debugPrint('🔥 Firebase already initialized, using existing instance');
+      }
+
+      // Background message handler is already set in main()
+      debugPrint('📱 Background message handler already registered');
 
       // ✅ Initialize Arabic date formatting
       await initializeDateFormatting('ar', null);
@@ -335,7 +356,7 @@ class _MyAppState extends State<MyApp> {
         _ready = true;
       });
 
-      debugPrint('✅ App initialization completed');
+      debugPrint('✅ App initialization completed successfully');
     } catch (e, stackTrace) {
       debugPrint('❌ App initialization error: $e');
       debugPrint('❌ Stack trace: $stackTrace');
@@ -2977,13 +2998,21 @@ class _WebViewScreenState extends State<WebViewScreen> {
 }
 
 // ✅ SIMPLIFIED Main function - CRITICAL FIX for iOS black screen
+// ✅ FIXED: Main function with proper Firebase background handler registration
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 🔴 TEMPORARY: disable all async blocking before runApp
-  // This ensures the first frame renders immediately on iOS
+  debugPrint('🚀 SalaryInfo App launching...');
+  debugPrint('📱 Bundle ID: com.pocket.salaryinfo');
+  debugPrint('🔥 Firebase: Initialization deferred to MyApp');
 
-  debugPrint('🚀 App launching...');
+  // ✅ CRITICAL: Set Firebase background message handler BEFORE runApp
+  try {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    debugPrint('📱 Background message handler registered successfully');
+  } catch (e) {
+    debugPrint('⚠️ Failed to register background message handler: $e');
+  }
 
   runApp(const MyApp());
 }

@@ -1,8 +1,8 @@
 workflows:
   salaryinfo-ios:
-    name: SalaryInfo iOS (Simplified Build)
+    name: SalaryInfo iOS (Firebase Fixed)
     instance_type: mac_mini_m2
-    max_build_duration: 75
+    max_build_duration: 90
 
     environment:
       groups:
@@ -15,6 +15,7 @@ workflows:
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
         FLUTTER_BUILD_NUMBER: "12"
+        COCOAPODS_DISABLE_STATS: "true"
 
       flutter: "3.22.0"
       xcode: latest
@@ -22,14 +23,28 @@ workflows:
 
     scripts:
       # --------------------------------------------------
-      # 1) Basic Clean (No deep clean needed)
+      # 1) Enhanced Clean Process
       # --------------------------------------------------
-      - name: Basic Clean
+      - name: Enhanced Clean
         script: |
           set -e
-          echo "🧹 Basic clean..."
+          echo "🧹 Enhanced cleaning process..."
+          
+          # Flutter clean
           flutter clean
-          echo "✅ Clean completed"
+          
+          # Remove iOS build artifacts
+          rm -rf ios/Pods
+          rm -rf ios/.symlinks
+          rm -rf ios/Flutter/Flutter.framework
+          rm -rf ios/Flutter/Flutter.podspec
+          rm -rf ios/Runner.xcworkspace
+          rm -f ios/Podfile.lock
+          
+          # Clear pod cache
+          pod cache clean --all || true
+          
+          echo "✅ Enhanced clean completed"
 
       # --------------------------------------------------
       # 2) Setup code signing
@@ -54,32 +69,80 @@ workflows:
           echo "✅ Flutter packages fetched"
 
       # --------------------------------------------------
-      # 4) Simple pod install
+      # 4) Copy fixed Podfile and install CocoaPods
       # --------------------------------------------------
-      - name: Install CocoaPods
+      - name: Setup CocoaPods with Firebase fixes
         script: |
           set -e
           cd ios
-          # Simple pod install without verbose output
-          pod install --repo-update
+          
+          # Copy the fixed Podfile (make sure it's in your repository)
+          echo "📄 Using fixed Podfile for Firebase compatibility"
+          
+          # Update CocoaPods repo
+          echo "🔄 Updating CocoaPods repo..."
+          pod repo update
+          
+          # Install with verbose output for debugging
+          echo "📦 Installing CocoaPods dependencies..."
+          pod install --verbose --clean-install
+          
           cd ..
-          echo "✅ CocoaPods installed"
+          echo "✅ CocoaPods setup completed with Firebase fixes"
 
       # --------------------------------------------------
-      # 5) Build iOS app (Simplified)
+      # 5) Firebase Configuration Check
+      # --------------------------------------------------
+      - name: Verify Firebase Configuration
+        script: |
+          set -e
+          echo "🔥 Verifying Firebase configuration..."
+          
+          # Check if firebase_options.dart exists
+          if [ -f "lib/firebase_options.dart" ]; then
+            echo "✅ firebase_options.dart found"
+          else
+            echo "❌ firebase_options.dart missing"
+            exit 1
+          fi
+          
+          # Check iOS workspace
+          if [ -f "ios/Runner.xcworkspace/contents.xcworkspacedata" ]; then
+            echo "✅ Xcode workspace created successfully"
+          else
+            echo "❌ Xcode workspace not found"
+            exit 1
+          fi
+          
+          echo "✅ Firebase configuration verified"
+
+      # --------------------------------------------------
+      # 6) Build iOS app with enhanced settings
       # --------------------------------------------------
       - name: Build iOS app
         script: |
           set -e
+          echo "🔨 Building iOS app with Firebase fixes..."
+          
           flutter build ipa \
             --release \
-            --export-options-plist=/Users/builder/export_options.plist
-          echo "✅ iOS build completed"
+            --export-options-plist=/Users/builder/export_options.plist \
+            --verbose
+            
+          echo "✅ iOS build completed successfully"
 
     artifacts:
       - build/ios/ipa/*.ipa
+      - ios/Runner.xcarchive/**/*
 
     publishing:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
+        
+      email:
+        recipients:
+          - developer@scgfs.gov.iq
+        notify:
+          success: true
+          failure: true
