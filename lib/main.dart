@@ -295,8 +295,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  bool _initialized =
-      false; // Add this flag to prevent multiple initializations
+  bool _ready = false;
 
   @override
   void initState() {
@@ -305,49 +304,80 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _initializeApp() async {
-    if (_initialized) return; // Prevent multiple initializations
-
     try {
-      // ✅ Initialize Arabic date formatting first (fast operation)
+      // ✅ Initialize Firebase first
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      debugPrint('🔥 Firebase initialized successfully');
+
+      // Setup background message handler
+      FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler);
+      debugPrint('📱 Background message handler set');
+
+      // ✅ Initialize Arabic date formatting
       await initializeDateFormatting('ar', null);
       debugPrint('🌍 Arabic formatting initialized');
 
-      // ✅ Load notifications (fast operation)
+      // ✅ Load notifications
       await NotificationManager.instance.loadNotifications();
       debugPrint('📱 Notifications loaded');
 
-      // ✅ Setup Firebase and messaging in background to avoid blocking UI
-      _setupFirebaseInBackground();
-
-      debugPrint('✅ App initialization completed');
-      _initialized = true; // Mark as initialized
-    } catch (e, stackTrace) {
-      debugPrint('❌ App initialization error: $e');
-      debugPrint('❌ Stack trace: $stackTrace');
-      _initialized =
-          true; // Mark as initialized even on error to prevent hanging
-    }
-  }
-
-  // ✅ Setup Firebase operations in background to prevent UI blocking
-  void _setupFirebaseInBackground() async {
-    try {
-      // Wait for Firebase to be ready
-      await Future.delayed(Duration(milliseconds: 500));
-
+      // ✅ Setup Firebase messaging
       await _setupNativeFirebaseDelegate();
       debugPrint('🔗 Native Firebase delegate setup');
 
       await configureFirebaseMessaging();
       debugPrint('📡 Firebase messaging configured');
-    } catch (e) {
-      debugPrint('❌ Background Firebase setup error: $e');
-      // Don't block the UI even if Firebase setup fails
+
+      setState(() {
+        _ready = true;
+      });
+
+      debugPrint('✅ App initialization completed');
+    } catch (e, stackTrace) {
+      debugPrint('❌ App initialization error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+
+      // Even if there's an error, show the app to prevent black screen
+      setState(() {
+        _ready = true;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_ready) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    const Color(0xFF00BFA5),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'جاري التهيئة...',
+                  style: GoogleFonts.cairo(
+                    fontSize: 16,
+                    color: const Color(0xFF2D3748),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return MaterialApp(
       title: 'الشركة العامة لتعبئة وخدمات الغاز',
       theme: appTheme,
@@ -1605,7 +1635,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: const Icon(
               Icons.notifications_off_outlined,
               size: 60,
-              color: Color(0xFF00BFA5),
+              color: const Color(0xFF00BFA5),
             ),
           ),
           const SizedBox(height: 24),
@@ -2946,30 +2976,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 }
 
-// ✅ Add the correct main function at the bottom of the file
-// ✅ SIMPLIFIED Main function to fix BLACK SCREEN issue on iOS
+// ✅ SIMPLIFIED Main function - CRITICAL FIX for iOS black screen
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  try {
-    // ✅ Initialize Firebase in background to avoid blocking UI
-    Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    ).then((_) {
-      debugPrint('🔥 Firebase initialized successfully');
+  // 🔴 TEMPORARY: disable all async blocking before runApp
+  // This ensures the first frame renders immediately on iOS
 
-      // Setup background message handler after Firebase init
-      FirebaseMessaging.onBackgroundMessage(
-          _firebaseMessagingBackgroundHandler);
-      debugPrint('📱 Background message handler set');
-    }).catchError((e) {
-      debugPrint('❌ Firebase initialization error: $e');
-    });
-
-    debugPrint('✅ App launching...');
-  } catch (e) {
-    debugPrint('❌ App initialization error: $e');
-  }
+  debugPrint('🚀 App launching...');
 
   runApp(const MyApp());
 }
