@@ -287,6 +287,9 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
+    await configureFirebaseMessaging(); // 🔔 THIS IS THE FIX
+
     debugPrint('✅ Firebase initialized successfully');
 
     // Test Firebase configuration
@@ -323,14 +326,21 @@ void main() async {
   runApp(const MyApp());
 }
 
-// ✅ Firebase Messaging configuration with timeout
 Future<void> configureFirebaseMessaging() async {
+  // 🍎 REQUIRED FOR iOS (WITHOUT THIS → NO BANNER / NO SOUND)
+  if (Platform.isIOS) {
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+  }
+
   try {
     final messaging = FirebaseMessaging.instance;
 
-    // ✅ Add timeout to prevent blocking
-    final settings = await messaging
-        .requestPermission(
+    final settings = await messaging.requestPermission(
       alert: true,
       announcement: false,
       badge: true,
@@ -338,13 +348,6 @@ Future<void> configureFirebaseMessaging() async {
       criticalAlert: false,
       provisional: false,
       sound: true,
-    )
-        .timeout(
-      const Duration(seconds: 5),
-      onTimeout: () {
-        debugPrint('⚠️ Notification permission request timeout');
-        throw TimeoutException('Permission request timeout');
-      },
     );
 
     debugPrint(
@@ -1348,16 +1351,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
                       builder: (context) => const WebViewScreen(),
                     ),
                   );
-
-                  // ✅ Request notifications in background (fire and forget - won't block)
-                  debugPrint(
-                      '🔔 Requesting notification permissions in background...');
-                  Future.delayed(const Duration(milliseconds: 800), () {
-                    configureFirebaseMessaging().catchError((e) {
-                      debugPrint(
-                          '⚠️ Background notification request failed: $e');
-                    });
-                  });
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
                   // Emergency fallback - try direct push instead of replace
