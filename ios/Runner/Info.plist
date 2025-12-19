@@ -5,31 +5,22 @@
     <!-- ================= App Identity ================= -->
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
-
     <key>CFBundleDisplayName</key>
     <string>بوابة الموظف الرقمية</string>
-
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
-
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
-
     <key>CFBundleName</key>
     <string>salaryinfo</string>
-
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-
     <key>CFBundleShortVersionString</key>
     <string>$(FLUTTER_BUILD_NAME)</string>
-
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
-
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
@@ -37,12 +28,9 @@
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>
-        <integer>2</integer>
     </array>
-
-    <!-- ✅ CRITICAL: Set to false -->
     <key>UIRequiresFullScreen</key>
-    <false/>
+    <true/>
 
     <!-- ================= Orientation ================= -->
     <key>UISupportedInterfaceOrientations</key>
@@ -50,27 +38,13 @@
         <string>UIInterfaceOrientationPortrait</string>
     </array>
 
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-
-    <!-- ✅ CRITICAL: Set to true -->
+    <!-- ================= Status Bar ================= -->
     <key>UIViewControllerBasedStatusBarAppearance</key>
-    <true/>
+    <false/>
 
     <!-- ================= Launch Screen ================= -->
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
-
-    <!-- ================= Scene Configuration ================= -->
-    <key>UIApplicationSceneManifest</key>
-    <dict>
-        <key>UIApplicationSupportsMultipleScenes</key>
-        <false/>
-    </dict>
 
     <!-- ================= WebView / HTTP ================= -->
     <key>NSAppTransportSecurity</key>
@@ -88,28 +62,30 @@
     <!-- ================= Photos ================= -->
     <key>NSPhotoLibraryUsageDescription</key>
     <string>يحتاج التطبيق إلى الوصول إلى الصور لعرض وحفظ قسائم الرواتب.</string>
-
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>يحتاج التطبيق إلى حفظ قسائم الرواتب في معرض الصور.</string>
 
-    <!-- ================= Notifications ================= -->
+    <!-- ================= NOTIFICATIONS & APNs ================= -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
 
-    <!-- ================= Firebase ================= -->
-    <!-- ✅ CRITICAL: Set to true for FlutterFire -->
-    <key>FirebaseAppDelegateProxyEnabled</key>
-    <true/>
+    <!-- ⚠️ IMPORTANT: REMOVE ALL FirebaseAppDelegateProxyEnabled entries -->
+    <!-- Let FlutterFire handle Firebase initialization automatically -->
 
-    <!-- ================= Flutter ================= -->
-    <key>io.flutter.embedded_views_preview</key>
-    <true/>
+    <!-- ================= APNs Configuration ================= -->
+    <key>APNS_KEY_ID</key>
+    <string>F8G869W434</string>
+    <key>APNS_TEAM_ID</key>
+    <string>PH3LN58YFU</string>
+    <key>APNS_ENVIRONMENT</key>
+    <string>production</string>
 
-    <!-- ================= Security ================= -->
+    <!-- ================= Additional Settings ================= -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-
+    <key>io.flutter.embedded_views_preview</key>
+    <true/>
 </dict>
 </plist>

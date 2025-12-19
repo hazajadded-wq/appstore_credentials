@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -22,36 +23,6 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-
-// ✅ Background message handler for Firebase Messaging (MUST be top-level function)
-@pragma('vm:entry-point')
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // ✅ CRITICAL FIX: Check if Firebase is already initialized to avoid duplicate initialization
-  try {
-    if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform);
-      debugPrint('🔥 Firebase initialized in background handler');
-    } else {
-      debugPrint('🔥 Firebase already initialized, skipping');
-    }
-  } catch (e) {
-    debugPrint('⚠️ Firebase initialization in background handler failed: $e');
-  }
-
-  debugPrint('📱 Background message: ${message.messageId}');
-  debugPrint('📱 Title: ${message.notification?.title}');
-  debugPrint('📱 Body: ${message.notification?.body}');
-  debugPrint('📱 Data: ${message.data}');
-
-  // Add notification to local storage with error handling
-  try {
-    await NotificationManager.instance.addFirebaseMessage(message);
-  } catch (e) {
-    debugPrint('⚠️ Failed to save background notification: $e');
-  }
-}
 
 // نموذج بيانات الإشعار
 class NotificationItem {
@@ -267,6 +238,225 @@ Future<void> _setupNativeFirebaseDelegate() async {
   }
 }
 
+// ✅ Background message handler for Firebase Messaging
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // IMPORTANT: Initialize Firebase in background handler
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  debugPrint('📱 Background FCM Message received: ${message.messageId}');
+  debugPrint('📱 Message data: ${message.data}');
+
+  // Add to notification manager
+  await NotificationManager.instance.addFirebaseMessage(message);
+
+  // Show notification if needed
+  if (message.notification != null) {
+    debugPrint('📱 Notification Title: ${message.notification!.title}');
+    debugPrint('📱 Notification Body: ${message.notification!.body}');
+  }
+
+  debugPrint('✅ Background message processed successfully');
+}
+
+void main() async {
+  // ✅ CRITICAL iOS FIX: Proper error handling for initialization
+  try {
+    debugPrint('🚀 Starting app initialization...');
+    WidgetsFlutterBinding.ensureInitialized();
+
+    // Initialize date formatting for Arabic locale
+    try {
+      await initializeDateFormatting('ar_IQ', null);
+      debugPrint('✅ Date formatting initialized');
+    } catch (e) {
+      debugPrint('⚠️ Date formatting failed: $e');
+    }
+
+    debugPrint('''
+    🚀 =================================
+    🚀 Starting SalaryInfo Application
+    🚀 Firebase Project: scgfs-salary-app
+    🚀 Bundle ID: com.pocket.salaryinfo
+    🚀 Platform: ${Platform.operatingSystem}
+    🚀 =================================
+    ''');
+
+    // ✅ iOS FIX: Initialize Firebase with timeout to prevent hanging
+    try {
+      debugPrint('🔄 Initializing Firebase...');
+
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint(
+              '⚠️ Firebase initialization timeout - continuing without Firebase');
+          throw TimeoutException('Firebase initialization timeout');
+        },
+      );
+
+      debugPrint('✅ Firebase initialized successfully');
+
+      // Test Firebase configuration
+      final app = Firebase.app();
+      debugPrint('✅ Firebase App Name: ${app.name}');
+      debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
+      debugPrint('✅ Firebase iOS Bundle ID: ${app.options.iosBundleId}');
+
+      // ✅ CRITICAL FIX: Setup native Firebase delegate after initialization
+      await _setupNativeFirebaseDelegate();
+
+      // Initialize Notification Manager
+      await NotificationManager.instance.loadNotifications();
+      debugPrint('✅ Notification Manager initialized');
+
+      // Configure Firebase Messaging
+      await configureFirebaseMessaging();
+
+      // ✅ Register background message handler
+      FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler);
+    } catch (e, stackTrace) {
+      debugPrint('❌ Firebase initialization error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+      debugPrint('⚠️ Continuing without Firebase features');
+    }
+
+    // ✅ CRITICAL iOS FIX: Preload Google Fonts to prevent blank screen
+    try {
+      debugPrint('🔤 Preloading Google Fonts...');
+      await GoogleFonts.pendingFonts([
+        GoogleFonts.cairo(),
+      ]);
+      debugPrint('✅ Google Fonts loaded');
+    } catch (e) {
+      debugPrint('⚠️ Google Fonts loading failed: $e - using system fonts');
+    }
+
+    debugPrint('✅ All initializations complete - Running app');
+
+    // Run the app
+    runApp(const MyApp());
+  } catch (e, stackTrace) {
+    debugPrint('❌ CRITICAL ERROR during initialization: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
+
+    // ✅ iOS FIX: Run app anyway with error screen
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 60, color: Colors.red),
+                const SizedBox(height: 20),
+                const Text(
+                  'خطأ في بدء التطبيق',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'يرجى إعادة تشغيل التطبيق\n$e',
+                  style: const TextStyle(fontSize: 14),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ));
+  }
+}
+
+// ✅ Firebase Messaging configuration
+Future<void> configureFirebaseMessaging() async {
+  try {
+    final messaging = FirebaseMessaging.instance;
+
+    // Request notification permissions
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
+      provisional: false,
+      sound: true,
+    );
+
+    debugPrint(
+        '🔔 Notification permission status: ${settings.authorizationStatus}');
+
+    // Get FCM token
+    String? token = await messaging.getToken();
+    if (token != null) {
+      debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
+
+      // Subscribe to topic
+      await messaging.subscribeToTopic('all_employees');
+      debugPrint('📧 Subscribed to topic: all_employees');
+    } else {
+      debugPrint('⚠️ No FCM token received');
+    }
+
+    // Foreground message handler
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
+      debugPrint('📱 Title: ${message.notification?.title}');
+      debugPrint('📱 Body: ${message.notification?.body}');
+      debugPrint('📱 Data: ${message.data}');
+
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
+    });
+
+    // Notification opened handler
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('👆 Notification tapped! Opening notifications screen');
+      debugPrint('📱 Message data: ${message.data}');
+
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
+
+      // Navigate to notifications screen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
+    });
+
+    // Get initial message
+    RemoteMessage? initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('📱 App launched from notification');
+      debugPrint('📱 Initial message data: ${initialMessage.data}');
+
+      NotificationManager.instance.addFirebaseMessage(initialMessage);
+
+      Future.delayed(const Duration(seconds: 1), () {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
+    }
+
+    debugPrint('✅ Firebase Messaging configured successfully');
+  } catch (e, stackTrace) {
+    debugPrint('❌ Firebase Messaging configuration error: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('⚠️ Push notifications may not work');
+  }
+}
+
 final ThemeData appTheme = ThemeData(
   primarySwatch: Colors.teal,
   useMaterial3: true,
@@ -304,101 +494,11 @@ final ThemeData appTheme = ThemeData(
   ),
 );
 
-class MyApp extends StatefulWidget {
+class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
   @override
-  _MyAppState createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeApp();
-  }
-
-  Future<void> _initializeApp() async {
-    try {
-      debugPrint('🔥 Starting Firebase initialization...');
-
-      // ✅ CRITICAL FIX: Check if Firebase is already initialized
-      if (Firebase.apps.isEmpty) {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform,
-        );
-        debugPrint('🔥 Firebase initialized successfully');
-      } else {
-        debugPrint('🔥 Firebase already initialized, using existing instance');
-      }
-
-      // Background message handler is already set in main()
-      debugPrint('📱 Background message handler already registered');
-
-      // ✅ Initialize Arabic date formatting
-      await initializeDateFormatting('ar', null);
-      debugPrint('🌍 Arabic formatting initialized');
-
-      // ✅ Load notifications
-      await NotificationManager.instance.loadNotifications();
-      debugPrint('📱 Notifications loaded');
-
-      // ✅ Setup Firebase messaging
-      await _setupNativeFirebaseDelegate();
-      debugPrint('🔗 Native Firebase delegate setup');
-
-      await configureFirebaseMessaging();
-      debugPrint('📡 Firebase messaging configured');
-
-      setState(() {
-        _ready = true;
-      });
-
-      debugPrint('✅ App initialization completed successfully');
-    } catch (e, stackTrace) {
-      debugPrint('❌ App initialization error: $e');
-      debugPrint('❌ Stack trace: $stackTrace');
-
-      // Even if there's an error, show the app to prevent black screen
-      setState(() {
-        _ready = true;
-      });
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!_ready) {
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        home: Scaffold(
-          backgroundColor: Colors.white,
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    const Color(0xFF00BFA5),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'جاري التهيئة...',
-                  style: GoogleFonts.cairo(
-                    fontSize: 16,
-                    color: const Color(0xFF2D3748),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     return MaterialApp(
       title: 'الشركة العامة لتعبئة وخدمات الغاز',
       theme: appTheme,
@@ -911,6 +1011,7 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _fadeAnimation;
   late Animation<double> _slideAnimation;
   late Animation<double> _scaleAnimation;
+  bool _hasError = false; // ✅ iOS FIX: Error state tracking
 
   @override
   void initState() {
@@ -939,18 +1040,26 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller.forward();
 
+    // ✅ iOS FIX: Navigate with error handling
     Timer(const Duration(seconds: 3), () {
       debugPrint('⏰ Timer completed - Navigating to Privacy Policy');
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const PrivacyPolicyScreen(),
-            transitionsBuilder: (_, animation, __, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-            transitionDuration: const Duration(milliseconds: 600),
-          ),
-        );
+        try {
+          Navigator.of(context).pushReplacement(
+            PageRouteBuilder(
+              pageBuilder: (_, __, ___) => const PrivacyPolicyScreen(),
+              transitionsBuilder: (_, animation, __, child) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              transitionDuration: const Duration(milliseconds: 600),
+            ),
+          );
+        } catch (e) {
+          debugPrint('❌ Navigation error: $e');
+          setState(() {
+            _hasError = true;
+          });
+        }
       }
     });
   }
@@ -963,6 +1072,33 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ✅ iOS FIX: Show error screen if navigation fails
+    if (_hasError) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 60, color: Colors.red),
+              const SizedBox(height: 20),
+              const Text('خطأ في التحميل', style: TextStyle(fontSize: 18)),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) => const WebViewScreen(),
+                    ),
+                  );
+                },
+                child: const Text('المتابعة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -1052,7 +1188,8 @@ class _SplashScreenState extends State<SplashScreen>
                               'assets/images/logo.png',
                               fit: BoxFit.contain,
                               errorBuilder: (context, error, stackTrace) {
-                                debugPrint('❌ Error loading logo: $error');
+                                debugPrint(
+                                    '⚠️ Logo asset not found - using fallback icon: $error');
                                 return Icon(
                                   Icons.business,
                                   size: 80,
@@ -1120,7 +1257,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('الشركة العامة لتعبئة وخدمات الغاز');
+    debugPrint('🔒 PrivacyPolicyScreen rendered');
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7FAFC),
@@ -1235,11 +1372,15 @@ class PrivacyPolicyScreen extends StatelessWidget {
             child: ModernButton(
               onPressed: () {
                 debugPrint('✅ Privacy Policy accepted - Navigating to WebView');
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                    builder: (context) => const WebViewScreen(),
-                  ),
-                );
+                try {
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) => const WebViewScreen(),
+                    ),
+                  );
+                } catch (e) {
+                  debugPrint('❌ Navigation error: $e');
+                }
               },
               child: Text(
                 'موافق',
@@ -1289,92 +1430,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
           ],
         ));
-  }
-}
-
-// ✅ Firebase Messaging configuration
-Future<void> configureFirebaseMessaging() async {
-  bool configured = false; // Add static flag to prevent multiple configurations
-  // ignore: dead_code
-  if (configured) return;
-
-  try {
-    final messaging = FirebaseMessaging.instance;
-
-    // Request notification permissions
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      announcement: false,
-      badge: true,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
-      sound: true,
-    );
-
-    debugPrint(
-        '🔔 Notification permission status: ${settings.authorizationStatus}');
-
-    // Get FCM token
-    String? token = await messaging.getToken();
-    if (token != null) {
-      debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
-
-      // Subscribe to topic
-      await messaging.subscribeToTopic('all_employees');
-      debugPrint('📧 Subscribed to topic: all_employees');
-    } else {
-      debugPrint('⚠️ No FCM token received');
-    }
-
-    // Foreground message handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
-      debugPrint('📱 Title: ${message.notification?.title}');
-      debugPrint('📱 Body: ${message.notification?.body}');
-      debugPrint('📱 Data: ${message.data}');
-
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-    });
-
-    // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('👆 Notification tapped! Opening notifications screen');
-      debugPrint('📱 Message data: ${message.data}');
-
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-
-      // Navigate to notifications screen
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-      });
-    });
-
-    // Get initial message
-    RemoteMessage? initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint('📱 App launched from notification');
-      debugPrint('📱 Initial message data: ${initialMessage.data}');
-
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
-
-      Future.delayed(const Duration(seconds: 1), () {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-      });
-    }
-
-    configured = true; // Mark as configured
-    debugPrint('✅ Firebase Messaging configured successfully');
-  } catch (e, stackTrace) {
-    debugPrint('❌ Firebase Messaging configuration error: $e');
-    debugPrint('❌ Stack trace: $stackTrace');
-    debugPrint('⚠️ Push notifications may not work');
   }
 }
 
@@ -1656,7 +1711,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: const Icon(
               Icons.notifications_off_outlined,
               size: 60,
-              color: const Color(0xFF00BFA5),
+              color: Color(0xFF00BFA5),
             ),
           ),
           const SizedBox(height: 24),
@@ -2109,8 +2164,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.white)
-        ..setUserAgent(
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1');
+        ..addJavaScriptChannel(
+          'FlutterChannel',
+          onMessageReceived: (JavaScriptMessage message) {
+            debugPrint('📨 JavaScript message received: ${message.message}');
+          },
+        );
 
       if (Platform.isAndroid) {
         debugPrint('🤖 Configuring Android WebView settings');
@@ -2119,6 +2178,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
         androidController.setMediaPlaybackRequiresUserGesture(false);
         controller!.enableZoom(true);
         debugPrint('✅ Android WebView settings configured');
+      } else if (Platform.isIOS) {
+        // ✅ iOS FIX: Configure WKWebView for iOS
+        debugPrint('🍎 Configuring iOS WebView settings');
+        final wkWebViewController =
+            controller!.platform as WebKitWebViewController;
+        wkWebViewController.setAllowsBackForwardNavigationGestures(true);
+        debugPrint('✅ iOS WebView settings configured');
       }
 
       controller!.setNavigationDelegate(
@@ -2732,7 +2798,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   if (Platform.isAndroid) {
                     SystemNavigator.pop();
                   } else if (Platform.isIOS) {
-                    Navigator.of(context).popUntil((route) => route.isFirst);
+                    exit(0);
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -2995,24 +3061,4 @@ class _WebViewScreenState extends State<WebViewScreen> {
       ),
     );
   }
-}
-
-// ✅ SIMPLIFIED Main function - CRITICAL FIX for iOS black screen
-// ✅ FIXED: Main function with proper Firebase background handler registration
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  debugPrint('🚀 SalaryInfo App launching...');
-  debugPrint('📱 Bundle ID: com.pocket.salaryinfo');
-  debugPrint('🔥 Firebase: Initialization deferred to MyApp');
-
-  // ✅ CRITICAL: Set Firebase background message handler BEFORE runApp
-  try {
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    debugPrint('📱 Background message handler registered successfully');
-  } catch (e) {
-    debugPrint('⚠️ Failed to register background message handler: $e');
-  }
-
-  runApp(const MyApp());
 }
