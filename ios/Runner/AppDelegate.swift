@@ -1,6 +1,5 @@
 import UIKit
 import Flutter
-import Firebase
 import UserNotifications
 
 @main
@@ -18,24 +17,19 @@ import UserNotifications
     ================================
     """)
 
-    // ✅ 1. تهيئة Firebase بأمان (بدون كراش)
-    if FirebaseApp.app() == nil {
-      FirebaseApp.configure()
-      print("✅ Firebase configured")
-    } else {
-      print("ℹ️ Firebase already initialized")
-    }
-
-    // ✅ 2. إعداد Notifications
+    // ✅ إعداد Notifications فقط (بدون Firebase!)
+    // Firebase سيتم تهيئته من Flutter في main.dart
     UNUserNotificationCenter.current().delegate = self
     application.registerForRemoteNotifications()
     print("✅ Notifications configured")
 
-    // ✅ 3. تسجيل Flutter Plugins
+    // ✅ تسجيل Flutter Plugins
     GeneratedPluginRegistrant.register(with: self)
     print("✅ Flutter plugins registered")
 
-    // ❗ مهم جدًا: return true (وليس return super)
+    // ❗ مهم جدًا: return true
+    // Flutter سيهيّئ Firebase من main.dart
+    print("✅ AppDelegate finished - Flutter will initialize Firebase")
     return true
   }
 
@@ -44,8 +38,8 @@ import UserNotifications
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
-    print("✅ APNs device token received")
-    // يمكنك إضافة كود إضافي هنا إذا احتجت
+    let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+    print("✅ APNs device token received: \(tokenString.prefix(20))...")
   }
 
   override func application(
@@ -61,7 +55,8 @@ import UserNotifications
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    print("📱 Notification received (foreground)")
+    let userInfo = notification.request.content.userInfo
+    print("📱 Notification received (foreground): \(userInfo)")
     
     // عرض الإشعار حتى لو التطبيق مفتوح
     if #available(iOS 14.0, *) {
@@ -76,7 +71,8 @@ import UserNotifications
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    print("📱 Notification tapped")
+    let userInfo = response.notification.request.content.userInfo
+    print("📱 Notification tapped: \(userInfo)")
     completionHandler()
   }
 }
