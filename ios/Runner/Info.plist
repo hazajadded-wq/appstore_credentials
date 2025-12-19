@@ -2,7 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- ================= App Identity ================= -->
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
@@ -23,30 +22,20 @@
     <string>$(FLUTTER_BUILD_NUMBER)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-
-    <!-- ================= Device ================= -->
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>
     </array>
     <key>UIRequiresFullScreen</key>
     <true/>
-
-    <!-- ================= Orientation ================= -->
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
-
-    <!-- ================= Status Bar ================= -->
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-
-    <!-- ================= Launch Screen ================= -->
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
-
-    <!-- ================= WebView / HTTP ================= -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
@@ -54,36 +43,24 @@
         <key>NSAllowsArbitraryLoadsInWebContent</key>
         <true/>
     </dict>
-
-    <!-- ================= Network ================= -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>يحتاج التطبيق إلى الاتصال بالإنترنت للوصول إلى نظام الرواتب.</string>
-
-    <!-- ================= Photos ================= -->
     <key>NSPhotoLibraryUsageDescription</key>
     <string>يحتاج التطبيق إلى الوصول إلى الصور لعرض وحفظ قسائم الرواتب.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>يحتاج التطبيق إلى حفظ قسائم الرواتب في معرض الصور.</string>
-
-    <!-- ================= Camera (احتياطي) ================= -->
     <key>NSCameraUsageDescription</key>
     <string>يحتاج التطبيق إلى الكاميرا لالتقاط الصور والمستندات.</string>
-
-    <!-- ================= NOTIFICATIONS & APNs ================= -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
-
-    <!-- ================= APNs Configuration ================= -->
     <key>APNS_KEY_ID</key>
     <string>F8G869W434</string>
     <key>APNS_TEAM_ID</key>
     <string>PH3LN58YFU</string>
     <key>APNS_ENVIRONMENT</key>
     <string>production</string>
-
-    <!-- ================= Additional Settings ================= -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>io.flutter.embedded_views_preview</key>

@@ -12,46 +12,37 @@ import UserNotifications
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
 
-    print("""
-    ================================
-    🚀 SalaryInfo App Starting
-    Bundle ID: com.pocket.salaryinfo
-    Firebase: Waiting for Flutter init
-    ================================
-    """)
+    print("🚀 SalaryInfo App Starting - iOS Notifications Enabled")
 
-    // ✅ 1. إعداد Notification Center
+    // Setup Notification Center
     UNUserNotificationCenter.current().delegate = self
     
-    // ✅ 2. تسجيل للحصول على APNs token
+    // Register for remote notifications
     application.registerForRemoteNotifications()
     print("✅ Registered for remote notifications")
 
-    // ✅ 3. تسجيل Flutter Plugins
+    // Register Flutter Plugins
     GeneratedPluginRegistrant.register(with: self)
     print("✅ Flutter plugins registered")
 
-    // ✅ 4. إعداد Firebase Messaging delegate
-    // سيعمل بعد أن Flutter يهيّئ Firebase
+    // Setup Firebase Messaging delegate
     Messaging.messaging().delegate = self
     print("✅ Firebase Messaging delegate set")
-
-    // ❗ مهم: بدون Firebase.configure()!
-    // Flutter سيهيّئ Firebase من main.dart
     
     print("✅ AppDelegate setup complete")
     return true
   }
 
-  // MARK: - APNs Token Handling
+  // APNs Token Handler
   override func application(
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
-    let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-    print("✅ APNs device token received: \(tokenString.prefix(20))...")
-
-    // ✅ CRITICAL: إرسال APNs token إلى Firebase Messaging
+    let tokenParts = deviceToken.map { data in String(format: "%02.2hhx", data) }
+    let token = tokenParts.joined()
+    print("✅ APNs device token: \(token)")
+    
+    // Link APNs token with Firebase
     Messaging.messaging().apnsToken = deviceToken
     print("✅ APNs token sent to Firebase Messaging")
   }
@@ -60,89 +51,67 @@ import UserNotifications
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
   ) {
-    print("❌ APNs registration failed: \(error.localizedDescription)")
+    print("❌ Failed to register: \(error.localizedDescription)")
   }
 
-  // MARK: - Notification Handling (Foreground)
+  // Show notification in foreground
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
     let userInfo = notification.request.content.userInfo
-    print("📱 Notification received (foreground):")
-    print("   Title: \(notification.request.content.title)")
-    print("   Body: \(notification.request.content.body)")
-    print("   Data: \(userInfo)")
+    print("📬 Notification received in foreground:")
+    print(userInfo)
     
-    // عرض الإشعار حتى لو التطبيق مفتوح
     if #available(iOS 14.0, *) {
-      completionHandler([.banner, .sound, .badge])
+      completionHandler([[.banner, .sound, .badge]])
     } else {
-      completionHandler([.alert, .sound, .badge])
+      completionHandler([[.alert, .sound, .badge]])
     }
   }
 
+  // Handle notification tap
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
-    print("📱 Notification tapped:")
-    print("   Data: \(userInfo)")
+    print("👆 User tapped notification:")
+    print(userInfo)
+    
     completionHandler()
-  }
-
-  // MARK: - Handle Background/Silent Notifications
-  override func application(
-    _ application: UIApplication,
-    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-  ) {
-    print("📱 Background notification received: \(userInfo)")
-    
-    // معالجة الإشعار الصامت
-    if let aps = userInfo["aps"] as? [String: Any],
-       let contentAvailable = aps["content-available"] as? Int,
-       contentAvailable == 1 {
-      print("   Silent notification detected")
-    }
-    
-    completionHandler(.newData)
   }
 }
 
-// MARK: - Firebase Messaging Delegate
+// Firebase Messaging Delegate
 extension AppDelegate: MessagingDelegate {
-  
-  func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-    guard let token = fcmToken else {
-      print("❌ No FCM token received")
+  func messaging(
+    _ messaging: Messaging,
+    didReceiveRegistrationToken fcmToken: String?
+  ) {
+    guard let fcmToken = fcmToken else {
+      print("❌ FCM token is nil")
       return
     }
     
-    print("✅ FCM Token received: \(token.prefix(20))...")
-    print("   Full token: \(token)")
+    print("✅ FCM Token received: \(fcmToken)")
     
-    // حفظ التوكن في UserDefaults
-    UserDefaults.standard.set(token, forKey: "fcm_token")
-    
-    // إرسال التوكن إلى السيرفر (اختياري)
-    // sendTokenToServer(token)
-    
-    // الاشتراك في topic للإشعارات الجماعية
+    // Subscribe to topic automatically
     Messaging.messaging().subscribe(toTopic: "all_employees") { error in
       if let error = error {
-        print("❌ Failed to subscribe to topic: \(error.localizedDescription)")
+        print("❌ Failed to subscribe: \(error.localizedDescription)")
       } else {
-        print("✅ Successfully subscribed to topic: all_employees")
+        print("✅ Subscribed to topic: all_employees")
       }
     }
-  }
-  
-  // يُستدعى عندما يتم حذف FCM token
-  func messaging(_ messaging: Messaging, didDeleteFCMToken fcmToken: String) {
-    print("⚠️ FCM token deleted: \(fcmToken.prefix(20))...")
+    
+    let dataDict: [String: String] = ["token": fcmToken]
+    NotificationCenter.default.post(
+      name: Notification.Name("FCMToken"),
+      object: nil,
+      userInfo: dataDict
+    )
   }
 }
