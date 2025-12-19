@@ -2,7 +2,7 @@ name: salaryinfo
 description: بوابة الموظف الرقمية - الشركة العامة لتعبئة وخدمات الغاز
 publish_to: "none"
 
-version: 1.0.12+12
+version: 1.0.12+15
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -11,25 +11,12 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔥 Firebase (Updated to more compatible versions)
-  firebase_core: ^3.0.0  # Updated from 2.27.0
-  firebase_messaging: ^15.0.0  # Updated from 14.7.10
+  # ✅ EMERGENCY FIX: ONLY ESSENTIAL DEPENDENCIES
+  # Removed Firebase temporarily to fix black screen
 
-  # 🌐 WebView
+  # 🌐 WebView - ESSENTIAL
   webview_flutter: ^4.4.4
-  webview_flutter_android: ^4.10.11
   webview_flutter_wkwebview: ^3.23.5
-
-  # 🎨 UI
-  google_fonts: ^6.1.0
-
-  # 💾 Storage
-  shared_preferences: ^2.2.2
-  device_info_plus: ^12.3.0
-  permission_handler: ^12.0.1
-  gal: ^2.3.2
-  intl: ^0.20.2
-  cached_network_image: ^3.4.1
 
 flutter:
   uses-material-design: true
