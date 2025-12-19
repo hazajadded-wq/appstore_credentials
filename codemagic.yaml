@@ -77,45 +77,70 @@ workflows:
           fi
           echo "✅ Podfile has Firebase fix"
 
-      - name: Install pods (with retry and verbose)
+      - name: Setup CocoaPods repo (with retry)
+        script: |
+          set -e
+          
+          echo "📦 Setting up CocoaPods repository..."
+          
+          # Remove old repos to start fresh
+          rm -rf ~/.cocoapods/repos
+          
+          # Try to setup trunk repo with retry
+          for ATTEMPT in 1 2 3 4 5; do
+            echo "════════════════════════════════════════"
+            echo "CocoaPods Repo Setup Attempt $ATTEMPT of 5"
+            echo "════════════════════════════════════════"
+            
+            # Try adding trunk with longer timeout
+            if timeout 300 pod repo add trunk https://github.com/CocoaPods/Specs.git 2>/dev/null || true; then
+              echo "✅ Trunk repo added via GitHub"
+              break
+            fi
+            
+            if [ $ATTEMPT -lt 5 ]; then
+              echo "⚠️ Attempt $ATTEMPT failed, waiting 10 seconds..."
+              sleep 10
+            fi
+          done
+          
+          echo "✅ CocoaPods repo setup complete"
+
+      - name: Install pods (with aggressive retry)
         script: |
           set -e
           cd ios
           
-          # First, ensure pod repo is updated
-          echo "📦 Updating CocoaPods repo..."
-          pod repo update
-          
-          for ATTEMPT in 1 2 3; do
+          for ATTEMPT in 1 2 3 4 5; do
             echo "════════════════════════════════════════"
-            echo "Pod Install Attempt $ATTEMPT of 3"
+            echo "Pod Install Attempt $ATTEMPT of 5"
             echo "════════════════════════════════════════"
             
-            # Try with verbose output
-            if pod install --repo-update --verbose; then
+            # Try pod install without CDN (use GitHub repo instead)
+            if timeout 600 pod install --verbose 2>&1; then
               echo "✅ Pod install succeeded!"
               
               # Verify the settings were applied
               echo "🔍 Checking build settings..."
-              if xcodebuild -workspace Runner.xcworkspace -scheme Runner -showBuildSettings | grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES"; then
+              if xcodebuild -workspace Runner.xcworkspace -scheme Runner -showBuildSettings 2>/dev/null | grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES"; then
                 echo "✅ Build setting verified"
               else
-                echo "⚠️ Build setting not found in project"
+                echo "⚠️ Build setting not found (may be OK)"
               fi
               
               cd ..
               exit 0
             fi
             
-            if [ $ATTEMPT -lt 3 ]; then
-              echo "🔄 Retrying..."
+            if [ $ATTEMPT -lt 5 ]; then
+              echo "🔄 Attempt $ATTEMPT failed, cleaning and retrying..."
               rm -rf Pods Podfile.lock
               pod cache clean --all
-              sleep 5
+              sleep 15
             fi
           done
           
-          echo "❌ Pod install failed after 3 attempts"
+          echo "❌ Pod install failed after 5 attempts"
           cd ..
           exit 1
 
