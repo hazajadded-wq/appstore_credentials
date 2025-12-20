@@ -107,16 +107,22 @@ class NotificationManager extends ChangeNotifier {
   Future<void> loadNotifications() async {
     try {
       SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? notificationsJson = prefs.getString('stored_notifications');
 
-      if (notificationsJson != null) {
-        List<dynamic> notificationsList = json.decode(notificationsJson);
-        _notifications = notificationsList
-            .map((json) => NotificationItem.fromJson(json))
-            .toList();
-        _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-        _updateUnreadCount();
-      }
+      // ✅ CRITICAL FIX: Use StringList instead of single String
+      final List<String> storedList =
+          prefs.getStringList('stored_notifications_list') ?? [];
+
+      _notifications = storedList
+          .map((jsonString) =>
+              NotificationItem.fromJson(json.decode(jsonString)))
+          .toList();
+
+      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      _updateUnreadCount();
+      notifyListeners();
+
+      debugPrint(
+          '✅ Loaded ${_notifications.length} notifications from storage');
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
     }
@@ -125,9 +131,15 @@ class NotificationManager extends ChangeNotifier {
   Future<void> saveNotifications() async {
     try {
       SharedPreferences prefs = await SharedPreferences.getInstance();
-      String notificationsJson = json.encode(
-          _notifications.map((notification) => notification.toJson()).toList());
-      await prefs.setString('stored_notifications', notificationsJson);
+
+      // ✅ CRITICAL FIX: Save as StringList (each notification as separate JSON string)
+      final List<String> notificationsList = _notifications
+          .map((notification) => json.encode(notification.toJson()))
+          .toList();
+
+      await prefs.setStringList('stored_notifications_list', notificationsList);
+
+      debugPrint('✅ Saved ${_notifications.length} notifications to storage');
     } catch (e) {
       debugPrint('❌ Error saving notifications: $e');
     }
@@ -254,9 +266,21 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     debugPrint('📱 Background FCM Message received: ${message.messageId}');
     debugPrint('📱 Message data: ${message.data}');
 
-    // Load existing notifications first, then add new one
-    await NotificationManager.instance.loadNotifications();
-    await NotificationManager.instance.addFirebaseMessage(message);
+    // ✅ CRITICAL FIX: Save directly to SharedPreferences (not NotificationManager!)
+    // Background isolate has different NotificationManager instance
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> stored =
+        prefs.getStringList('stored_notifications_list') ?? [];
+
+    final notification = NotificationItem.fromFirebaseMessage(message);
+    stored.insert(0, jsonEncode(notification.toJson()));
+
+    // Limit to 50 notifications
+    if (stored.length > 50) {
+      stored.removeRange(50, stored.length);
+    }
+
+    await prefs.setStringList('stored_notifications_list', stored);
 
     // Show notification if needed
     if (message.notification != null) {
@@ -264,7 +288,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       debugPrint('📱 Notification Body: ${message.notification!.body}');
     }
 
-    debugPrint('✅ Background message processed and saved successfully');
+    debugPrint('✅ Background notification SAVED safely to SharedPreferences');
   } catch (e) {
     debugPrint('❌ Error in background handler: $e');
   }
@@ -316,6 +340,19 @@ void main() async {
     // Register background message handler
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     debugPrint('✅ Background message handler registered');
+
+    // ✅ MIGRATION: Remove old notification storage format
+    // This fixes the issue where old data in wrong format prevents new system from working
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.containsKey('stored_notifications')) {
+        await prefs.remove('stored_notifications');
+        debugPrint('🗑️ Removed old notification storage format');
+        debugPrint('✅ Migration to StringList storage complete');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Migration error (non-critical): $e');
+    }
   } catch (e) {
     debugPrint('⚠️ Firebase init error: $e');
     debugPrint('⚠️ Continuing without Firebase features');
@@ -387,14 +424,17 @@ Future<void> configureFirebaseMessaging() async {
     }
 
     // Foreground message handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
 
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
+      // ✅ CRITICAL FIX: Add await and reload
+      await NotificationManager.instance.addFirebaseMessage(message);
+      await NotificationManager.instance.loadNotifications();
+
+      debugPrint('✅ Foreground notification saved and reloaded');
     });
 
     // Notification opened handler
@@ -1452,6 +1492,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void initState() {
     super.initState();
+    // ✅ CRITICAL FIX: Reload notifications when opening the screen
+    NotificationManager.instance.loadNotifications();
     _registerFCMToken();
   }
 
