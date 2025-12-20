@@ -101,6 +101,11 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
 
+  // ✅ CRITICAL: Stream for instant UI updates
+  final StreamController<void> _updateStream =
+      StreamController<void>.broadcast();
+  Stream<void> get updateStream => _updateStream.stream;
+
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
 
@@ -184,12 +189,12 @@ class NotificationManager extends ChangeNotifier {
         _updateUnreadCount();
         await saveNotifications();
 
-        // ✅ CRITICAL: Triple notify to ensure UI updates
-        notifyListeners();
+        // ✅ CRITICAL: Maximum force update
+        forceUpdate(); // Stream + notifyListeners
         await Future.delayed(const Duration(milliseconds: 50));
-        notifyListeners();
+        forceUpdate();
         await Future.delayed(const Duration(milliseconds: 50));
-        notifyListeners();
+        forceUpdate();
 
         debugPrint('✅ Successfully added notification: ${notification.title}');
         debugPrint('📊 Total notifications: ${_notifications.length}');
@@ -271,6 +276,11 @@ class NotificationManager extends ChangeNotifier {
       debugPrint('📊 Unread count changed: $oldCount → $_unreadCount');
       // Update app badge (iOS specific)
       _updateAppBadge();
+
+      // ✅ CRITICAL: Trigger stream update for instant UI refresh
+      if (!_updateStream.isClosed) {
+        _updateStream.add(null);
+      }
     }
   }
 
@@ -284,6 +294,15 @@ class NotificationManager extends ChangeNotifier {
         debugPrint('⚠️ Error updating app badge: $e');
       }
     }
+  }
+
+  // ✅ CRITICAL: Force immediate UI update
+  void forceUpdate() {
+    notifyListeners();
+    if (!_updateStream.isClosed) {
+      _updateStream.add(null);
+    }
+    debugPrint('🔄 Forced UI update triggered');
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -552,29 +571,85 @@ Future<void> configureFirebaseMessaging() async {
         await NotificationManager.instance.addFirebaseMessage(message);
         debugPrint('✅ Added to NotificationManager');
 
-        // ✅ Force multiple reloads to ensure UI updates
+        // ✅ ULTRA FORCE UPDATE: Multiple techniques
+        // Technique 1: Force reload
         await NotificationManager.instance.loadNotifications();
         debugPrint('✅ First reload complete');
 
-        // Wait a bit for state to propagate
-        await Future.delayed(const Duration(milliseconds: 100));
+        // Technique 2: Force update (stream + notifyListeners)
+        NotificationManager.instance.forceUpdate();
 
-        // Force another reload
+        // Technique 3: Wait and repeat
+        await Future.delayed(const Duration(milliseconds: 100));
         await NotificationManager.instance.loadNotifications();
+        NotificationManager.instance.forceUpdate();
         debugPrint('✅ Second reload complete');
 
-        // Triple notify listeners to be absolutely sure
-        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-        NotificationManager.instance.notifyListeners();
-        await Future.delayed(const Duration(milliseconds: 50));
-        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-        NotificationManager.instance.notifyListeners();
+        // Technique 4: Final force
+        await Future.delayed(const Duration(milliseconds: 100));
+        NotificationManager.instance.forceUpdate();
 
-        debugPrint('✅ Foreground notification fully processed');
+        debugPrint('✅ Foreground notification FULLY processed');
         debugPrint(
             '📊 Current total: ${NotificationManager.instance.notifications.length}');
         debugPrint(
             '📊 Unread count: ${NotificationManager.instance.unreadCount}');
+
+        // ✅ CRITICAL: Show in-app notification
+        final context = navigatorKey.currentContext;
+        if (context != null && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.notifications,
+                      color: Colors.white, size: 20),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          message.notification?.title ?? 'إشعار جديد',
+                          style: GoogleFonts.cairo(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                        if (message.notification?.body != null)
+                          Text(
+                            message.notification!.body!,
+                            style: GoogleFonts.cairo(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF2196F3),
+              duration: const Duration(seconds: 4),
+              behavior: SnackBarBehavior.floating,
+              action: SnackBarAction(
+                label: 'عرض',
+                textColor: Colors.white,
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const NotificationsScreen(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        }
       } catch (e, stackTrace) {
         debugPrint('❌ ERROR in foreground handler: $e');
         debugPrint('❌ Stack trace: $stackTrace');
@@ -604,19 +679,16 @@ Future<void> configureFirebaseMessaging() async {
         await NotificationManager.instance.loadNotifications();
         debugPrint('✅ First reload complete');
 
+        // Force update
+        NotificationManager.instance.forceUpdate();
+
         // Wait a bit more
         await Future.delayed(const Duration(milliseconds: 200));
 
         // Force another reload to be absolutely sure
         await NotificationManager.instance.loadNotifications();
+        NotificationManager.instance.forceUpdate();
         debugPrint('✅ Second reload complete');
-
-        // Triple notify
-        // ignore: invalid_use_of_visible_for_testing_member, invalid_use_of_protected_member
-        NotificationManager.instance.notifyListeners();
-        await Future.delayed(const Duration(milliseconds: 100));
-        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-        NotificationManager.instance.notifyListeners();
 
         debugPrint('✅ Notification fully processed and state updated');
         debugPrint(
@@ -626,12 +698,55 @@ Future<void> configureFirebaseMessaging() async {
         debugPrint('⚠️ Stack trace: $stackTrace');
       }
 
-      // Navigate to notifications screen
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-      });
+      // ✅ CRITICAL: Navigate using multiple methods for reliability
+      debugPrint('🚀 Attempting navigation to NotificationsScreen...');
+
+      // Method 1: Try immediate navigation
+      try {
+        final context = navigatorKey.currentContext;
+        if (context != null && context.mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+          );
+          debugPrint('✅ Navigation successful (Method 1)');
+          return;
+        }
+      } catch (e) {
+        debugPrint('⚠️ Method 1 failed: $e');
+      }
+
+      // Method 2: Try with navigatorKey
+      try {
+        if (navigatorKey.currentState != null) {
+          navigatorKey.currentState!.push(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+          );
+          debugPrint('✅ Navigation successful (Method 2)');
+          return;
+        }
+      } catch (e) {
+        debugPrint('⚠️ Method 2 failed: $e');
+      }
+
+      // Method 3: Try with postFrameCallback
+      try {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final state = navigatorKey.currentState;
+          if (state != null) {
+            state.push(
+              MaterialPageRoute(
+                  builder: (context) => const NotificationsScreen()),
+            );
+            debugPrint('✅ Navigation successful (Method 3)');
+          } else {
+            debugPrint('❌ navigatorKey.currentState is null');
+          }
+        });
+      } catch (e) {
+        debugPrint('⚠️ Method 3 failed: $e');
+      }
     });
 
     // Get initial message
