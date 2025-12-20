@@ -1,161 +1,90 @@
 workflows:
   salaryinfo-ios-fix:
-    name: SalaryInfo iOS Build
+    name: SalaryInfo iOS Build (Push Enabled)
     instance_type: mac_mini_m2
     max_build_duration: 75
 
     environment:
       groups:
         - appstore_credentials
-      
+
       vars:
         BUNDLE_ID: "com.pocket.salaryinfo"
         APP_STORE_APPLE_ID: 6756042000
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "23"
-        
+        FLUTTER_BUILD_NUMBER: "24"   # ⬅️ زد الرقم دائمًا
+
       flutter: "3.22.0"
       xcode: latest
       cocoapods: default
 
     scripts:
+      # =========================================================
+      # 1️⃣ Code signing (Push Notifications INCLUDED)
+      # =========================================================
       - name: Setup code signing
         script: |
           set -e
           keychain initialize
-          
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
-          
+
           keychain add-certificates
-          xcode-project use-profiles
+          xcode-project use-profiles --profile-type app-store
 
-      - name: Force clean Flutter
-        script: |
-          set -e
-          echo "🧹 Force cleaning Flutter..."
-          
-          # Remove Flutter cached artifacts
-          rm -rf $FLUTTER_ROOT/.pub-cache
-          
-          # Clean Flutter build cache
-          flutter pub cache clean --force
-          
-          echo "✅ Flutter cleaned"
-
-      - name: Clean build
+      # =========================================================
+      # 2️⃣ Clean everything (prevent cached entitlements)
+      # =========================================================
+      - name: Force clean Flutter & iOS
         script: |
           set -e
           flutter clean
           rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/build ios/Runner.xcworkspace
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
           pod cache clean --all
-          
-          # Clean CocoaPods cache more aggressively
-          pod deintegrate || true
           rm -rf ~/Library/Caches/CocoaPods
-          
-          echo "✅ Build cleaned"
+          echo "✅ Clean complete"
 
+      # =========================================================
+      # 3️⃣ Get Flutter packages
+      # =========================================================
       - name: Get Flutter packages
         script: |
           set -e
           flutter pub get
           echo "✅ Flutter packages installed"
 
-      - name: Verify Podfile has Firebase fix
-        script: |
-          set -e
-          if ! grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES" ios/Podfile; then
-            echo "❌ ERROR: Podfile missing Firebase fix!"
-            echo "Your ios/Podfile must have this line in post_install:"
-            echo "config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'"
-            exit 1
-          fi
-          echo "✅ Podfile has Firebase fix"
-
-      - name: Setup CocoaPods repo (with retry)
-        script: |
-          set -e
-          
-          echo "📦 Setting up CocoaPods repository..."
-          
-          # Remove old repos to start fresh
-          rm -rf ~/.cocoapods/repos
-          
-          # Try to setup trunk repo with retry
-          for ATTEMPT in 1 2 3 4 5; do
-            echo "════════════════════════════════════════"
-            echo "CocoaPods Repo Setup Attempt $ATTEMPT of 5"
-            echo "════════════════════════════════════════"
-            
-            # Try adding trunk with longer timeout
-            if timeout 300 pod repo add trunk https://github.com/CocoaPods/Specs.git 2>/dev/null || true; then
-              echo "✅ Trunk repo added via GitHub"
-              break
-            fi
-            
-            if [ $ATTEMPT -lt 5 ]; then
-              echo "⚠️ Attempt $ATTEMPT failed, waiting 10 seconds..."
-              sleep 10
-            fi
-          done
-          
-          echo "✅ CocoaPods repo setup complete"
-
-      - name: Install pods (with aggressive retry)
+      # =========================================================
+      # 4️⃣ Install CocoaPods
+      # =========================================================
+      - name: Install CocoaPods
         script: |
           set -e
           cd ios
-          
-          for ATTEMPT in 1 2 3 4 5; do
-            echo "════════════════════════════════════════"
-            echo "Pod Install Attempt $ATTEMPT of 5"
-            echo "════════════════════════════════════════"
-            
-            # Try pod install without CDN (use GitHub repo instead)
-            if timeout 600 pod install --verbose 2>&1; then
-              echo "✅ Pod install succeeded!"
-              
-              # Verify the settings were applied
-              echo "🔍 Checking build settings..."
-              if xcodebuild -workspace Runner.xcworkspace -scheme Runner -showBuildSettings 2>/dev/null | grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES"; then
-                echo "✅ Build setting verified"
-              else
-                echo "⚠️ Build setting not found (may be OK)"
-              fi
-              
-              cd ..
-              exit 0
-            fi
-            
-            if [ $ATTEMPT -lt 5 ]; then
-              echo "🔄 Attempt $ATTEMPT failed, cleaning and retrying..."
-              rm -rf Pods Podfile.lock
-              pod cache clean --all
-              sleep 15
-            fi
-          done
-          
-          echo "❌ Pod install failed after 5 attempts"
+          pod install --repo-update
           cd ..
-          exit 1
+          echo "✅ Pods installed"
 
-      - name: Build Flutter framework
+      # =========================================================
+      # 5️⃣ Build Flutter (⚠️ NO --no-codesign ❌)
+      # =========================================================
+      - name: Build Flutter iOS
         script: |
           set -e
-          # Build WITHOUT creating IPA - this won't upgrade Podfile
-          flutter build ios --release --no-codesign
-          echo "✅ Flutter framework built"
+          flutter build ios --release
+          echo "✅ Flutter iOS build complete"
 
+      # =========================================================
+      # 6️⃣ Archive with Xcode (Push entitlements applied)
+      # =========================================================
       - name: Create Xcode archive
         script: |
           set -e
           cd ios
-          
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -163,42 +92,39 @@ workflows:
             -archivePath build/Runner.xcarchive \
             -destination 'generic/platform=iOS' \
             archive
-          
-          echo "✅ Archive created"
           cd ..
+          echo "✅ Archive created"
 
+      # =========================================================
+      # 7️⃣ Export IPA
+      # =========================================================
       - name: Export IPA
         script: |
           set -e
           cd ios
-          
           xcodebuild \
             -exportArchive \
             -archivePath build/Runner.xcarchive \
             -exportPath build/ipa \
             -exportOptionsPlist /Users/builder/export_options.plist
-          
+
           mkdir -p ../build/ios/ipa
           cp build/ipa/*.ipa ../build/ios/ipa/
-          
-          echo "✅ IPA exported successfully"
-          ls -lh ../build/ios/ipa/
-          
           cd ..
+          echo "✅ IPA exported"
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
       - ios/Podfile.lock
 
     publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
       email:
         recipients:
           - hazajadded@gmail.com
         notify:
           success: true
           failure: true
-      
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true

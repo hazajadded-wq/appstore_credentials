@@ -1,41 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
+
     <key>CFBundleDisplayName</key>
     <string>بوابة الموظف الرقمية</string>
+
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
+
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+
     <key>CFBundleName</key>
     <string>salaryinfo</string>
+
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+
     <key>CFBundleShortVersionString</key>
     <string>$(FLUTTER_BUILD_NAME)</string>
+
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
+
     <key>LSRequiresIPhoneOS</key>
     <true/>
+
+    <!-- iPhone only -->
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>
     </array>
+
     <key>UIRequiresFullScreen</key>
     <true/>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
+
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
+
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
+
+    <!-- WebView / HTTP -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
@@ -43,29 +62,35 @@
         <key>NSAllowsArbitraryLoadsInWebContent</key>
         <true/>
     </dict>
+
+    <!-- Permissions -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>يحتاج التطبيق إلى الاتصال بالإنترنت للوصول إلى نظام الرواتب.</string>
+
     <key>NSPhotoLibraryUsageDescription</key>
     <string>يحتاج التطبيق إلى الوصول إلى الصور لعرض وحفظ قسائم الرواتب.</string>
+
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>يحتاج التطبيق إلى حفظ قسائم الرواتب في معرض الصور.</string>
+
     <key>NSCameraUsageDescription</key>
     <string>يحتاج التطبيق إلى الكاميرا لالتقاط الصور والمستندات.</string>
+
+    <!-- ✅ Firebase Background Notifications -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
-    <key>APNS_KEY_ID</key>
-    <string>F8G869W434</string>
-    <key>APNS_TEAM_ID</key>
-    <string>PH3LN58YFU</string>
-    <key>APNS_ENVIRONMENT</key>
-    <string>production</string>
+
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
+
+    <!-- Flutter -->
     <key>io.flutter.embedded_views_preview</key>
     <true/>
+
     <key>UIMainStoryboardFile</key>
     <string>Main</string>
+
 </dict>
 </plist>
