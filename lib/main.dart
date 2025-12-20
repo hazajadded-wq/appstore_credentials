@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -23,6 +23,9 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+// 🔧 **FIX: Add local notifications package**
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // نموذج بيانات الإشعار
 class NotificationItem {
@@ -101,8 +104,15 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
 
+  // 🔧 **FIX: Add Stream for real-time updates**
+  final StreamController<List<NotificationItem>>
+      _notificationsStreamController =
+      StreamController<List<NotificationItem>>.broadcast();
+
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
+  Stream<List<NotificationItem>> get notificationsStream =>
+      _notificationsStreamController.stream;
 
   Future<void> loadNotifications() async {
     try {
@@ -116,7 +126,13 @@ class NotificationManager extends ChangeNotifier {
             .toList();
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
+        // 🔧 **FIX: Update stream when loading notifications**
+        _notificationsStreamController.add(List.unmodifiable(_notifications));
       }
+
+      debugPrint(
+          '📱 Loaded ${_notifications.length} notifications from storage');
+      debugPrint('📱 Unread count: $_unreadCount');
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
     }
@@ -128,25 +144,43 @@ class NotificationManager extends ChangeNotifier {
       String notificationsJson = json.encode(
           _notifications.map((notification) => notification.toJson()).toList());
       await prefs.setString('stored_notifications', notificationsJson);
+      debugPrint('💾 Saved ${_notifications.length} notifications to storage');
     } catch (e) {
       debugPrint('❌ Error saving notifications: $e');
     }
   }
 
   Future<void> addNotification(NotificationItem notification) async {
-    if (!_notifications.any((n) => n.id == notification.id)) {
+    String notificationId = notification.id;
+
+    // 🔧 **FIX: Check if notification already exists with better logging**
+    bool exists = _notifications.any((n) => n.id == notificationId);
+
+    if (!exists) {
+      debugPrint(
+          '📱 Adding new notification: ${notification.title} (ID: $notificationId)');
+
       _notifications.insert(0, notification);
       if (_notifications.length > 50) {
         _notifications = _notifications.take(50).toList();
       }
       _updateUnreadCount();
       await saveNotifications();
+
+      // 🔧 **FIX: Notify listeners AND update stream**
       notifyListeners();
-      debugPrint('📱 Added notification: ${notification.title}');
+      _notificationsStreamController.add(List.unmodifiable(_notifications));
+
+      debugPrint('✅ Added notification: ${notification.title}');
+      debugPrint('📱 Total notifications now: ${_notifications.length}');
+      debugPrint('📱 Unread count now: $_unreadCount');
+    } else {
+      debugPrint('⚠️ Notification already exists, skipping: $notificationId');
     }
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
+    debugPrint('📱 Processing Firebase message: ${message.messageId}');
     NotificationItem notification =
         NotificationItem.fromFirebaseMessage(message);
     await addNotification(notification);
@@ -159,6 +193,7 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
+      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('✅ Marked notification as read: $notificationId');
     }
   }
@@ -176,6 +211,7 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
+      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('✅ Marked all notifications as read');
     }
   }
@@ -188,6 +224,7 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
+      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('🗑️ Deleted notification: $notificationId');
     }
   }
@@ -197,11 +234,17 @@ class NotificationManager extends ChangeNotifier {
     _updateUnreadCount();
     await saveNotifications();
     notifyListeners();
+    _notificationsStreamController.add(List.unmodifiable(_notifications));
     debugPrint('🗑️ Cleared all notifications');
   }
 
   void _updateUnreadCount() {
+    int oldCount = _unreadCount;
     _unreadCount = _notifications.where((n) => !n.isRead).length;
+
+    if (oldCount != _unreadCount) {
+      debugPrint('📱 Unread count changed: $oldCount → $_unreadCount');
+    }
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -220,6 +263,53 @@ class NotificationManager extends ChangeNotifier {
 
 // GlobalKey للتنقل
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// 🔧 **FIX: Initialize local notifications plugin**
+FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+// 🔧 **FIX: Show local notification function**
+Future<void> _showLocalNotification(RemoteMessage message) async {
+  try {
+    debugPrint('📱 Showing local notification: ${message.notification?.title}');
+
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'salary_info_channel',
+      'Salary Info Notifications',
+      channelDescription: 'Notifications for salary information',
+      importance: Importance.max,
+      priority: Priority.high,
+      showWhen: true,
+      colorized: true,
+      color: Color(0xFF00BFA5),
+    );
+
+    const DarwinNotificationDetails iOSPlatformChannelSpecifics =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+      iOS: iOSPlatformChannelSpecifics,
+    );
+
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      message.notification?.title ?? 'إشعار جديد',
+      message.notification?.body ?? '',
+      platformChannelSpecifics,
+      payload: json.encode(message.data),
+    );
+
+    debugPrint('✅ Local notification shown successfully');
+  } catch (e) {
+    debugPrint('❌ Error showing local notification: $e');
+  }
+}
 
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
 Future<void> _setupNativeFirebaseDelegate() async {
@@ -281,6 +371,36 @@ void main() async {
   🚀 Platform: ${Platform.operatingSystem}
   🚀 =================================
   ''');
+
+  // 🔧 **FIX: Initialize local notifications**
+  try {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    final DarwinInitializationSettings initializationSettingsIOS =
+        DarwinInitializationSettings(
+      requestSoundPermission: false,
+      requestBadgePermission: false,
+      requestAlertPermission: false,
+    );
+
+    final InitializationSettings initializationSettings =
+        InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        debugPrint('📱 Notification tapped: ${response.payload}');
+      },
+    );
+
+    debugPrint('✅ Local notifications initialized');
+  } catch (e) {
+    debugPrint('⚠️ Local notifications initialization failed: $e');
+  }
 
   // ✅ تهيئة Firebase بأمان (بدون كراش أو timeout معقد)
   try {
@@ -377,24 +497,35 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received');
     }
 
-    // Foreground message handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    // 🔧 **FIX: Foreground message handler - UPDATED**
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
+      debugPrint('📱 App state: FOREGROUND');
 
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
+      // 🔧 **FIX: IMMEDIATELY add to notification manager**
+      await NotificationManager.instance.addFirebaseMessage(message);
+
+      // 🔧 **FIX: Force update the listeners**
+      // ignore: invalid_use_of_protected_member
+      NotificationManager.instance.notifyListeners();
+
+      // 🔧 **FIX: Show local notification**
+      await _showLocalNotification(message);
+
+      debugPrint('✅ Foreground notification processed');
     });
 
     // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
       debugPrint('👆 Notification tapped! Opening notifications screen');
       debugPrint('📱 Message data: ${message.data}');
+      debugPrint('📱 App state: BACKGROUND/TERMINATED');
 
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
+      // 🔧 **FIX: Add to notification manager when tapped**
+      await NotificationManager.instance.addFirebaseMessage(message);
 
       // Navigate to notifications screen
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -410,7 +541,7 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 App launched from notification');
       debugPrint('📱 Initial message data: ${initialMessage.data}');
 
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
+      await NotificationManager.instance.addFirebaseMessage(initialMessage);
 
       Future.delayed(const Duration(seconds: 1), () {
         navigatorKey.currentState?.push(
@@ -1341,11 +1472,9 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
             child: ModernButton(
               onPressed: () {
-                // ✅ CRITICAL: Changed back to sync - don't block UI
                 debugPrint(
                     '✅ Privacy Policy accepted - Navigating to WebView IMMEDIATELY');
                 try {
-                  // ✅ CRITICAL FIX: Navigate FIRST without waiting for anything
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => const WebViewScreen(),
@@ -1353,7 +1482,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   );
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
-                  // Emergency fallback - try direct push instead of replace
                   try {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -1433,6 +1561,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     _registerFCMToken();
+
+    // 🔧 **FIX: Load notifications immediately when opening the screen**
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationManager.instance.loadNotifications();
+      debugPrint('📱 Notifications screen loaded - refreshing notifications');
+    });
   }
 
   Future<void> _registerFCMToken() async {
