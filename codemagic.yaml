@@ -14,7 +14,7 @@ workflows:
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "29"   # ⬅️ زد الرقم دائمًا
+        FLUTTER_BUILD_NUMBER: "30"   # ⬅️ زد الرقم دائمًا
 
       flutter: "3.22.0"
       xcode: latest
