@@ -445,6 +445,10 @@ Future<void> configureFirebaseMessaging() async {
       // CRITICAL: Ensure notification is saved when app opens from tap
       try {
         await NotificationManager.instance.addFirebaseMessage(message);
+
+        // ✅ FIX 1: FORCE UI UPDATE FOR BADGE
+        await NotificationManager.instance.loadNotifications();
+
         debugPrint('✅ Notification saved when app opened from tap');
       } catch (e) {
         debugPrint('⚠️ Error saving notification on tap: $e');
@@ -661,6 +665,8 @@ class NotificationIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChangeNotifierBuilder<NotificationManager>(
       notifier: NotificationManager.instance,
+      // ✅ FIX 2: ADD KEY TO FORCE REBUILD
+      key: const ValueKey('notification_badge'),
       builder: (context, notificationManager, child) {
         return Stack(
           clipBehavior: Clip.none,
@@ -720,9 +726,10 @@ class ChangeNotifierBuilder<T extends ChangeNotifier> extends StatelessWidget {
   final Widget Function(BuildContext context, T notifier, Widget? child)
       builder;
   final Widget? child;
+  final Key? key;
 
   const ChangeNotifierBuilder({
-    Key? key,
+    this.key,
     required this.notifier,
     required this.builder,
     this.child,
@@ -1439,41 +1446,41 @@ class PrivacyPolicyScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildPrivacySection(String title, String content) {
-    return Padding(
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5E9),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                title,
-                style: GoogleFonts.cairo(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF00BFA5),
-                ),
-              ),
+Widget _buildPrivacySection(String title, String content) {
+  return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(5),
             ),
-            Text(
-              content,
+            child: Text(
+              title,
               style: GoogleFonts.cairo(
-                fontSize: 15,
-                height: 1.6,
-                color: const Color(0xFF4A5568),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF00BFA5),
               ),
-              textAlign: TextAlign.right,
             ),
-          ],
-        ));
-  }
+          ),
+          Text(
+            content,
+            style: GoogleFonts.cairo(
+              fontSize: 15,
+              height: 1.6,
+              color: const Color(0xFF4A5568),
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ],
+      ));
 }
 
 // صفحة الإشعارات
@@ -1492,8 +1499,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ CRITICAL FIX: Reload notifications when opening the screen
-    NotificationManager.instance.loadNotifications();
+    // ✅ FIX 2: DELAY BUILD UNTIL DATA IS READY
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await NotificationManager.instance.loadNotifications();
+    });
     _registerFCMToken();
   }
 
