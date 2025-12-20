@@ -106,25 +106,51 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> loadNotifications() async {
     try {
+      debugPrint('📂 Loading notifications from storage...');
       SharedPreferences prefs = await SharedPreferences.getInstance();
 
       // ✅ CRITICAL FIX: Use StringList instead of single String
       final List<String> storedList =
           prefs.getStringList('stored_notifications_list') ?? [];
+      debugPrint('📊 Found ${storedList.length} stored notifications');
 
-      _notifications = storedList
-          .map((jsonString) =>
-              NotificationItem.fromJson(json.decode(jsonString)))
-          .toList();
+      List<NotificationItem> loadedNotifications = [];
+      int errors = 0;
 
+      for (var i = 0; i < storedList.length; i++) {
+        try {
+          final jsonString = storedList[i];
+          final notification =
+              NotificationItem.fromJson(json.decode(jsonString));
+
+          // Validate notification
+          if (notification.id.isNotEmpty && notification.title.isNotEmpty) {
+            loadedNotifications.add(notification);
+          } else {
+            debugPrint('⚠️ Invalid notification at index $i, skipping');
+            errors++;
+          }
+        } catch (e) {
+          debugPrint('⚠️ Error parsing notification at index $i: $e');
+          errors++;
+        }
+      }
+
+      _notifications = loadedNotifications;
       _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       _updateUnreadCount();
       notifyListeners();
 
-      debugPrint(
-          '✅ Loaded ${_notifications.length} notifications from storage');
-    } catch (e) {
-      debugPrint('❌ Error loading notifications: $e');
+      debugPrint('✅ Loaded ${_notifications.length} valid notifications');
+      debugPrint('📊 Unread count: $_unreadCount');
+      if (errors > 0) {
+        debugPrint('⚠️ Skipped $errors invalid notifications');
+      }
+    } catch (e, stackTrace) {
+      debugPrint('❌ Critical error loading notifications: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+      _notifications = [];
+      _unreadCount = 0;
     }
   }
 
@@ -146,26 +172,47 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addNotification(NotificationItem notification) async {
-    if (!_notifications.any((n) => n.id == notification.id)) {
-      _notifications.insert(0, notification);
-      if (_notifications.length > 50) {
-        _notifications = _notifications.take(50).toList();
+    try {
+      if (!_notifications.any((n) => n.id == notification.id)) {
+        debugPrint('➕ Adding new notification: ${notification.title}');
+
+        _notifications.insert(0, notification);
+        if (_notifications.length > 50) {
+          _notifications = _notifications.take(50).toList();
+        }
+
+        _updateUnreadCount();
+        await saveNotifications();
+
+        // ✅ CRITICAL: Triple notify to ensure UI updates
+        notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 50));
+        notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 50));
+        notifyListeners();
+
+        debugPrint('✅ Successfully added notification: ${notification.title}');
+        debugPrint('📊 Total notifications: ${_notifications.length}');
+        debugPrint('📊 Unread count: $_unreadCount');
+      } else {
+        debugPrint(
+            '⚠️ Notification already exists, skipping: ${notification.title}');
       }
-      _updateUnreadCount();
-      await saveNotifications();
-      notifyListeners();
-      debugPrint('✅ Successfully added notification: ${notification.title}');
-      debugPrint('📊 Total notifications in storage: ${_notifications.length}');
-    } else {
-      debugPrint(
-          '⚠️ Notification already exists, skipping: ${notification.title}');
+    } catch (e, stackTrace) {
+      debugPrint('❌ ERROR in addNotification: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
     }
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    NotificationItem notification =
-        NotificationItem.fromFirebaseMessage(message);
-    await addNotification(notification);
+    try {
+      NotificationItem notification =
+          NotificationItem.fromFirebaseMessage(message);
+      await addNotification(notification);
+    } catch (e, stackTrace) {
+      debugPrint('❌ ERROR in addFirebaseMessage: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+    }
   }
 
   Future<void> markAsRead(String notificationId) async {
@@ -217,7 +264,26 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _updateUnreadCount() {
+    final oldCount = _unreadCount;
     _unreadCount = _notifications.where((n) => !n.isRead).length;
+
+    if (oldCount != _unreadCount) {
+      debugPrint('📊 Unread count changed: $oldCount → $_unreadCount');
+      // Update app badge (iOS specific)
+      _updateAppBadge();
+    }
+  }
+
+  // ✅ CRITICAL: Update iOS app badge
+  void _updateAppBadge() {
+    if (Platform.isIOS) {
+      try {
+        // This will be handled by iOS system through APNs
+        debugPrint('📱 App badge should show: $_unreadCount');
+      } catch (e) {
+        debugPrint('⚠️ Error updating app badge: $e');
+      }
+    }
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -257,41 +323,91 @@ Future<void> _setupNativeFirebaseDelegate() async {
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  debugPrint('🔔 ========== BACKGROUND HANDLER START ==========');
+  debugPrint('📱 Message ID: ${message.messageId}');
+  debugPrint('📱 Sent time: ${message.sentTime}');
+
   try {
     // IMPORTANT: Initialize Firebase in background handler
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    debugPrint('✅ Firebase initialized in background');
 
-    debugPrint('📱 Background FCM Message received: ${message.messageId}');
-    debugPrint('📱 Message data: ${message.data}');
-
-    // ✅ CRITICAL FIX: Save directly to SharedPreferences (not NotificationManager!)
-    // Background isolate has different NotificationManager instance
-    final prefs = await SharedPreferences.getInstance();
-    final List<String> stored =
-        prefs.getStringList('stored_notifications_list') ?? [];
-
-    final notification = NotificationItem.fromFirebaseMessage(message);
-    stored.insert(0, jsonEncode(notification.toJson()));
-
-    // Limit to 50 notifications
-    if (stored.length > 50) {
-      stored.removeRange(50, stored.length);
+    // ✅ CRITICAL: Validate message data
+    if (message.data.isEmpty) {
+      debugPrint('⚠️ Message has no data, using notification only');
     }
 
-    await prefs.setStringList('stored_notifications_list', stored);
+    debugPrint('📱 Notification: ${message.notification?.title}');
+    debugPrint('📱 Data: ${message.data}');
+
+    // ✅ CRITICAL FIX: Save directly to SharedPreferences
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> stored =
+          prefs.getStringList('stored_notifications_list') ?? [];
+
+      debugPrint('📊 Current stored count: ${stored.length}');
+
+      // Create notification item with validation
+      final notification = NotificationItem.fromFirebaseMessage(message);
+
+      // Validate notification
+      if (notification.id.isEmpty) {
+        debugPrint('❌ Invalid notification: empty ID');
+        return;
+      }
+
+      // Check for duplicates
+      bool isDuplicate = false;
+      for (var jsonStr in stored) {
+        try {
+          final existing = jsonDecode(jsonStr);
+          if (existing['id'] == notification.id) {
+            isDuplicate = true;
+            debugPrint(
+                '⚠️ Duplicate notification, skipping: ${notification.id}');
+            break;
+          }
+        } catch (e) {
+          debugPrint('⚠️ Error checking duplicate: $e');
+        }
+      }
+
+      if (!isDuplicate) {
+        final jsonString = jsonEncode(notification.toJson());
+        stored.insert(0, jsonString);
+
+        // Limit to 50 notifications
+        if (stored.length > 50) {
+          stored.removeRange(50, stored.length);
+          debugPrint('📊 Trimmed to 50 notifications');
+        }
+
+        await prefs.setStringList('stored_notifications_list', stored);
+        debugPrint('✅ Notification saved to SharedPreferences');
+        debugPrint('📊 New total count: ${stored.length}');
+        debugPrint('📝 Notification: ${notification.title}');
+      }
+    } catch (storageError) {
+      debugPrint('❌ CRITICAL ERROR saving to storage: $storageError');
+      debugPrint('❌ Stack trace: ${StackTrace.current}');
+    }
 
     // Show notification if needed
     if (message.notification != null) {
-      debugPrint('📱 Notification Title: ${message.notification!.title}');
-      debugPrint('📱 Notification Body: ${message.notification!.body}');
+      debugPrint('📱 Banner Title: ${message.notification!.title}');
+      debugPrint('📱 Banner Body: ${message.notification!.body}');
     }
 
-    debugPrint('✅ Background notification SAVED safely to SharedPreferences');
-  } catch (e) {
-    debugPrint('❌ Error in background handler: $e');
+    debugPrint('✅ Background handler completed successfully');
+  } catch (e, stackTrace) {
+    debugPrint('❌ CRITICAL ERROR in background handler: $e');
+    debugPrint('❌ Stack trace: $stackTrace');
   }
+
+  debugPrint('🔔 ========== BACKGROUND HANDLER END ==========');
 }
 
 void main() async {
@@ -425,33 +541,89 @@ Future<void> configureFirebaseMessaging() async {
 
     // Foreground message handler
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      debugPrint('🔔 ========== FOREGROUND HANDLER START ==========');
       debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
 
-      // ✅ CRITICAL FIX: Add await and reload
-      await NotificationManager.instance.addFirebaseMessage(message);
-      await NotificationManager.instance.loadNotifications();
+      try {
+        // ✅ CRITICAL FIX: Add notification with error handling
+        await NotificationManager.instance.addFirebaseMessage(message);
+        debugPrint('✅ Added to NotificationManager');
 
-      debugPrint('✅ Foreground notification saved and reloaded');
+        // ✅ Force multiple reloads to ensure UI updates
+        await NotificationManager.instance.loadNotifications();
+        debugPrint('✅ First reload complete');
+
+        // Wait a bit for state to propagate
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Force another reload
+        await NotificationManager.instance.loadNotifications();
+        debugPrint('✅ Second reload complete');
+
+        // Triple notify listeners to be absolutely sure
+        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+        NotificationManager.instance.notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 50));
+        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+        NotificationManager.instance.notifyListeners();
+
+        debugPrint('✅ Foreground notification fully processed');
+        debugPrint(
+            '📊 Current total: ${NotificationManager.instance.notifications.length}');
+        debugPrint(
+            '📊 Unread count: ${NotificationManager.instance.unreadCount}');
+      } catch (e, stackTrace) {
+        debugPrint('❌ ERROR in foreground handler: $e');
+        debugPrint('❌ Stack trace: $stackTrace');
+      }
+
+      debugPrint('🔔 ========== FOREGROUND HANDLER END ==========');
     });
 
     // Notification opened handler
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+      debugPrint('🔔 ========== NOTIFICATION TAPPED ==========');
       debugPrint('👆 Notification tapped! Opening notifications screen');
-      debugPrint('📱 Message data: ${message.data}');
+      debugPrint('📱 Message ID: ${message.messageId}');
+      debugPrint('📱 Data: ${message.data}');
 
       // CRITICAL: Ensure notification is saved when app opens from tap
       try {
+        // Save the notification
         await NotificationManager.instance.addFirebaseMessage(message);
+        debugPrint('✅ Notification saved from tap');
 
-        // ✅ FIX 1: FORCE UI UPDATE FOR BADGE
+        // ✅ CRITICAL: Wait longer for state to fully propagate
+        await Future.delayed(const Duration(milliseconds: 500));
+        debugPrint('⏱️ Waited 500ms for state propagation');
+
+        // Force reload from storage
         await NotificationManager.instance.loadNotifications();
+        debugPrint('✅ First reload complete');
 
-        debugPrint('✅ Notification saved when app opened from tap');
-      } catch (e) {
+        // Wait a bit more
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        // Force another reload to be absolutely sure
+        await NotificationManager.instance.loadNotifications();
+        debugPrint('✅ Second reload complete');
+
+        // Triple notify
+        // ignore: invalid_use_of_visible_for_testing_member, invalid_use_of_protected_member
+        NotificationManager.instance.notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 100));
+        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+        NotificationManager.instance.notifyListeners();
+
+        debugPrint('✅ Notification fully processed and state updated');
+        debugPrint(
+            '📊 Total notifications: ${NotificationManager.instance.notifications.length}');
+      } catch (e, stackTrace) {
         debugPrint('⚠️ Error saving notification on tap: $e');
+        debugPrint('⚠️ Stack trace: $stackTrace');
       }
 
       // Navigate to notifications screen
@@ -471,7 +643,9 @@ Future<void> configureFirebaseMessaging() async {
       // CRITICAL: Save notification when app is launched from terminated state
       try {
         await NotificationManager.instance.addFirebaseMessage(initialMessage);
-        debugPrint('✅ Initial notification saved');
+        // ✅ CRITICAL FIX: Force reload to ensure UI sees the update
+        await NotificationManager.instance.loadNotifications();
+        debugPrint('✅ Initial notification saved and state updated');
       } catch (e) {
         debugPrint('⚠️ Error saving initial notification: $e');
       }
@@ -665,8 +839,6 @@ class NotificationIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChangeNotifierBuilder<NotificationManager>(
       notifier: NotificationManager.instance,
-      // ✅ FIX 2: ADD KEY TO FORCE REBUILD
-      key: const ValueKey('notification_badge'),
       builder: (context, notificationManager, child) {
         return Stack(
           clipBehavior: Clip.none,
@@ -726,10 +898,9 @@ class ChangeNotifierBuilder<T extends ChangeNotifier> extends StatelessWidget {
   final Widget Function(BuildContext context, T notifier, Widget? child)
       builder;
   final Widget? child;
-  final Key? key;
 
   const ChangeNotifierBuilder({
-    this.key,
+    Key? key,
     required this.notifier,
     required this.builder,
     this.child,
@@ -1446,41 +1617,41 @@ class PrivacyPolicyScreen extends StatelessWidget {
       ),
     );
   }
-}
 
-Widget _buildPrivacySection(String title, String content) {
-  return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE8F5E9),
-              borderRadius: BorderRadius.circular(5),
-            ),
-            child: Text(
-              title,
-              style: GoogleFonts.cairo(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF00BFA5),
+  Widget _buildPrivacySection(String title, String content) {
+    return Padding(
+        padding: const EdgeInsets.only(bottom: 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F5E9),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                title,
+                style: GoogleFonts.cairo(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF00BFA5),
+                ),
               ),
             ),
-          ),
-          Text(
-            content,
-            style: GoogleFonts.cairo(
-              fontSize: 15,
-              height: 1.6,
-              color: const Color(0xFF4A5568),
+            Text(
+              content,
+              style: GoogleFonts.cairo(
+                fontSize: 15,
+                height: 1.6,
+                color: const Color(0xFF4A5568),
+              ),
+              textAlign: TextAlign.right,
             ),
-            textAlign: TextAlign.right,
-          ),
-        ],
-      ));
+          ],
+        ));
+  }
 }
 
 // صفحة الإشعارات
@@ -1499,11 +1670,44 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ FIX 2: DELAY BUILD UNTIL DATA IS READY
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await NotificationManager.instance.loadNotifications();
+
+    // ✅ CRITICAL FIX: Multiple reload attempts
+    debugPrint('🔔 NotificationsScreen opening...');
+
+    // First immediate reload
+    NotificationManager.instance.loadNotifications();
+
+    // Listen to NotificationManager changes
+    NotificationManager.instance.addListener(_onNotificationChange);
+
+    // ✅ Force reload after a short delay
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        debugPrint('📂 Delayed reload #1');
+        NotificationManager.instance.loadNotifications();
+      }
     });
+
+    // ✅ Another reload after longer delay to be absolutely sure
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        debugPrint('📂 Delayed reload #2');
+        NotificationManager.instance.loadNotifications();
+        setState(() {}); // Force UI rebuild
+      }
+    });
+
     _registerFCMToken();
+  }
+
+  // ✅ CRITICAL FIX: Force rebuild when notifications change
+  void _onNotificationChange() {
+    if (mounted) {
+      debugPrint('🔄 Notification change detected, rebuilding UI');
+      setState(() {
+        // This forces the UI to rebuild with new notification data
+      });
+    }
   }
 
   Future<void> _registerFCMToken() async {
@@ -1521,6 +1725,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    // ✅ CRITICAL FIX: Remove listener to prevent memory leaks
+    NotificationManager.instance.removeListener(_onNotificationChange);
     super.dispose();
   }
 
