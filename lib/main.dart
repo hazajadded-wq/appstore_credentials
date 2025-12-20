@@ -142,7 +142,11 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      debugPrint('📱 Added notification: ${notification.title}');
+      debugPrint('✅ Successfully added notification: ${notification.title}');
+      debugPrint('📊 Total notifications in storage: ${_notifications.length}');
+    } else {
+      debugPrint(
+          '⚠️ Notification already exists, skipping: ${notification.title}');
     }
   }
 
@@ -241,24 +245,29 @@ Future<void> _setupNativeFirebaseDelegate() async {
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // IMPORTANT: Initialize Firebase in background handler
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    // IMPORTANT: Initialize Firebase in background handler
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
-  debugPrint('📱 Background FCM Message received: ${message.messageId}');
-  debugPrint('📱 Message data: ${message.data}');
+    debugPrint('📱 Background FCM Message received: ${message.messageId}');
+    debugPrint('📱 Message data: ${message.data}');
 
-  // Add to notification manager
-  await NotificationManager.instance.addFirebaseMessage(message);
+    // Load existing notifications first, then add new one
+    await NotificationManager.instance.loadNotifications();
+    await NotificationManager.instance.addFirebaseMessage(message);
 
-  // Show notification if needed
-  if (message.notification != null) {
-    debugPrint('📱 Notification Title: ${message.notification!.title}');
-    debugPrint('📱 Notification Body: ${message.notification!.body}');
+    // Show notification if needed
+    if (message.notification != null) {
+      debugPrint('📱 Notification Title: ${message.notification!.title}');
+      debugPrint('📱 Notification Body: ${message.notification!.body}');
+    }
+
+    debugPrint('✅ Background message processed and saved successfully');
+  } catch (e) {
+    debugPrint('❌ Error in background handler: $e');
   }
-
-  debugPrint('✅ Background message processed successfully');
 }
 
 void main() async {
@@ -389,12 +398,17 @@ Future<void> configureFirebaseMessaging() async {
     });
 
     // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
       debugPrint('👆 Notification tapped! Opening notifications screen');
       debugPrint('📱 Message data: ${message.data}');
 
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
+      // CRITICAL: Ensure notification is saved when app opens from tap
+      try {
+        await NotificationManager.instance.addFirebaseMessage(message);
+        debugPrint('✅ Notification saved when app opened from tap');
+      } catch (e) {
+        debugPrint('⚠️ Error saving notification on tap: $e');
+      }
 
       // Navigate to notifications screen
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -410,7 +424,13 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 App launched from notification');
       debugPrint('📱 Initial message data: ${initialMessage.data}');
 
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
+      // CRITICAL: Save notification when app is launched from terminated state
+      try {
+        await NotificationManager.instance.addFirebaseMessage(initialMessage);
+        debugPrint('✅ Initial notification saved');
+      } catch (e) {
+        debugPrint('⚠️ Error saving initial notification: $e');
+      }
 
       Future.delayed(const Duration(seconds: 1), () {
         navigatorKey.currentState?.push(
