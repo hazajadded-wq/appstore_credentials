@@ -2,7 +2,7 @@ name: salaryinfo
 description: بوابة الموظف الرقمية - الشركة العامة لتعبئة وخدمات الغاز
 publish_to: "none"
 
-version: 1.0.12+35
+version: 1.0.12+36
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
