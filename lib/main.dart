@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -23,9 +23,6 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-
-// 🔧 **FIX: Add local notifications package**
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // نموذج بيانات الإشعار
 class NotificationItem {
@@ -80,10 +77,16 @@ class NotificationItem {
         message.notification?.android?.imageUrl ??
         message.data['image'];
 
+    // ✅ FIX: توليد ID فريد دائماً لضمان عدم تجاهل الإشعار
+    // ندمج الوقت الحالي مع جزء عشوائي لضمان عدم التكرار حتى لو وصل إشعارين في نفس الثانية
+    String uniqueId = message.messageId ??
+        '${DateTime.now().millisecondsSinceEpoch}_${(message.data.hashCode)}';
+
     return NotificationItem(
-      id: message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      title: message.notification?.title ?? 'إشعار جديد',
-      body: message.notification?.body ?? '',
+      id: uniqueId,
+      title:
+          message.notification?.title ?? message.data['title'] ?? 'إشعار جديد',
+      body: message.notification?.body ?? message.data['body'] ?? '',
       imageUrl: imageUrl,
       timestamp: DateTime.now(),
       data: message.data,
@@ -104,15 +107,8 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
 
-  // 🔧 **FIX: Add Stream for real-time updates**
-  final StreamController<List<NotificationItem>>
-      _notificationsStreamController =
-      StreamController<List<NotificationItem>>.broadcast();
-
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
-  Stream<List<NotificationItem>> get notificationsStream =>
-      _notificationsStreamController.stream;
 
   Future<void> loadNotifications() async {
     try {
@@ -126,13 +122,7 @@ class NotificationManager extends ChangeNotifier {
             .toList();
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
-        // 🔧 **FIX: Update stream when loading notifications**
-        _notificationsStreamController.add(List.unmodifiable(_notifications));
       }
-
-      debugPrint(
-          '📱 Loaded ${_notifications.length} notifications from storage');
-      debugPrint('📱 Unread count: $_unreadCount');
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
     }
@@ -144,43 +134,45 @@ class NotificationManager extends ChangeNotifier {
       String notificationsJson = json.encode(
           _notifications.map((notification) => notification.toJson()).toList());
       await prefs.setString('stored_notifications', notificationsJson);
-      debugPrint('💾 Saved ${_notifications.length} notifications to storage');
     } catch (e) {
       debugPrint('❌ Error saving notifications: $e');
     }
   }
 
   Future<void> addNotification(NotificationItem notification) async {
-    String notificationId = notification.id;
-
-    // 🔧 **FIX: Check if notification already exists with better logging**
-    bool exists = _notifications.any((n) => n.id == notificationId);
+    // ✅ FIX: إزالة التحقق الصارم من الـ ID أو جعله يطبع تحذيراً فقط دون منع الإضافة إذا كان الوقت مختلفاً
+    bool exists = _notifications.any((n) => n.id == notification.id);
 
     if (!exists) {
-      debugPrint(
-          '📱 Adding new notification: ${notification.title} (ID: $notificationId)');
-
       _notifications.insert(0, notification);
+
+      // تقييد القائمة بـ 50 عنصر
       if (_notifications.length > 50) {
         _notifications = _notifications.take(50).toList();
       }
+
       _updateUnreadCount();
       await saveNotifications();
-
-      // 🔧 **FIX: Notify listeners AND update stream**
       notifyListeners();
-      _notificationsStreamController.add(List.unmodifiable(_notifications));
 
       debugPrint('✅ Added notification: ${notification.title}');
-      debugPrint('📱 Total notifications now: ${_notifications.length}');
-      debugPrint('📱 Unread count now: $_unreadCount');
     } else {
-      debugPrint('⚠️ Notification already exists, skipping: $notificationId');
+      debugPrint('⚠️ Notification ID conflict, forcing add with new ID...');
+      // إذا تكرر الـ ID، قم بتغييره وإضافته (حل احتياطي)
+      NotificationItem newNotification = NotificationItem(
+        id: '${notification.id}_duplicate_${DateTime.now().millisecondsSinceEpoch}',
+        title: notification.title,
+        body: notification.body,
+        timestamp: notification.timestamp,
+        data: notification.data,
+        imageUrl: notification.imageUrl,
+        type: notification.type,
+      );
+      await addNotification(newNotification);
     }
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    debugPrint('📱 Processing Firebase message: ${message.messageId}');
     NotificationItem notification =
         NotificationItem.fromFirebaseMessage(message);
     await addNotification(notification);
@@ -193,7 +185,6 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('✅ Marked notification as read: $notificationId');
     }
   }
@@ -211,7 +202,6 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('✅ Marked all notifications as read');
     }
   }
@@ -224,7 +214,6 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      _notificationsStreamController.add(List.unmodifiable(_notifications));
       debugPrint('🗑️ Deleted notification: $notificationId');
     }
   }
@@ -234,17 +223,11 @@ class NotificationManager extends ChangeNotifier {
     _updateUnreadCount();
     await saveNotifications();
     notifyListeners();
-    _notificationsStreamController.add(List.unmodifiable(_notifications));
     debugPrint('🗑️ Cleared all notifications');
   }
 
   void _updateUnreadCount() {
-    int oldCount = _unreadCount;
     _unreadCount = _notifications.where((n) => !n.isRead).length;
-
-    if (oldCount != _unreadCount) {
-      debugPrint('📱 Unread count changed: $oldCount → $_unreadCount');
-    }
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -263,53 +246,6 @@ class NotificationManager extends ChangeNotifier {
 
 // GlobalKey للتنقل
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-// 🔧 **FIX: Initialize local notifications plugin**
-FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-    FlutterLocalNotificationsPlugin();
-
-// 🔧 **FIX: Show local notification function**
-Future<void> _showLocalNotification(RemoteMessage message) async {
-  try {
-    debugPrint('📱 Showing local notification: ${message.notification?.title}');
-
-    const AndroidNotificationDetails androidPlatformChannelSpecifics =
-        AndroidNotificationDetails(
-      'salary_info_channel',
-      'Salary Info Notifications',
-      channelDescription: 'Notifications for salary information',
-      importance: Importance.max,
-      priority: Priority.high,
-      showWhen: true,
-      colorized: true,
-      color: Color(0xFF00BFA5),
-    );
-
-    const DarwinNotificationDetails iOSPlatformChannelSpecifics =
-        DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    const NotificationDetails platformChannelSpecifics = NotificationDetails(
-      android: androidPlatformChannelSpecifics,
-      iOS: iOSPlatformChannelSpecifics,
-    );
-
-    await flutterLocalNotificationsPlugin.show(
-      0,
-      message.notification?.title ?? 'إشعار جديد',
-      message.notification?.body ?? '',
-      platformChannelSpecifics,
-      payload: json.encode(message.data),
-    );
-
-    debugPrint('✅ Local notification shown successfully');
-  } catch (e) {
-    debugPrint('❌ Error showing local notification: $e');
-  }
-}
 
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
 Future<void> _setupNativeFirebaseDelegate() async {
@@ -371,36 +307,6 @@ void main() async {
   🚀 Platform: ${Platform.operatingSystem}
   🚀 =================================
   ''');
-
-  // 🔧 **FIX: Initialize local notifications**
-  try {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    final DarwinInitializationSettings initializationSettingsIOS =
-        DarwinInitializationSettings(
-      requestSoundPermission: false,
-      requestBadgePermission: false,
-      requestAlertPermission: false,
-    );
-
-    final InitializationSettings initializationSettings =
-        InitializationSettings(
-      android: initializationSettingsAndroid,
-      iOS: initializationSettingsIOS,
-    );
-
-    await flutterLocalNotificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        debugPrint('📱 Notification tapped: ${response.payload}');
-      },
-    );
-
-    debugPrint('✅ Local notifications initialized');
-  } catch (e) {
-    debugPrint('⚠️ Local notifications initialization failed: $e');
-  }
 
   // ✅ تهيئة Firebase بأمان (بدون كراش أو timeout معقد)
   try {
@@ -497,35 +403,25 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received');
     }
 
-    // 🔧 **FIX: Foreground message handler - UPDATED**
+    // 🔧 **FIX: Foreground message handler**
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
+      debugPrint('📱 Foreground FCM Message received');
+
+      // 1. إضافة الإشعار للمدير (هذا سيقوم تلقائياً باستدعاء notifyListeners داخل الدالة)
+      await NotificationManager.instance.addFirebaseMessage(message);
+
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
-      debugPrint('📱 App state: FOREGROUND');
-
-      // 🔧 **FIX: IMMEDIATELY add to notification manager**
-      await NotificationManager.instance.addFirebaseMessage(message);
-
-      // 🔧 **FIX: Force update the listeners**
-      // ignore: invalid_use_of_protected_member
-      NotificationManager.instance.notifyListeners();
-
-      // 🔧 **FIX: Show local notification**
-      await _showLocalNotification(message);
-
-      debugPrint('✅ Foreground notification processed');
     });
 
     // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       debugPrint('👆 Notification tapped! Opening notifications screen');
       debugPrint('📱 Message data: ${message.data}');
-      debugPrint('📱 App state: BACKGROUND/TERMINATED');
 
-      // 🔧 **FIX: Add to notification manager when tapped**
-      await NotificationManager.instance.addFirebaseMessage(message);
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
 
       // Navigate to notifications screen
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -541,7 +437,7 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 App launched from notification');
       debugPrint('📱 Initial message data: ${initialMessage.data}');
 
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
+      NotificationManager.instance.addFirebaseMessage(initialMessage);
 
       Future.delayed(const Duration(seconds: 1), () {
         navigatorKey.currentState?.push(
@@ -1472,9 +1368,11 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
             child: ModernButton(
               onPressed: () {
+                // ✅ CRITICAL: Changed back to sync - don't block UI
                 debugPrint(
                     '✅ Privacy Policy accepted - Navigating to WebView IMMEDIATELY');
                 try {
+                  // ✅ CRITICAL FIX: Navigate FIRST without waiting for anything
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => const WebViewScreen(),
@@ -1482,6 +1380,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   );
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
+                  // Emergency fallback - try direct push instead of replace
                   try {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -1562,11 +1461,29 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     super.initState();
     _registerFCMToken();
 
-    // 🔧 **FIX: Load notifications immediately when opening the screen**
+    // ✅ FIX: الاستماع المباشر للتغييرات لإجبار الواجهة على التحديث
+    NotificationManager.instance.addListener(_onNotificationUpdate);
+
+    // تحميل البيانات عند الدخول
     WidgetsBinding.instance.addPostFrameCallback((_) {
       NotificationManager.instance.loadNotifications();
-      debugPrint('📱 Notifications screen loaded - refreshing notifications');
     });
+  }
+
+  @override
+  void dispose() {
+    // ✅ FIX: إزالة المستمع عند الخروج لتجنب أخطاء الذاكرة
+    NotificationManager.instance.removeListener(_onNotificationUpdate);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // دالة لتحديث الواجهة عند وصول إشعار جديد
+  void _onNotificationUpdate() {
+    if (mounted) {
+      debugPrint('🔄 Screen refreshing due to notification update');
+      setState(() {}); // هذا السطر يجبر القائمة على الظهور فوراً
+    }
   }
 
   Future<void> _registerFCMToken() async {
@@ -1581,11 +1498,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
+  //@override
+  //void dispose() {
+  // NotificationManager.instance.removeListener(_onNotificationUpdate);
+  // _searchController.dispose();
+  // super.dispose();
+  // }
 
   @override
   Widget build(BuildContext context) {
