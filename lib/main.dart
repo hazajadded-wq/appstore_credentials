@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -77,16 +77,10 @@ class NotificationItem {
         message.notification?.android?.imageUrl ??
         message.data['image'];
 
-    // ✅ FIX: توليد ID فريد دائماً لضمان عدم تجاهل الإشعار
-    // ندمج الوقت الحالي مع جزء عشوائي لضمان عدم التكرار حتى لو وصل إشعارين في نفس الثانية
-    String uniqueId = message.messageId ??
-        '${DateTime.now().millisecondsSinceEpoch}_${(message.data.hashCode)}';
-
     return NotificationItem(
-      id: uniqueId,
-      title:
-          message.notification?.title ?? message.data['title'] ?? 'إشعار جديد',
-      body: message.notification?.body ?? message.data['body'] ?? '',
+      id: message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      title: message.notification?.title ?? 'إشعار جديد',
+      body: message.notification?.body ?? '',
       imageUrl: imageUrl,
       timestamp: DateTime.now(),
       data: message.data,
@@ -122,6 +116,8 @@ class NotificationManager extends ChangeNotifier {
             .toList();
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
+        // 🔥 CRITICAL: إعلام المستمعين بعد التحميل
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
@@ -140,42 +136,28 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addNotification(NotificationItem notification) async {
-    // ✅ FIX: إزالة التحقق الصارم من الـ ID أو جعله يطبع تحذيراً فقط دون منع الإضافة إذا كان الوقت مختلفاً
-    bool exists = _notifications.any((n) => n.id == notification.id);
-
-    if (!exists) {
+    if (!_notifications.any((n) => n.id == notification.id)) {
       _notifications.insert(0, notification);
-
-      // تقييد القائمة بـ 50 عنصر
       if (_notifications.length > 50) {
         _notifications = _notifications.take(50).toList();
       }
-
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-
-      debugPrint('✅ Added notification: ${notification.title}');
-    } else {
-      debugPrint('⚠️ Notification ID conflict, forcing add with new ID...');
-      // إذا تكرر الـ ID، قم بتغييره وإضافته (حل احتياطي)
-      NotificationItem newNotification = NotificationItem(
-        id: '${notification.id}_duplicate_${DateTime.now().millisecondsSinceEpoch}',
-        title: notification.title,
-        body: notification.body,
-        timestamp: notification.timestamp,
-        data: notification.data,
-        imageUrl: notification.imageUrl,
-        type: notification.type,
-      );
-      await addNotification(newNotification);
+      debugPrint('📱 Added notification: ${notification.title}');
+      return;
     }
+    debugPrint('⚠️ Notification already exists: ${notification.id}');
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    NotificationItem notification =
-        NotificationItem.fromFirebaseMessage(message);
-    await addNotification(notification);
+    try {
+      NotificationItem notification =
+          NotificationItem.fromFirebaseMessage(message);
+      await addNotification(notification);
+    } catch (e) {
+      debugPrint('❌ Error adding Firebase message: $e');
+    }
   }
 
   Future<void> markAsRead(String notificationId) async {
@@ -242,6 +224,13 @@ class NotificationManager extends ChangeNotifier {
             n.body.toLowerCase().contains(lowerQuery))
         .toList();
   }
+
+  // 🔥 NEW: طريقة لتحديث الإشعارات يدوياً
+  void refresh() {
+    _updateUnreadCount();
+    notifyListeners();
+    debugPrint('🔄 Notifications refreshed manually');
+  }
 }
 
 // GlobalKey للتنقل
@@ -251,10 +240,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 Future<void> _setupNativeFirebaseDelegate() async {
   if (Platform.isIOS) {
     try {
-      // Now that Firebase is initialized, we can safely set up native delegates
       final messaging = FirebaseMessaging.instance;
-
-      // This call will trigger the native AppDelegate MessagingDelegate methods
       String? token = await messaging.getToken();
       debugPrint(
           "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
@@ -277,6 +263,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   // Add to notification manager
   await NotificationManager.instance.addFirebaseMessage(message);
+
+  // 🔥 CRITICAL: تحديث البيانات المحفوظة
+  await NotificationManager.instance.saveNotifications();
 
   // Show notification if needed
   if (message.notification != null) {
@@ -314,7 +303,7 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
 
-    await configureFirebaseMessaging(); // 🔔 THIS IS THE FIX
+    await configureFirebaseMessaging();
 
     debugPrint('✅ Firebase initialized successfully');
 
@@ -403,31 +392,45 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received');
     }
 
-    // 🔧 **FIX: Foreground message handler**
+    // 🔥 CRITICAL FIX: Foreground message handler with better update mechanism
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      debugPrint('📱 Foreground FCM Message received');
-
-      // 1. إضافة الإشعار للمدير (هذا سيقوم تلقائياً باستدعاء notifyListeners داخل الدالة)
-      await NotificationManager.instance.addFirebaseMessage(message);
-
+      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
+
+      // Add to notification manager
+      await NotificationManager.instance.addFirebaseMessage(message);
+
+      // 🔥 IMPORTANT: إعلام جميع الـ listeners بالتحديث
+      // ignore: invalid_use_of_protected_member
+      NotificationManager.instance.notifyListeners();
+      debugPrint('✅ Notification added and listeners notified in foreground');
+
+      // 🔥 إظهار إشعار محلي (اختياري)
+      // يمكنك إضافة إشعار محلي هنا إذا أردت
     });
 
     // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
       debugPrint('👆 Notification tapped! Opening notifications screen');
       debugPrint('📱 Message data: ${message.data}');
 
       // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
+      await NotificationManager.instance.addFirebaseMessage(message);
+      // ignore: invalid_use_of_protected_member
+      NotificationManager.instance.notifyListeners();
 
       // Navigate to notifications screen
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
+        try {
+          navigatorKey.currentState?.push(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+          );
+        } catch (e) {
+          debugPrint('❌ Navigation error: $e');
+        }
       });
     });
 
@@ -437,12 +440,19 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 App launched from notification');
       debugPrint('📱 Initial message data: ${initialMessage.data}');
 
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
+      await NotificationManager.instance.addFirebaseMessage(initialMessage);
+      // ignore: invalid_use_of_protected_member
+      NotificationManager.instance.notifyListeners();
 
       Future.delayed(const Duration(seconds: 1), () {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
+        try {
+          navigatorKey.currentState?.push(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+          );
+        } catch (e) {
+          debugPrint('❌ Navigation error: $e');
+        }
       });
     }
 
@@ -1330,7 +1340,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '4. حماية البيانات',
-                      'تتخذ الشركة العامة لتعبئة وخدمات الغاز جميع التدابير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
+                      'تتخذ الشركة جميع التدابير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
                     ),
                     _buildPrivacySection(
                       '5. مشاركة البيانات',
@@ -1346,7 +1356,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '8. التعديلات على السياسة',
-                      'قد تقوم الشركة العامة لتعبئة وخدمات الغاز بتحديث هذه السياسة من وقت لآخر، وسيتم إخطار الموظفين بأي تعديل من خلال التطبيق.',
+                      'قد تقوم الشركة بتحديث هذه السياسة من وقت لآخر، وسيتم إخطار الموظفين بأي تعديل من خلال التطبيق.',
                     ),
                   ],
                 ),
@@ -1368,11 +1378,8 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
             child: ModernButton(
               onPressed: () {
-                // ✅ CRITICAL: Changed back to sync - don't block UI
-                debugPrint(
-                    '✅ Privacy Policy accepted - Navigating to WebView IMMEDIATELY');
+                debugPrint('✅ Privacy Policy accepted - Navigating to WebView');
                 try {
-                  // ✅ CRITICAL FIX: Navigate FIRST without waiting for anything
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => const WebViewScreen(),
@@ -1380,7 +1387,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   );
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
-                  // Emergency fallback - try direct push instead of replace
                   try {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -1460,30 +1466,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     _registerFCMToken();
-
-    // ✅ FIX: الاستماع المباشر للتغييرات لإجبار الواجهة على التحديث
-    NotificationManager.instance.addListener(_onNotificationUpdate);
-
-    // تحميل البيانات عند الدخول
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      NotificationManager.instance.loadNotifications();
-    });
-  }
-
-  @override
-  void dispose() {
-    // ✅ FIX: إزالة المستمع عند الخروج لتجنب أخطاء الذاكرة
-    NotificationManager.instance.removeListener(_onNotificationUpdate);
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  // دالة لتحديث الواجهة عند وصول إشعار جديد
-  void _onNotificationUpdate() {
-    if (mounted) {
-      debugPrint('🔄 Screen refreshing due to notification update');
-      setState(() {}); // هذا السطر يجبر القائمة على الظهور فوراً
-    }
   }
 
   Future<void> _registerFCMToken() async {
@@ -1498,12 +1480,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  //@override
-  //void dispose() {
-  // NotificationManager.instance.removeListener(_onNotificationUpdate);
-  // _searchController.dispose();
-  // super.dispose();
-  // }
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1662,8 +1643,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
                 return RefreshIndicator(
                   onRefresh: () async {
+                    // 🔥 CRITICAL FIX: إعادة تحميل الإشعارات عند السحب للتحديث
+                    await NotificationManager.instance.loadNotifications();
                     setState(() {});
-                    await Future.delayed(const Duration(seconds: 1));
                   },
                   color: const Color(0xFF00BFA5),
                   child: ListView.builder(
@@ -2216,7 +2198,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         controller!.enableZoom(true);
         debugPrint('✅ Android WebView settings configured');
       } else if (Platform.isIOS) {
-        // ✅ iOS FIX: Configure WKWebView for iOS
         debugPrint('🍎 Configuring iOS WebView settings');
         final wkWebViewController =
             controller!.platform as WebKitWebViewController;
@@ -2916,7 +2897,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // ✅ CRITICAL FIX: Always show white container as base
             Container(
               color: Colors.white,
               child: Center(
