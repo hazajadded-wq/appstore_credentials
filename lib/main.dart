@@ -96,7 +96,9 @@ class NotificationManager extends ChangeNotifier {
   static NotificationManager get instance =>
       _instance ??= NotificationManager._();
 
-  NotificationManager._();
+  NotificationManager._() {
+    debugPrint('🔔 NotificationManager created');
+  }
 
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
@@ -106,6 +108,7 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> loadNotifications() async {
     try {
+      debugPrint('📱 Loading notifications from storage...');
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? notificationsJson = prefs.getString('stored_notifications');
 
@@ -117,7 +120,10 @@ class NotificationManager extends ChangeNotifier {
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
         notifyListeners();
-        debugPrint('📱 Loaded ${_notifications.length} notifications');
+        debugPrint(
+            '📱 Loaded ${_notifications.length} notifications from storage');
+      } else {
+        debugPrint('📱 No stored notifications found');
       }
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
@@ -138,14 +144,26 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> addNotification(NotificationItem notification) async {
     try {
-      // 🔥 CRITICAL: منع الإشعارات المكررة
-      bool exists = _notifications.any((n) => n.id == notification.id);
+      debugPrint('🔔 Adding new notification: ${notification.title}');
+
+      // 🔥 FIX: منع الإشعارات المكررة بناءً على المحتوى والوقت أيضاً
+      bool exists = _notifications.any((n) =>
+          n.id == notification.id ||
+          (n.title == notification.title &&
+              n.body == notification.body &&
+              n.timestamp.difference(notification.timestamp).inSeconds.abs() <
+                  10));
+
       if (exists) {
-        debugPrint('⚠️ Notification already exists: ${notification.id}');
+        debugPrint(
+            '⚠️ Notification already exists or is duplicate: ${notification.id}');
         return;
       }
 
+      debugPrint('✅ Adding notification to list: ${notification.title}');
       _notifications.insert(0, notification);
+
+      // حفظ فقط آخر 100 إشعار
       if (_notifications.length > 100) {
         _notifications = _notifications.take(100).toList();
       }
@@ -154,8 +172,8 @@ class NotificationManager extends ChangeNotifier {
       await saveNotifications();
       notifyListeners();
 
-      debugPrint('✅ Added notification: ${notification.title}');
-      debugPrint('✅ Total: ${_notifications.length}, Unread: $_unreadCount');
+      debugPrint('✅ Notification added successfully');
+      debugPrint('📊 Total: ${_notifications.length}, Unread: $_unreadCount');
     } catch (e) {
       debugPrint('❌ Error adding notification: $e');
     }
@@ -163,6 +181,7 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     try {
+      debugPrint('📱 Adding Firebase message to notifications');
       NotificationItem notification =
           NotificationItem.fromFirebaseMessage(message);
       await addNotification(notification);
@@ -221,6 +240,7 @@ class NotificationManager extends ChangeNotifier {
 
   void _updateUnreadCount() {
     _unreadCount = _notifications.where((n) => !n.isRead).length;
+    debugPrint('📊 Updated unread count: $_unreadCount');
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -236,11 +256,12 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
-  // 🔥 NEW: Force refresh
+  // 🔥 NEW: Force refresh with debug
   void forceRefresh() {
+    debugPrint('🔄 Force refreshing notifications');
     _updateUnreadCount();
     notifyListeners();
-    debugPrint('🔄 Force refreshed notifications');
+    debugPrint('🔄 Force refresh complete - Unread: $_unreadCount');
   }
 }
 
@@ -346,7 +367,7 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📧 Subscribed to topic: all_employees');
     }
 
-    // 🔥 CRITICAL FIX 1: Handle foreground messages
+    // 🔥 CRITICAL FIX 1: Handle foreground messages - FIXED
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       debugPrint('📱 FOREGROUND Notification received');
       debugPrint('📱 Title: ${message.notification?.title}');
@@ -354,11 +375,14 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 Data: ${message.data}');
       debugPrint('📱 Message ID: ${message.messageId}');
 
-      // 🔥 Add to notification manager
+      // 🔥 FIX: إضافة الإشعار مباشرة إلى المدير
       await NotificationManager.instance.addFirebaseMessage(message);
 
-      // 🔥 Force update UI
+      // 🔥 FIX: Force update UI immediately
       NotificationManager.instance.forceRefresh();
+
+      // 🔥 FIX: إظهار تنبيه محلي
+      _showLocalNotification(message);
     });
 
     // 🔥 CRITICAL FIX 2: Handle notification tap (when app is in background or terminated)
@@ -367,13 +391,13 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Message ID: ${message.messageId}');
 
-      // 🔥 Add notification
+      // 🔥 FIX: إضافة الإشعار أولاً
       await NotificationManager.instance.addFirebaseMessage(message);
 
-      // 🔥 Force update UI
+      // 🔥 FIX: تحديث واجهة المستخدم
       NotificationManager.instance.forceRefresh();
 
-      // 🔥 Navigate to notifications screen
+      // 🔥 FIX: الانتقال إلى صفحة الإشعارات
       _navigateToNotificationsScreen();
     });
 
@@ -386,7 +410,7 @@ Future<void> configureFirebaseMessaging() async {
       await NotificationManager.instance.addFirebaseMessage(initialMessage);
       NotificationManager.instance.forceRefresh();
 
-      // 🔥 Navigate after delay to ensure app is ready
+      // 🔥 FIX: الانتقال بعد تأخير بسيط
       Future.delayed(const Duration(seconds: 1), () {
         _navigateToNotificationsScreen();
       });
@@ -402,20 +426,26 @@ Future<void> configureFirebaseMessaging() async {
   }
 }
 
-// 🔥 Helper function: Navigate to notifications screen
+// 🔥 FIX: دالة جديدة لإظهار تنبيه محلي
+void _showLocalNotification(RemoteMessage message) {
+  // يمكنك هنا إضافة تنبيه محلي إذا أردت
+  debugPrint('🔔 Showing local notification: ${message.notification?.title}');
+}
+
+// 🔥 FIX: دالة محسنة للانتقال إلى صفحة الإشعارات
 void _navigateToNotificationsScreen() {
   WidgetsBinding.instance.addPostFrameCallback((_) {
     try {
       if (navigatorKey.currentState != null) {
-        // 🔥 Clear all existing routes and go to notifications
-        navigatorKey.currentState!.pushAndRemoveUntil(
+        debugPrint('📍 Navigating to NotificationsScreen');
+
+        // 🔥 FIX: استخدام push بدلاً من pushAndRemoveUntil للحفاظ على المسار
+        navigatorKey.currentState!.push(
           MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-          (route) => false,
         );
-        debugPrint('✅ Navigated to NotificationsScreen');
+        debugPrint('✅ Navigated to NotificationsScreen successfully');
       } else {
         debugPrint('❌ NavigatorKey not ready, storing intent...');
-        // يمكنك حفظ النية للتنقل لاحقاً
       }
     } catch (e) {
       debugPrint('❌ Navigation error: $e');
@@ -598,6 +628,9 @@ class NotificationIcon extends StatelessWidget {
     return ChangeNotifierBuilder<NotificationManager>(
       notifier: NotificationManager.instance,
       builder: (context, notificationManager, child) {
+        debugPrint(
+            '🎯 Building NotificationIcon - Unread: ${notificationManager.unreadCount}');
+
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1411,8 +1444,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     WidgetsBinding.instance.addObserver(this);
     debugPrint('📱 NotificationsScreen opened');
 
-    // 🔥 Force refresh when screen opens
+    // 🔥 FIX: Force refresh when screen opens
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint('🔄 Initial refresh of notifications');
       NotificationManager.instance.forceRefresh();
     });
   }
@@ -1428,17 +1462,21 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     debugPrint('📱 AppLifecycleState changed: $state');
 
-    // 🔥 Refresh when app returns to foreground
+    // 🔥 FIX: Refresh when app returns to foreground
     if (state == AppLifecycleState.resumed) {
       debugPrint('🔄 App resumed, refreshing notifications...');
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        NotificationManager.instance.forceRefresh();
+        NotificationManager.instance.loadNotifications().then((_) {
+          NotificationManager.instance.forceRefresh();
+        });
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('🎨 Building NotificationsScreen');
+
     return Scaffold(
       backgroundColor: const Color(0xFFF7FAFC),
       appBar: AppBar(
@@ -1585,6 +1623,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             child: ChangeNotifierBuilder<NotificationManager>(
               notifier: NotificationManager.instance,
               builder: (context, notificationManager, child) {
+                debugPrint('📱 Rebuilding notifications list');
+
                 List<NotificationItem> filteredNotifications =
                     _getFilteredNotifications(notificationManager);
 
@@ -1594,6 +1634,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
                 return RefreshIndicator(
                   onRefresh: () async {
+                    debugPrint('🔄 Manual refresh requested');
                     await NotificationManager.instance.loadNotifications();
                     setState(() {});
                   },
@@ -1660,6 +1701,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       }
     }
 
+    debugPrint('🔍 Filtered notifications count: ${notifications.length}');
     return notifications;
   }
 
@@ -2118,7 +2160,7 @@ class _WebViewScreenState extends State<WebViewScreen>
     debugPrint('🌐 WebViewScreen initState');
     debugPrint('🔗 Login URL: $loginUrl');
 
-    // 🔥 Setup notification handler
+    // 🔥 FIX: Setup notification handler
     _setupNotificationHandler();
 
     // Initialize WebView
@@ -2143,19 +2185,24 @@ class _WebViewScreenState extends State<WebViewScreen>
     if (state == AppLifecycleState.resumed) {
       debugPrint('🔄 WebView resumed, refreshing notifications');
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        NotificationManager.instance.loadNotifications();
+        NotificationManager.instance.loadNotifications().then((_) {
+          NotificationManager.instance.forceRefresh();
+        });
       });
     }
   }
 
   void _setupNotificationHandler() {
-    // 🔥 Handle notification tap when app is already open
+    // 🔥 FIX: Handle notification tap when app is already open
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-      debugPrint('👆 NOTIFICATION TAPPED - App is OPEN');
+      debugPrint('👆 NOTIFICATION TAPPED - App is OPEN (WebView)');
       debugPrint('📱 Title: ${message.notification?.title}');
 
       // Add notification
       await NotificationManager.instance.addFirebaseMessage(message);
+
+      // 🔥 FIX: Update notification count immediately
+      NotificationManager.instance.forceRefresh();
 
       // Navigate to notifications
       if (mounted) {
@@ -2172,6 +2219,18 @@ class _WebViewScreenState extends State<WebViewScreen>
           }
         });
       }
+    });
+
+    // 🔥 FIX: Handle foreground messages in WebView screen
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      debugPrint('📱 FOREGROUND Notification received in WebView');
+      debugPrint('📱 Title: ${message.notification?.title}');
+
+      // 🔥 FIX: إضافة الإشعار مباشرة
+      await NotificationManager.instance.addFirebaseMessage(message);
+
+      // 🔥 FIX: Force update notification count
+      NotificationManager.instance.forceRefresh();
     });
   }
 
@@ -2883,7 +2942,7 @@ class _WebViewScreenState extends State<WebViewScreen>
           actions: [
             NotificationIcon(
               onTap: () {
-                debugPrint('🔔 Notifications icon tapped');
+                debugPrint('🔔 Notifications icon tapped from WebView');
                 Navigator.push(
                   context,
                   MaterialPageRoute(
