@@ -60,6 +60,13 @@ import UserNotifications
     print("📱 willPresent called - App is in FOREGROUND")
     print("📱 Notification title: \(notification.request.content.title)")
     print("📱 Notification body: \(notification.request.content.body)")
+    print("📱 userInfo: \(notification.request.content.userInfo)")
+    
+    // ✅ CRITICAL FIX: Pass notification data to Flutter (for in-app list)
+    // This ensures FirebaseMessaging.onMessage receives the message
+    let userInfo = notification.request.content.userInfo
+    Messaging.messaging().appDidReceiveMessage(userInfo)
+    print("✅ Message passed to Flutter's FirebaseMessaging.onMessage")
     
     // ✅ CRITICAL: Show banner/alert even when app is open
     if #available(iOS 14.0, *) {
@@ -81,6 +88,13 @@ import UserNotifications
   ) {
     print("👆 User tapped notification")
     print("📱 Action: \(response.actionIdentifier)")
+    print("📱 userInfo: \(response.notification.request.content.userInfo)")
+    
+    // ✅ Pass data to Flutter for navigation
+    let userInfo = response.notification.request.content.userInfo
+    Messaging.messaging().appDidReceiveMessage(userInfo)
+    print("✅ Tapped notification data sent to Flutter")
+    
     completionHandler()
   }
 }

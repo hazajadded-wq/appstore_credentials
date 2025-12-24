@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -96,9 +96,7 @@ class NotificationManager extends ChangeNotifier {
   static NotificationManager get instance =>
       _instance ??= NotificationManager._();
 
-  NotificationManager._() {
-    debugPrint('🔔 NotificationManager created');
-  }
+  NotificationManager._();
 
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
@@ -108,7 +106,6 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> loadNotifications() async {
     try {
-      debugPrint('📱 Loading notifications from storage...');
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? notificationsJson = prefs.getString('stored_notifications');
 
@@ -119,11 +116,6 @@ class NotificationManager extends ChangeNotifier {
             .toList();
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
-        notifyListeners();
-        debugPrint(
-            '📱 Loaded ${_notifications.length} notifications from storage');
-      } else {
-        debugPrint('📱 No stored notifications found');
       }
     } catch (e) {
       debugPrint('❌ Error loading notifications: $e');
@@ -136,58 +128,28 @@ class NotificationManager extends ChangeNotifier {
       String notificationsJson = json.encode(
           _notifications.map((notification) => notification.toJson()).toList());
       await prefs.setString('stored_notifications', notificationsJson);
-      debugPrint('💾 Saved ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ Error saving notifications: $e');
     }
   }
 
   Future<void> addNotification(NotificationItem notification) async {
-    try {
-      debugPrint('🔔 Adding new notification: ${notification.title}');
-
-      // 🔥 FIX: منع الإشعارات المكررة بناءً على المحتوى والوقت أيضاً
-      bool exists = _notifications.any((n) =>
-          n.id == notification.id ||
-          (n.title == notification.title &&
-              n.body == notification.body &&
-              n.timestamp.difference(notification.timestamp).inSeconds.abs() <
-                  10));
-
-      if (exists) {
-        debugPrint(
-            '⚠️ Notification already exists or is duplicate: ${notification.id}');
-        return;
-      }
-
-      debugPrint('✅ Adding notification to list: ${notification.title}');
+    if (!_notifications.any((n) => n.id == notification.id)) {
       _notifications.insert(0, notification);
-
-      // حفظ فقط آخر 100 إشعار
-      if (_notifications.length > 100) {
-        _notifications = _notifications.take(100).toList();
+      if (_notifications.length > 50) {
+        _notifications = _notifications.take(50).toList();
       }
-
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-
-      debugPrint('✅ Notification added successfully');
-      debugPrint('📊 Total: ${_notifications.length}, Unread: $_unreadCount');
-    } catch (e) {
-      debugPrint('❌ Error adding notification: $e');
+      debugPrint('📱 Added notification: ${notification.title}');
     }
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    try {
-      debugPrint('📱 Adding Firebase message to notifications');
-      NotificationItem notification =
-          NotificationItem.fromFirebaseMessage(message);
-      await addNotification(notification);
-    } catch (e) {
-      debugPrint('❌ Error adding Firebase message: $e');
-    }
+    NotificationItem notification =
+        NotificationItem.fromFirebaseMessage(message);
+    await addNotification(notification);
   }
 
   Future<void> markAsRead(String notificationId) async {
@@ -240,7 +202,6 @@ class NotificationManager extends ChangeNotifier {
 
   void _updateUnreadCount() {
     _unreadCount = _notifications.where((n) => !n.isRead).length;
-    debugPrint('📊 Updated unread count: $_unreadCount');
   }
 
   List<NotificationItem> getNotificationsByType(String type) {
@@ -255,38 +216,56 @@ class NotificationManager extends ChangeNotifier {
             n.body.toLowerCase().contains(lowerQuery))
         .toList();
   }
-
-  // 🔥 NEW: Force refresh with debug
-  void forceRefresh() {
-    debugPrint('🔄 Force refreshing notifications');
-    _updateUnreadCount();
-    notifyListeners();
-    debugPrint('🔄 Force refresh complete - Unread: $_unreadCount');
-  }
 }
 
 // GlobalKey للتنقل
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+// ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
+Future<void> _setupNativeFirebaseDelegate() async {
+  if (Platform.isIOS) {
+    try {
+      // Now that Firebase is initialized, we can safely set up native delegates
+      final messaging = FirebaseMessaging.instance;
+
+      // This call will trigger the native AppDelegate MessagingDelegate methods
+      String? token = await messaging.getToken();
+      debugPrint(
+          "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
+    } catch (e) {
+      debugPrint("❌ Error setting up native Firebase delegate: $e");
+    }
+  }
+}
+
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // IMPORTANT: Initialize Firebase in background handler
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
   debugPrint('📱 Background FCM Message received: ${message.messageId}');
-  debugPrint('📱 Title: ${message.notification?.title}');
+  debugPrint('📱 Message data: ${message.data}');
 
-  // 🔥 CRITICAL: حفظ الإشعار في الخلفية
+  // Add to notification manager
   await NotificationManager.instance.addFirebaseMessage(message);
 
-  debugPrint('✅ Background message saved');
+  // Show notification if needed
+  if (message.notification != null) {
+    debugPrint('📱 Notification Title: ${message.notification!.title}');
+    debugPrint('📱 Notification Body: ${message.notification!.body}');
+  }
+
+  debugPrint('✅ Background message processed successfully');
 }
 
 void main() async {
+  // ✅ مهم جدًا لـ iOS - يجب أن يكون أول سطر
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Initialize date formatting for Arabic locale
   try {
     await initializeDateFormatting('ar_IQ', null);
     debugPrint('✅ Date formatting initialized');
@@ -297,30 +276,43 @@ void main() async {
   debugPrint('''
   🚀 =================================
   🚀 Starting SalaryInfo Application
+  🚀 Firebase Project: scgfs-salary-app
+  🚀 Bundle ID: com.pocket.salaryinfo
   🚀 Platform: ${Platform.operatingSystem}
   🚀 =================================
   ''');
 
+  // ✅ تهيئة Firebase بأمان (بدون كراش أو timeout معقد)
   try {
-    // 🔥 CRITICAL: تهيئة Firebase أولاً
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
 
+    await configureFirebaseMessaging(); // 🔔 THIS IS THE FIX
+
     debugPrint('✅ Firebase initialized successfully');
 
-    // 🔥 CRITICAL: تهيئة NotificationManager ثانياً
+    // Test Firebase configuration
+    final app = Firebase.app();
+    debugPrint('✅ Firebase App Name: ${app.name}');
+    debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
+
+    // Setup native Firebase delegate
+    await _setupNativeFirebaseDelegate();
+
+    // Initialize Notification Manager
     await NotificationManager.instance.loadNotifications();
     debugPrint('✅ Notification Manager initialized');
 
-    // 🔥 CRITICAL: تكوين FirebaseMessaging ثالثاً
-    await configureFirebaseMessaging();
-
-    debugPrint('✅ Firebase Messaging configured');
+    // Register background message handler
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    debugPrint('✅ Background message handler registered');
   } catch (e) {
     debugPrint('⚠️ Firebase init error: $e');
+    debugPrint('⚠️ Continuing without Firebase features');
   }
 
+  // Preload Google Fonts
   try {
     await GoogleFonts.pendingFonts([GoogleFonts.cairo()]);
     debugPrint('✅ Google Fonts loaded');
@@ -328,129 +320,111 @@ void main() async {
     debugPrint('⚠️ Google Fonts loading failed: $e');
   }
 
-  debugPrint('✅ All initializations complete');
+  debugPrint('✅ All initializations complete - Running app');
 
+  // Run the app
   runApp(const MyApp());
 }
 
-// 🔥 CRITICAL FIX: دالة تكوين FirebaseMessaging المحسنة
 Future<void> configureFirebaseMessaging() async {
-  try {
-    final messaging = FirebaseMessaging.instance;
-
-    // 🔥 CRITICAL: Request permissions
-    final settings = await messaging.requestPermission(
+  // 🍎 REQUIRED FOR iOS (WITHOUT THIS → NO BANNER / NO SOUND)
+  if (Platform.isIOS) {
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
       alert: true,
       badge: true,
       sound: true,
+    );
+  }
+
+  try {
+    final messaging = FirebaseMessaging.instance;
+
+    final settings = await messaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
       provisional: false,
+      sound: true,
     );
 
-    debugPrint('🔔 Permission status: ${settings.authorizationStatus}');
+    debugPrint(
+        '🔔 Notification permission status: ${settings.authorizationStatus}');
 
-    // 🔥 CRITICAL: iOS foreground settings
-    if (Platform.isIOS) {
-      await messaging.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-      debugPrint('🍎 iOS foreground settings configured');
-    }
+    // Get FCM token with timeout
+    String? token = await messaging.getToken().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        debugPrint('⚠️ FCM token request timeout');
+        return null;
+      },
+    );
 
-    // 🔥 CRITICAL: Get FCM token
-    String? token = await messaging.getToken();
     if (token != null) {
       debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
 
-      await messaging.subscribeToTopic('all_employees');
+      // Subscribe to topic
+      await messaging.subscribeToTopic('all_employees').timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          debugPrint('⚠️ Topic subscription timeout');
+        },
+      );
       debugPrint('📧 Subscribed to topic: all_employees');
+    } else {
+      debugPrint('⚠️ No FCM token received');
     }
 
-    // 🔥 CRITICAL FIX 1: Handle foreground messages - FIXED
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      debugPrint('📱 FOREGROUND Notification received');
+    // Foreground message handler
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
       debugPrint('📱 Title: ${message.notification?.title}');
       debugPrint('📱 Body: ${message.notification?.body}');
       debugPrint('📱 Data: ${message.data}');
-      debugPrint('📱 Message ID: ${message.messageId}');
 
-      // 🔥 FIX: إضافة الإشعار مباشرة إلى المدير
-      await NotificationManager.instance.addFirebaseMessage(message);
-
-      // 🔥 FIX: Force update UI immediately
-      NotificationManager.instance.forceRefresh();
-
-      // 🔥 FIX: إظهار تنبيه محلي
-      _showLocalNotification(message);
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
     });
 
-    // 🔥 CRITICAL FIX 2: Handle notification tap (when app is in background or terminated)
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-      debugPrint('👆 NOTIFICATION TAPPED - App was in BACKGROUND/TERMINATED');
-      debugPrint('📱 Title: ${message.notification?.title}');
-      debugPrint('📱 Message ID: ${message.messageId}');
+    // Notification opened handler
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('👆 Notification tapped! Opening notifications screen');
+      debugPrint('📱 Message data: ${message.data}');
 
-      // 🔥 FIX: إضافة الإشعار أولاً
-      await NotificationManager.instance.addFirebaseMessage(message);
+      // Add to notification manager
+      NotificationManager.instance.addFirebaseMessage(message);
 
-      // 🔥 FIX: تحديث واجهة المستخدم
-      NotificationManager.instance.forceRefresh();
-
-      // 🔥 FIX: الانتقال إلى صفحة الإشعارات
-      _navigateToNotificationsScreen();
+      // Navigate to notifications screen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
+      });
     });
 
-    // 🔥 CRITICAL FIX 3: Handle initial notification (app opened from terminated state)
+    // Get initial message
     RemoteMessage? initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
-      debugPrint('📱 APP OPENED FROM NOTIFICATION (Terminated state)');
-      debugPrint('📱 Title: ${initialMessage.notification?.title}');
+      debugPrint('📱 App launched from notification');
+      debugPrint('📱 Initial message data: ${initialMessage.data}');
 
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
-      NotificationManager.instance.forceRefresh();
+      NotificationManager.instance.addFirebaseMessage(initialMessage);
 
-      // 🔥 FIX: الانتقال بعد تأخير بسيط
       Future.delayed(const Duration(seconds: 1), () {
-        _navigateToNotificationsScreen();
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        );
       });
     }
 
-    // Register background handler
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-    debugPrint('✅ Firebase Messaging fully configured');
+    debugPrint('✅ Firebase Messaging configured successfully');
   } catch (e, stackTrace) {
     debugPrint('❌ Firebase Messaging configuration error: $e');
     debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('⚠️ Push notifications may not work');
   }
-}
-
-// 🔥 FIX: دالة جديدة لإظهار تنبيه محلي
-void _showLocalNotification(RemoteMessage message) {
-  // يمكنك هنا إضافة تنبيه محلي إذا أردت
-  debugPrint('🔔 Showing local notification: ${message.notification?.title}');
-}
-
-// 🔥 FIX: دالة محسنة للانتقال إلى صفحة الإشعارات
-void _navigateToNotificationsScreen() {
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    try {
-      if (navigatorKey.currentState != null) {
-        debugPrint('📍 Navigating to NotificationsScreen');
-
-        // 🔥 FIX: استخدام push بدلاً من pushAndRemoveUntil للحفاظ على المسار
-        navigatorKey.currentState!.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
-        debugPrint('✅ Navigated to NotificationsScreen successfully');
-      } else {
-        debugPrint('❌ NavigatorKey not ready, storing intent...');
-      }
-    } catch (e) {
-      debugPrint('❌ Navigation error: $e');
-    }
-  });
 }
 
 final ThemeData appTheme = ThemeData(
@@ -628,9 +602,6 @@ class NotificationIcon extends StatelessWidget {
     return ChangeNotifierBuilder<NotificationManager>(
       notifier: NotificationManager.instance,
       builder: (context, notificationManager, child) {
-        debugPrint(
-            '🎯 Building NotificationIcon - Unread: ${notificationManager.unreadCount}');
-
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -863,6 +834,7 @@ class NotificationDetailScreen extends StatelessWidget {
     try {
       Uri uri = Uri.parse(imageUrl);
 
+      // تحقق مما إذا كان الرابط صالحاً
       if (!uri.hasScheme) {
         uri = Uri.parse('https://$imageUrl');
       }
@@ -884,6 +856,9 @@ class NotificationDetailScreen extends StatelessWidget {
               ),
             ),
             errorWidget: (context, url, error) {
+              debugPrint('❌ Error loading image: $error');
+              debugPrint('📁 Image URL: $url');
+
               return Container(
                 color: Colors.grey[100],
                 child: Center(
@@ -903,6 +878,14 @@ class NotificationDetailScreen extends StatelessWidget {
                           color: Colors.grey[600],
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'قد يكون الرابط غير صالح',
+                        style: GoogleFonts.cairo(
+                          fontSize: 12,
+                          color: Colors.grey[500],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -914,6 +897,7 @@ class NotificationDetailScreen extends StatelessWidget {
         return _buildFallbackImage();
       }
     } catch (e) {
+      debugPrint('❌ Error parsing image URL: $e');
       return _buildFallbackImage();
     }
   }
@@ -997,7 +981,7 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _fadeAnimation;
   late Animation<double> _slideAnimation;
   late Animation<double> _scaleAnimation;
-  bool _hasError = false;
+  bool _hasError = false; // ✅ iOS FIX: Error state tracking
 
   @override
   void initState() {
@@ -1026,6 +1010,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller.forward();
 
+    // ✅ iOS FIX: Navigate with error handling
     Timer(const Duration(seconds: 3), () {
       debugPrint('⏰ Timer completed - Navigating to Privacy Policy');
       if (mounted) {
@@ -1057,6 +1042,7 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ✅ iOS FIX: Show error screen if navigation fails
     if (_hasError) {
       return Scaffold(
         body: Center(
@@ -1172,6 +1158,8 @@ class _SplashScreenState extends State<SplashScreen>
                               'assets/images/logo.png',
                               fit: BoxFit.contain,
                               errorBuilder: (context, error, stackTrace) {
+                                debugPrint(
+                                    '⚠️ Logo asset not found - using fallback icon: $error');
                                 return Icon(
                                   Icons.business,
                                   size: 80,
@@ -1353,8 +1341,11 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
             child: ModernButton(
               onPressed: () {
-                debugPrint('✅ Privacy Policy accepted - Navigating to WebView');
+                // ✅ CRITICAL: Changed back to sync - don't block UI
+                debugPrint(
+                    '✅ Privacy Policy accepted - Navigating to WebView IMMEDIATELY');
                 try {
+                  // ✅ CRITICAL FIX: Navigate FIRST without waiting for anything
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => const WebViewScreen(),
@@ -1362,6 +1353,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   );
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
+                  // Emergency fallback - try direct push instead of replace
                   try {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -1432,8 +1424,7 @@ class NotificationsScreen extends StatefulWidget {
   _NotificationsScreenState createState() => _NotificationsScreenState();
 }
 
-class _NotificationsScreenState extends State<NotificationsScreen>
-    with WidgetsBindingObserver {
+class _NotificationsScreenState extends State<NotificationsScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _selectedFilter = 'all';
@@ -1441,42 +1432,29 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    debugPrint('📱 NotificationsScreen opened');
+    _registerFCMToken();
+  }
 
-    // 🔥 FIX: Force refresh when screen opens
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      debugPrint('🔄 Initial refresh of notifications');
-      NotificationManager.instance.forceRefresh();
-    });
+  Future<void> _registerFCMToken() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      String? token = await messaging.getToken();
+      if (token != null) {
+        debugPrint('🔑 Current FCM Token: $token');
+      }
+    } catch (e) {
+      debugPrint('❌ Error getting FCM token: $e');
+    }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint('📱 AppLifecycleState changed: $state');
-
-    // 🔥 FIX: Refresh when app returns to foreground
-    if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 App resumed, refreshing notifications...');
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        NotificationManager.instance.loadNotifications().then((_) {
-          NotificationManager.instance.forceRefresh();
-        });
-      });
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    debugPrint('🎨 Building NotificationsScreen');
-
     return Scaffold(
       backgroundColor: const Color(0xFFF7FAFC),
       appBar: AppBar(
@@ -1623,8 +1601,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             child: ChangeNotifierBuilder<NotificationManager>(
               notifier: NotificationManager.instance,
               builder: (context, notificationManager, child) {
-                debugPrint('📱 Rebuilding notifications list');
-
                 List<NotificationItem> filteredNotifications =
                     _getFilteredNotifications(notificationManager);
 
@@ -1634,9 +1610,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
                 return RefreshIndicator(
                   onRefresh: () async {
-                    debugPrint('🔄 Manual refresh requested');
-                    await NotificationManager.instance.loadNotifications();
                     setState(() {});
+                    await Future.delayed(const Duration(seconds: 1));
                   },
                   color: const Color(0xFF00BFA5),
                   child: ListView.builder(
@@ -1701,7 +1676,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       }
     }
 
-    debugPrint('🔍 Filtered notifications count: ${notifications.length}');
     return notifications;
   }
 
@@ -1955,6 +1929,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             ),
           ),
           errorWidget: (context, url, error) {
+            debugPrint('❌ Error loading notification image: $error');
             return Container(
               color: Colors.grey[100],
               child: Center(
@@ -1980,6 +1955,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         );
       }
     } catch (e) {
+      debugPrint('❌ Error parsing image URL in list: $e');
       return Container(
         color: Colors.grey[100],
         child: Center(
@@ -2133,8 +2109,7 @@ class WebViewScreen extends StatefulWidget {
   _WebViewScreenState createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen>
-    with WidgetsBindingObserver {
+class _WebViewScreenState extends State<WebViewScreen> {
   static const MethodChannel _channel = MethodChannel('snap_webview');
 
   final String loginUrl = 'http://109.224.38.44:5000/login';
@@ -2155,82 +2130,15 @@ class _WebViewScreenState extends State<WebViewScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-
-    debugPrint('🌐 WebViewScreen initState');
+    debugPrint('🌐 WebViewScreen initState - SCREEN VISIBLE NOW');
     debugPrint('🔗 Login URL: $loginUrl');
 
-    // 🔥 FIX: Setup notification handler
-    _setupNotificationHandler();
-
-    // Initialize WebView
+    // ✅ CRITICAL: Initialize immediately - no delay
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         debugPrint('🚀 Starting WebView initialization...');
         _initializeWebView();
       }
-    });
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint('🌐 WebView lifecycle: $state');
-
-    if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 WebView resumed, refreshing notifications');
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        NotificationManager.instance.loadNotifications().then((_) {
-          NotificationManager.instance.forceRefresh();
-        });
-      });
-    }
-  }
-
-  void _setupNotificationHandler() {
-    // 🔥 FIX: Handle notification tap when app is already open
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-      debugPrint('👆 NOTIFICATION TAPPED - App is OPEN (WebView)');
-      debugPrint('📱 Title: ${message.notification?.title}');
-
-      // Add notification
-      await NotificationManager.instance.addFirebaseMessage(message);
-
-      // 🔥 FIX: Update notification count immediately
-      NotificationManager.instance.forceRefresh();
-
-      // Navigate to notifications
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          try {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => const NotificationsScreen(),
-              ),
-            );
-            debugPrint('✅ Navigated to NotificationsScreen from WebView');
-          } catch (e) {
-            debugPrint('❌ Navigation error in WebView: $e');
-          }
-        });
-      }
-    });
-
-    // 🔥 FIX: Handle foreground messages in WebView screen
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      debugPrint('📱 FOREGROUND Notification received in WebView');
-      debugPrint('📱 Title: ${message.notification?.title}');
-
-      // 🔥 FIX: إضافة الإشعار مباشرة
-      await NotificationManager.instance.addFirebaseMessage(message);
-
-      // 🔥 FIX: Force update notification count
-      NotificationManager.instance.forceRefresh();
     });
   }
 
@@ -2256,6 +2164,7 @@ class _WebViewScreenState extends State<WebViewScreen>
         controller!.enableZoom(true);
         debugPrint('✅ Android WebView settings configured');
       } else if (Platform.isIOS) {
+        // ✅ iOS FIX: Configure WKWebView for iOS
         debugPrint('🍎 Configuring iOS WebView settings');
         final wkWebViewController =
             controller!.platform as WebKitWebViewController;
@@ -2853,7 +2762,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.of(context).pop(false),
                 style: TextButton.styleFrom(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -2942,7 +2851,7 @@ class _WebViewScreenState extends State<WebViewScreen>
           actions: [
             NotificationIcon(
               onTap: () {
-                debugPrint('🔔 Notifications icon tapped from WebView');
+                debugPrint('🔔 Notifications icon tapped');
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -2955,6 +2864,7 @@ class _WebViewScreenState extends State<WebViewScreen>
         ),
         body: Stack(
           children: [
+            // ✅ CRITICAL FIX: Always show white container as base
             Container(
               color: Colors.white,
               child: Center(
