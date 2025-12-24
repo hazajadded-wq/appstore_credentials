@@ -24,6 +24,84 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
+// ========================================
+// ✅ iOS MethodChannel للتواصل المباشر مع Native
+// ========================================
+const MethodChannel _notificationChannel =
+    MethodChannel('com.pocket.salaryinfo/notifications');
+
+/// ✅ Setup iOS MethodChannel handler for foreground notifications
+/// This is CRITICAL for iOS to receive notifications when app is open
+Future<void> setupNotificationChannelHandler() async {
+  debugPrint('🔧 Setting up iOS MethodChannel handler...');
+
+  _notificationChannel.setMethodCallHandler((MethodCall call) async {
+    debugPrint('📲 MethodChannel received: ${call.method}');
+
+    if (call.method == 'onNotificationReceived') {
+      try {
+        final Map<dynamic, dynamic> rawArgs =
+            call.arguments as Map<dynamic, dynamic>;
+
+        // Convert to proper types
+        final String messageId = rawArgs['messageId']?.toString() ??
+            DateTime.now().millisecondsSinceEpoch.toString();
+        final String title = rawArgs['title']?.toString() ?? 'إشعار جديد';
+        final String body = rawArgs['body']?.toString() ?? '';
+        final bool isForeground = rawArgs['isForeground'] as bool? ?? true;
+        final String timestamp = rawArgs['timestamp']?.toString() ??
+            DateTime.now().toIso8601String();
+
+        // Extract data dictionary
+        final Map<dynamic, dynamic> rawData =
+            rawArgs['data'] as Map<dynamic, dynamic>? ?? {};
+        final Map<String, dynamic> data = {};
+        rawData.forEach((key, value) {
+          data[key.toString()] = value;
+        });
+
+        debugPrint('📱 ========================================');
+        debugPrint('📱 iOS Notification Received via MethodChannel');
+        debugPrint('📱 ========================================');
+        debugPrint('📱 MessageID: $messageId');
+        debugPrint('📱 Title: $title');
+        debugPrint('📱 Body: $body');
+        debugPrint('📱 Type: ${data['type'] ?? 'unknown'}');
+        debugPrint('📱 Image URL: ${data['image_url'] ?? 'none'}');
+        debugPrint('📱 isForeground: $isForeground');
+        debugPrint('📱 Timestamp: $timestamp');
+
+        // Create NotificationItem from MethodChannel data
+        final NotificationItem notification = NotificationItem(
+          id: messageId,
+          title: title,
+          body: body,
+          imageUrl: data['image_url']?.toString(),
+          timestamp: DateTime.tryParse(timestamp) ?? DateTime.now(),
+          data: data,
+          isRead: false,
+          type: data['type']?.toString() ?? 'general',
+        );
+
+        // ✅ CRITICAL: Add to NotificationManager
+        await NotificationManager.instance.addNotification(notification);
+
+        debugPrint('✅ Notification added to manager successfully');
+        debugPrint(
+            '✅ Current notifications count: ${NotificationManager.instance.notifications.length}');
+        debugPrint(
+            '✅ Unread count: ${NotificationManager.instance.unreadCount}');
+      } catch (e, stackTrace) {
+        debugPrint('❌ Error processing iOS notification: $e');
+        debugPrint('❌ Stack trace: $stackTrace');
+      }
+    }
+  });
+
+  debugPrint('✅ iOS MethodChannel handler setup complete');
+}
+// ========================================
+
 // نموذج بيانات الإشعار
 class NotificationItem {
   final String id;
@@ -289,6 +367,12 @@ void main() async {
     );
 
     await configureFirebaseMessaging(); // 🔔 THIS IS THE FIX
+
+    // ✅ CRITICAL: Setup iOS MethodChannel handler for foreground notifications
+    if (Platform.isIOS) {
+      await setupNotificationChannelHandler();
+      debugPrint('✅ iOS MethodChannel handler initialized');
+    }
 
     debugPrint('✅ Firebase initialized successfully');
 

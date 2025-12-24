@@ -6,6 +6,9 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
+  // ✅ CRITICAL: MethodChannel for direct communication with Flutter
+  private var notificationChannel: FlutterMethodChannel?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -15,6 +18,14 @@ import UserNotifications
 
     // ❌ لا تستدعي FirebaseApp.configure()
     // FlutterFire يقوم بها تلقائياً
+
+    // ✅ CRITICAL: Set up MethodChannel FIRST
+    let controller = window?.rootViewController as! FlutterViewController
+    notificationChannel = FlutterMethodChannel(
+      name: "com.pocket.salaryinfo/notifications",
+      binaryMessenger: controller.binaryMessenger
+    )
+    print("✅ MethodChannel created: com.pocket.salaryinfo/notifications")
 
     // ✅ CRITICAL: Set delegate BEFORE registering plugins
     if #available(iOS 10.0, *) {
@@ -51,30 +62,41 @@ import UserNotifications
     print("❌ APNs registration failed: \(error.localizedDescription)")
   }
 
-  // MARK: - Foreground notification (THIS IS THE KEY!)
+  // MARK: - Foreground notification (CRITICAL FIX!)
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    print("📱 willPresent called - App is in FOREGROUND")
-    print("📱 Notification title: \(notification.request.content.title)")
-    print("📱 Notification body: \(notification.request.content.body)")
-    print("📱 userInfo: \(notification.request.content.userInfo)")
+    print("📱 ========================================")
+    print("📱 willPresent called - App is FOREGROUND")
+    print("📱 ========================================")
     
-    // ✅ CRITICAL FIX: Pass notification data to Flutter (for in-app list)
-    // This ensures FirebaseMessaging.onMessage receives the message
     let userInfo = notification.request.content.userInfo
+    let title = notification.request.content.title
+    let body = notification.request.content.body
+    
+    print("📱 Notification title: \(title)")
+    print("📱 Notification body: \(body)")
+    print("📱 userInfo: \(userInfo)")
+    
+    // ✅ METHOD 1: Send to Flutter via MethodChannel (MOST RELIABLE!)
+    sendNotificationToFlutter(
+      title: title,
+      body: body,
+      userInfo: userInfo,
+      isForeground: true
+    )
+    
+    // ✅ METHOD 2: Also try Firebase method (backup)
     Messaging.messaging().appDidReceiveMessage(userInfo)
-    print("✅ Message passed to Flutter's FirebaseMessaging.onMessage")
+    print("✅ Also sent via Firebase appDidReceiveMessage")
     
     // ✅ CRITICAL: Show banner/alert even when app is open
     if #available(iOS 14.0, *) {
-      // iOS 14+: Use .banner
       completionHandler([.banner, .sound, .badge])
       print("✅ Showing notification with banner (iOS 14+)")
     } else {
-      // iOS 13 and below: Use .alert
       completionHandler([.alert, .sound, .badge])
       print("✅ Showing notification with alert (iOS 13)")
     }
@@ -86,16 +108,96 @@ import UserNotifications
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
+    print("👆 ========================================")
     print("👆 User tapped notification")
-    print("📱 Action: \(response.actionIdentifier)")
-    print("📱 userInfo: \(response.notification.request.content.userInfo)")
+    print("👆 ========================================")
     
-    // ✅ Pass data to Flutter for navigation
     let userInfo = response.notification.request.content.userInfo
+    let title = response.notification.request.content.title
+    let body = response.notification.request.content.body
+    
+    print("📱 Action: \(response.actionIdentifier)")
+    print("📱 Title: \(title)")
+    print("📱 Body: \(body)")
+    print("📱 userInfo: \(userInfo)")
+    
+    // ✅ Send to Flutter via MethodChannel
+    sendNotificationToFlutter(
+      title: title,
+      body: body,
+      userInfo: userInfo,
+      isForeground: false
+    )
+    
+    // ✅ Also try Firebase method (backup)
     Messaging.messaging().appDidReceiveMessage(userInfo)
-    print("✅ Tapped notification data sent to Flutter")
+    print("✅ Also sent via Firebase appDidReceiveMessage")
     
     completionHandler()
+  }
+  
+  // MARK: - Send notification to Flutter via MethodChannel
+  private func sendNotificationToFlutter(
+    title: String,
+    body: String,
+    userInfo: [AnyHashable: Any],
+    isForeground: Bool
+  ) {
+    guard let channel = notificationChannel else {
+      print("❌ MethodChannel not initialized!")
+      return
+    }
+    
+    // Extract data from userInfo
+    var dataDict: [String: Any] = [:]
+    
+    // Get 'type' from userInfo
+    if let type = userInfo["type"] as? String {
+      dataDict["type"] = type
+    } else {
+      dataDict["type"] = "general"
+    }
+    
+    // Get 'image_url' from userInfo
+    if let imageUrl = userInfo["image_url"] as? String {
+      dataDict["image_url"] = imageUrl
+    }
+    
+    // Get 'timestamp' from userInfo
+    if let timestamp = userInfo["timestamp"] as? String {
+      dataDict["timestamp"] = timestamp
+    }
+    
+    // Get message ID
+    var messageId = ""
+    if let gcmMessageId = userInfo["gcm.message_id"] as? String {
+      messageId = gcmMessageId
+    } else {
+      // Generate unique ID
+      messageId = "\(Date().timeIntervalSince1970)"
+    }
+    
+    // Prepare complete notification data
+    let notificationData: [String: Any] = [
+      "messageId": messageId,
+      "title": title,
+      "body": body,
+      "data": dataDict,
+      "isForeground": isForeground,
+      "timestamp": ISO8601DateFormatter().string(from: Date())
+    ]
+    
+    print("📤 Sending to Flutter via MethodChannel:")
+    print("📤 MessageID: \(messageId)")
+    print("📤 Title: \(title)")
+    print("📤 Body: \(body)")
+    print("📤 Type: \(dataDict["type"] ?? "unknown")")
+    print("📤 Image URL: \(dataDict["image_url"] ?? "none")")
+    print("📤 isForeground: \(isForeground)")
+    
+    // Send to Flutter
+    channel.invokeMethod("onNotificationReceived", arguments: notificationData)
+    print("✅ Notification sent to Flutter via MethodChannel")
   }
 }
 
