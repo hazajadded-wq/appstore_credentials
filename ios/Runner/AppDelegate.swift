@@ -8,16 +8,15 @@ import UserNotifications
 
   private var notificationChannel: FlutterMethodChannel?
   private var isChannelReady = false
-  
-  // ✅ Key for storing notifications
-  private let pendingNotificationsKey = "pending_notifications"
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
 
+    print("🚀 ========================================")
     print("🚀 SalaryInfo App Started")
+    print("🚀 ========================================")
 
     let controller = window?.rootViewController as! FlutterViewController
     notificationChannel = FlutterMethodChannel(
@@ -34,7 +33,7 @@ import UserNotifications
 
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self
-      print("✅ UNUserNotificationCenter delegate set (BEFORE plugins)")
+      print("✅ UNUserNotificationCenter delegate set")
     }
     
     application.registerForRemoteNotifications()
@@ -45,53 +44,60 @@ import UserNotifications
 
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self
-      print("✅ UNUserNotificationCenter delegate set (AFTER plugins)")
     }
 
     Messaging.messaging().delegate = self
     print("✅ Firebase Messaging delegate set")
     
-    // ✅ IMPORTANT: Check for pending notifications from UserDefaults
-    checkAndSendPendingNotifications()
+    // ✅ CRITICAL: Check for delivered notifications
+    checkDeliveredNotifications()
     
     print("✅ AppDelegate initialization complete")
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
   
-  // ✅ NEW: Check for pending notifications saved in UserDefaults
-  private func checkAndSendPendingNotifications() {
-    guard let savedData = UserDefaults.standard.array(forKey: pendingNotificationsKey) as? [[String: Any]] else {
-      print("📭 No pending notifications found")
-      return
-    }
-    
-    print("📬 ========================================")
-    print("📬 Found \(savedData.count) pending notifications!")
-    print("📬 ========================================")
-    
-    // Send each pending notification to Flutter
-    for notificationData in savedData {
-      print("📬 Sending pending notification: \(notificationData["title"] ?? "Unknown")")
-      
-      if isChannelReady, let channel = notificationChannel {
-        channel.invokeMethod("onNotificationReceived", arguments: notificationData)
+  // ✅ SOLUTION: Read delivered notifications from iOS Notification Center
+  private func checkDeliveredNotifications() {
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+        print("📬 ========================================")
+        print("📬 Checking delivered notifications...")
+        print("📬 Found: \(notifications.count) notifications")
+        print("📬 ========================================")
+        
+        guard !notifications.isEmpty else {
+          print("📭 No delivered notifications found")
+          return
+        }
+        
+        // Process each delivered notification
+        for notification in notifications {
+          let content = notification.request.content
+          let userInfo = content.userInfo
+          
+          print("📬 Processing: \(content.title)")
+          
+          // Extract notification data
+          let notificationData = self.extractNotificationData(
+            title: content.title,
+            body: content.body,
+            userInfo: userInfo,
+            isForeground: false,
+            shouldNavigate: false  // Don't navigate, just save
+          )
+          
+          // Send to Flutter
+          DispatchQueue.main.async {
+            self.sendNotificationToFlutter(notificationData)
+          }
+        }
+        
+        // ✅ IMPORTANT: Clear delivered notifications after processing
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        print("✅ Cleared all delivered notifications from Notification Center")
       }
     }
-    
-    // Clear pending notifications
-    UserDefaults.standard.removeObject(forKey: pendingNotificationsKey)
-    UserDefaults.standard.synchronize()
-    print("✅ Cleared pending notifications from UserDefaults")
-  }
-  
-  // ✅ NEW: Save notification to UserDefaults (for background delivery)
-  private func savePendingNotification(_ notificationData: [String: Any]) {
-    var pendingNotifications = UserDefaults.standard.array(forKey: pendingNotificationsKey) as? [[String: Any]] ?? []
-    pendingNotifications.append(notificationData)
-    UserDefaults.standard.set(pendingNotifications, forKey: pendingNotificationsKey)
-    UserDefaults.standard.synchronize()
-    print("💾 Saved notification to UserDefaults (count: \(pendingNotifications.count))")
   }
 
   override func application(
@@ -110,7 +116,7 @@ import UserNotifications
     print("❌ APNs registration failed: \(error.localizedDescription)")
   }
 
-  // MARK: - Foreground notification
+  // MARK: - Foreground notification (App is open)
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
@@ -127,7 +133,7 @@ import UserNotifications
     print("📱 Title: \(title)")
     print("📱 Body: \(body)")
     
-    // Extract and prepare notification data
+    // Extract notification data
     let notificationData = extractNotificationData(
       title: title,
       body: body,
@@ -136,20 +142,18 @@ import UserNotifications
       shouldNavigate: false
     )
     
-    // ✅ IMPORTANT: Save to UserDefaults as backup
-    savePendingNotification(notificationData)
-    
     // Send to Flutter
     let success = sendNotificationToFlutter(notificationData)
     
     if success {
       print("✅ Notification sent to Flutter")
     } else {
-      print("⚠️ Failed to send to Flutter, but saved to UserDefaults")
+      print("❌ Failed to send to Flutter")
     }
     
     Messaging.messaging().appDidReceiveMessage(userInfo)
     
+    // Show banner
     if #available(iOS 14.0, *) {
       completionHandler([.banner, .sound, .badge])
     } else {
@@ -159,14 +163,14 @@ import UserNotifications
     print("📱 willPresent COMPLETE")
   }
 
-  // MARK: - Notification tap (USER CLICKED!)
+  // MARK: - Notification tap (User clicked notification)
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     print("👆 ========================================")
-    print("👆 👆 👆 USER TAPPED NOTIFICATION 👆 👆 👆")
+    print("👆 USER TAPPED NOTIFICATION")
     print("👆 ========================================")
     
     let userInfo = response.notification.request.content.userInfo
@@ -177,7 +181,7 @@ import UserNotifications
     print("👆 Body: \(body)")
     print("👆 🚀 WILL NAVIGATE TO NOTIFICATIONS PAGE!")
     
-    // Extract and prepare notification data
+    // Extract notification data
     let notificationData = extractNotificationData(
       title: title,
       body: body,
@@ -186,19 +190,21 @@ import UserNotifications
       shouldNavigate: true  // ✅ Navigate when tapped!
     )
     
-    // ✅ IMPORTANT: Save to UserDefaults (in case Flutter not ready yet)
-    savePendingNotification(notificationData)
-    
     // Send to Flutter
     let success = sendNotificationToFlutter(notificationData)
     
     if success {
       print("✅ Tapped notification sent to Flutter with NAVIGATE flag")
     } else {
-      print("⚠️ Failed to send to Flutter, but saved to UserDefaults")
+      print("❌ Failed to send tapped notification")
     }
     
     Messaging.messaging().appDidReceiveMessage(userInfo)
+    
+    // Remove this specific notification from Notification Center
+    let identifier = response.notification.request.identifier
+    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+    print("✅ Removed notification from Notification Center: \(identifier)")
     
     print("👆 didReceive COMPLETE")
     
@@ -216,6 +222,7 @@ import UserNotifications
     
     var dataDict: [String: Any] = [:]
     
+    // Extract type
     if let type = userInfo["type"] as? String {
       dataDict["type"] = type
     } else if let gcmData = userInfo["gcm.notification.type"] as? String {
@@ -224,16 +231,19 @@ import UserNotifications
       dataDict["type"] = "general"
     }
     
+    // Extract image URL
     if let imageUrl = userInfo["image_url"] as? String {
       dataDict["image_url"] = imageUrl
     } else if let gcmImage = userInfo["gcm.notification.image_url"] as? String {
       dataDict["image_url"] = gcmImage
     }
     
+    // Extract timestamp
     if let timestamp = userInfo["timestamp"] as? String {
       dataDict["timestamp"] = timestamp
     }
     
+    // Extract message ID
     var messageId = ""
     if let gcmMessageId = userInfo["gcm.message_id"] as? String {
       messageId = gcmMessageId
@@ -268,8 +278,8 @@ import UserNotifications
       return false
     }
     
-    print("✅ MethodChannel is ready")
-    print("📤 Sending: \(notificationData["title"] ?? "Unknown")")
+    print("📤 Sending to Flutter:")
+    print("📤 Title: \(notificationData["title"] ?? "Unknown")")
     print("📤 shouldNavigate: \(notificationData["shouldNavigate"] ?? false)")
     
     channel.invokeMethod("onNotificationReceived", arguments: notificationData)
