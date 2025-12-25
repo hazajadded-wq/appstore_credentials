@@ -8,6 +8,9 @@ import UserNotifications
 
   private var notificationChannel: FlutterMethodChannel?
   private var isChannelReady = false
+  
+  // ✅ Key for storing notifications
+  private let pendingNotificationsKey = "pending_notifications"
 
   override func application(
     _ application: UIApplication,
@@ -47,9 +50,48 @@ import UserNotifications
 
     Messaging.messaging().delegate = self
     print("✅ Firebase Messaging delegate set")
+    
+    // ✅ IMPORTANT: Check for pending notifications from UserDefaults
+    checkAndSendPendingNotifications()
+    
     print("✅ AppDelegate initialization complete")
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+  
+  // ✅ NEW: Check for pending notifications saved in UserDefaults
+  private func checkAndSendPendingNotifications() {
+    guard let savedData = UserDefaults.standard.array(forKey: pendingNotificationsKey) as? [[String: Any]] else {
+      print("📭 No pending notifications found")
+      return
+    }
+    
+    print("📬 ========================================")
+    print("📬 Found \(savedData.count) pending notifications!")
+    print("📬 ========================================")
+    
+    // Send each pending notification to Flutter
+    for notificationData in savedData {
+      print("📬 Sending pending notification: \(notificationData["title"] ?? "Unknown")")
+      
+      if isChannelReady, let channel = notificationChannel {
+        channel.invokeMethod("onNotificationReceived", arguments: notificationData)
+      }
+    }
+    
+    // Clear pending notifications
+    UserDefaults.standard.removeObject(forKey: pendingNotificationsKey)
+    UserDefaults.standard.synchronize()
+    print("✅ Cleared pending notifications from UserDefaults")
+  }
+  
+  // ✅ NEW: Save notification to UserDefaults (for background delivery)
+  private func savePendingNotification(_ notificationData: [String: Any]) {
+    var pendingNotifications = UserDefaults.standard.array(forKey: pendingNotificationsKey) as? [[String: Any]] ?? []
+    pendingNotifications.append(notificationData)
+    UserDefaults.standard.set(pendingNotifications, forKey: pendingNotificationsKey)
+    UserDefaults.standard.synchronize()
+    print("💾 Saved notification to UserDefaults (count: \(pendingNotifications.count))")
   }
 
   override func application(
@@ -85,19 +127,25 @@ import UserNotifications
     print("📱 Title: \(title)")
     print("📱 Body: \(body)")
     
-    // Send to Flutter
-    let success = sendNotificationToFlutter(
+    // Extract and prepare notification data
+    let notificationData = extractNotificationData(
       title: title,
       body: body,
       userInfo: userInfo,
       isForeground: true,
-      shouldNavigate: false  // Don't navigate, just show banner
+      shouldNavigate: false
     )
+    
+    // ✅ IMPORTANT: Save to UserDefaults as backup
+    savePendingNotification(notificationData)
+    
+    // Send to Flutter
+    let success = sendNotificationToFlutter(notificationData)
     
     if success {
       print("✅ Notification sent to Flutter")
     } else {
-      print("❌ Failed to send notification")
+      print("⚠️ Failed to send to Flutter, but saved to UserDefaults")
     }
     
     Messaging.messaging().appDidReceiveMessage(userInfo)
@@ -127,23 +175,27 @@ import UserNotifications
     
     print("👆 Title: \(title)")
     print("👆 Body: \(body)")
-    print("👆 ========================================")
     print("👆 🚀 WILL NAVIGATE TO NOTIFICATIONS PAGE!")
-    print("👆 ========================================")
     
-    // ✅ IMPORTANT: shouldNavigate = true when user taps!
-    let success = sendNotificationToFlutter(
+    // Extract and prepare notification data
+    let notificationData = extractNotificationData(
       title: title,
       body: body,
       userInfo: userInfo,
       isForeground: false,
-      shouldNavigate: true  // ✅ Navigate to notifications page!
+      shouldNavigate: true  // ✅ Navigate when tapped!
     )
+    
+    // ✅ IMPORTANT: Save to UserDefaults (in case Flutter not ready yet)
+    savePendingNotification(notificationData)
+    
+    // Send to Flutter
+    let success = sendNotificationToFlutter(notificationData)
     
     if success {
       print("✅ Tapped notification sent to Flutter with NAVIGATE flag")
     } else {
-      print("❌ Failed to send tapped notification")
+      print("⚠️ Failed to send to Flutter, but saved to UserDefaults")
     }
     
     Messaging.messaging().appDidReceiveMessage(userInfo)
@@ -153,29 +205,14 @@ import UserNotifications
     completionHandler()
   }
   
-  // MARK: - Send notification to Flutter
-  @discardableResult
-  private func sendNotificationToFlutter(
+  // MARK: - Extract notification data
+  private func extractNotificationData(
     title: String,
     body: String,
     userInfo: [AnyHashable: Any],
     isForeground: Bool,
     shouldNavigate: Bool
-  ) -> Bool {
-    
-    print("📤 Preparing to send to Flutter...")
-    
-    guard isChannelReady else {
-      print("❌ MethodChannel is NOT ready!")
-      return false
-    }
-    
-    guard let channel = notificationChannel else {
-      print("❌ MethodChannel is nil!")
-      return false
-    }
-    
-    print("✅ MethodChannel is ready")
+  ) -> [String: Any] {
     
     var dataDict: [String: Any] = [:]
     
@@ -206,21 +243,34 @@ import UserNotifications
       messageId = "ios_\(Date().timeIntervalSince1970)"
     }
     
-    let notificationData: [String: Any] = [
+    return [
       "messageId": messageId,
       "title": title,
       "body": body,
       "data": dataDict,
       "isForeground": isForeground,
-      "shouldNavigate": shouldNavigate,  // ✅ NEW: Navigation flag!
+      "shouldNavigate": shouldNavigate,
       "timestamp": ISO8601DateFormatter().string(from: Date())
     ]
+  }
+  
+  // MARK: - Send notification to Flutter
+  @discardableResult
+  private func sendNotificationToFlutter(_ notificationData: [String: Any]) -> Bool {
     
-    print("📤 Sending to Flutter:")
-    print("📤 MessageID: \(messageId)")
-    print("📤 Title: \(title)")
-    print("📤 isForeground: \(isForeground)")
-    print("📤 shouldNavigate: \(shouldNavigate)")  // ✅ Log navigation flag
+    guard isChannelReady else {
+      print("❌ MethodChannel is NOT ready!")
+      return false
+    }
+    
+    guard let channel = notificationChannel else {
+      print("❌ MethodChannel is nil!")
+      return false
+    }
+    
+    print("✅ MethodChannel is ready")
+    print("📤 Sending: \(notificationData["title"] ?? "Unknown")")
+    print("📤 shouldNavigate: \(notificationData["shouldNavigate"] ?? false)")
     
     channel.invokeMethod("onNotificationReceived", arguments: notificationData)
     print("✅ channel.invokeMethod called successfully!")
