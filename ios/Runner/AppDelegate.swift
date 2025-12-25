@@ -8,6 +8,9 @@ import UserNotifications
 
   private var notificationChannel: FlutterMethodChannel?
   private var isChannelReady = false
+  
+  // ✅ Track processed notifications to avoid duplicates
+  private var processedNotificationIds: Set<String> = []
 
   override func application(
     _ application: UIApplication,
@@ -49,7 +52,7 @@ import UserNotifications
     Messaging.messaging().delegate = self
     print("✅ Firebase Messaging delegate set")
     
-    // ✅ CRITICAL: Check for delivered notifications
+    // ✅ Check for delivered notifications (but don't delete them immediately)
     checkDeliveredNotifications()
     
     print("✅ AppDelegate initialization complete")
@@ -57,7 +60,7 @@ import UserNotifications
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
   
-  // ✅ SOLUTION: Read delivered notifications from iOS Notification Center
+  // ✅ IMPROVED: Check delivered notifications WITHOUT deleting them
   private func checkDeliveredNotifications() {
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
@@ -71,10 +74,19 @@ import UserNotifications
           return
         }
         
+        var notificationsToRemove: [String] = []
+        
         // Process each delivered notification
         for notification in notifications {
           let content = notification.request.content
           let userInfo = content.userInfo
+          let identifier = notification.request.identifier
+          
+          // ✅ Skip if already processed
+          if self.processedNotificationIds.contains(identifier) {
+            print("⏭️ Skipping already processed: \(content.title)")
+            continue
+          }
           
           print("📬 Processing: \(content.title)")
           
@@ -84,18 +96,29 @@ import UserNotifications
             body: content.body,
             userInfo: userInfo,
             isForeground: false,
-            shouldNavigate: false  // Don't navigate, just save
+            shouldNavigate: false
           )
           
           // Send to Flutter
           DispatchQueue.main.async {
-            self.sendNotificationToFlutter(notificationData)
+            let success = self.sendNotificationToFlutter(notificationData)
+            if success {
+              print("✅ Sent to Flutter: \(content.title)")
+              
+              // ✅ Mark as processed
+              self.processedNotificationIds.insert(identifier)
+              notificationsToRemove.append(identifier)
+            }
           }
         }
         
-        // ✅ IMPORTANT: Clear delivered notifications after processing
-        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
-        print("✅ Cleared all delivered notifications from Notification Center")
+        // ✅ Only remove notifications that were successfully sent to Flutter
+        if !notificationsToRemove.isEmpty {
+          print("🗑️ Removing \(notificationsToRemove.count) processed notifications from Notification Center")
+          UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: notificationsToRemove)
+        }
+        
+        print("✅ Delivered notifications processing complete")
       }
     }
   }
@@ -116,7 +139,7 @@ import UserNotifications
     print("❌ APNs registration failed: \(error.localizedDescription)")
   }
 
-  // MARK: - Foreground notification (App is open)
+  // MARK: - Foreground notification
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
@@ -129,9 +152,11 @@ import UserNotifications
     let userInfo = notification.request.content.userInfo
     let title = notification.request.content.title
     let body = notification.request.content.body
+    let identifier = notification.request.identifier
     
     print("📱 Title: \(title)")
     print("📱 Body: \(body)")
+    print("📱 Identifier: \(identifier)")
     
     // Extract notification data
     let notificationData = extractNotificationData(
@@ -147,6 +172,9 @@ import UserNotifications
     
     if success {
       print("✅ Notification sent to Flutter")
+      
+      // ✅ Mark as processed
+      processedNotificationIds.insert(identifier)
     } else {
       print("❌ Failed to send to Flutter")
     }
@@ -163,7 +191,7 @@ import UserNotifications
     print("📱 willPresent COMPLETE")
   }
 
-  // MARK: - Notification tap (User clicked notification)
+  // MARK: - Notification tap
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
@@ -176,9 +204,11 @@ import UserNotifications
     let userInfo = response.notification.request.content.userInfo
     let title = response.notification.request.content.title
     let body = response.notification.request.content.body
+    let identifier = response.notification.request.identifier
     
     print("👆 Title: \(title)")
     print("👆 Body: \(body)")
+    print("👆 Identifier: \(identifier)")
     print("👆 🚀 WILL NAVIGATE TO NOTIFICATIONS PAGE!")
     
     // Extract notification data
@@ -195,16 +225,18 @@ import UserNotifications
     
     if success {
       print("✅ Tapped notification sent to Flutter with NAVIGATE flag")
+      
+      // ✅ Mark as processed
+      processedNotificationIds.insert(identifier)
+      
+      // ✅ Remove this specific notification from Notification Center
+      UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+      print("✅ Removed notification from Notification Center")
     } else {
       print("❌ Failed to send tapped notification")
     }
     
     Messaging.messaging().appDidReceiveMessage(userInfo)
-    
-    // Remove this specific notification from Notification Center
-    let identifier = response.notification.request.identifier
-    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
-    print("✅ Removed notification from Notification Center: \(identifier)")
     
     print("👆 didReceive COMPLETE")
     
@@ -222,7 +254,6 @@ import UserNotifications
     
     var dataDict: [String: Any] = [:]
     
-    // Extract type
     if let type = userInfo["type"] as? String {
       dataDict["type"] = type
     } else if let gcmData = userInfo["gcm.notification.type"] as? String {
@@ -231,19 +262,16 @@ import UserNotifications
       dataDict["type"] = "general"
     }
     
-    // Extract image URL
     if let imageUrl = userInfo["image_url"] as? String {
       dataDict["image_url"] = imageUrl
     } else if let gcmImage = userInfo["gcm.notification.image_url"] as? String {
       dataDict["image_url"] = gcmImage
     }
     
-    // Extract timestamp
     if let timestamp = userInfo["timestamp"] as? String {
       dataDict["timestamp"] = timestamp
     }
     
-    // Extract message ID
     var messageId = ""
     if let gcmMessageId = userInfo["gcm.message_id"] as? String {
       messageId = gcmMessageId
