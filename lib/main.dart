@@ -25,6 +25,130 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 // ========================================
+// ✅ Global Navigator Key for Auto-Navigation
+// ========================================
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// ========================================
+// ✅ ON-SCREEN DEBUG LOGGER
+// ========================================
+class DebugLogger {
+  static final DebugLogger instance = DebugLogger._();
+  DebugLogger._();
+
+  final List<String> _logs = [];
+  final ValueNotifier<int> updateNotifier = ValueNotifier(0);
+
+  void log(String message) {
+    final timestamp = DateTime.now().toString().substring(11, 19);
+    _logs.add('[$timestamp] $message');
+
+    if (_logs.length > 100) {
+      _logs.removeAt(0);
+    }
+
+    updateNotifier.value++;
+    debugPrint(message);
+  }
+
+  List<String> get logs => List.unmodifiable(_logs);
+
+  void clear() {
+    _logs.clear();
+    updateNotifier.value++;
+  }
+}
+
+class DebugLogsScreen extends StatelessWidget {
+  const DebugLogsScreen({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Debug Logs'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete),
+            onPressed: () {
+              DebugLogger.instance.clear();
+            },
+          ),
+        ],
+      ),
+      body: ValueListenableBuilder<int>(
+        valueListenable: DebugLogger.instance.updateNotifier,
+        builder: (context, _, __) {
+          final logs = DebugLogger.instance.logs;
+
+          if (logs.isEmpty) {
+            return const Center(
+              child:
+                  Text('No logs yet. Send a notification while app is open!'),
+            );
+          }
+
+          return ListView.builder(
+            reverse: true,
+            padding: const EdgeInsets.all(8),
+            itemCount: logs.length,
+            itemBuilder: (context, index) {
+              final log = logs[logs.length - 1 - index];
+
+              Color bgColor = Colors.white;
+              Color textColor = Colors.black87;
+
+              if (log.contains('❌')) {
+                bgColor = Colors.red.shade50;
+                textColor = Colors.red.shade900;
+              } else if (log.contains('✅')) {
+                bgColor = Colors.green.shade50;
+                textColor = Colors.green.shade900;
+              } else if (log.contains('📲') || log.contains('📱')) {
+                bgColor = Colors.blue.shade50;
+                textColor = Colors.blue.shade900;
+              } else if (log.contains('💾')) {
+                bgColor = Colors.purple.shade50;
+                textColor = Colors.purple.shade900;
+              }
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: SelectableText(
+                  log,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: textColor,
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          DebugLogger.instance.log('🧪 Test log at ${DateTime.now()}');
+          DebugLogger.instance.log(
+              '📊 Total notifications: ${NotificationManager.instance.notifications.length}');
+          DebugLogger.instance.log(
+              '🔔 Unread count: ${NotificationManager.instance.unreadCount}');
+        },
+        label: const Text('Test Log'),
+        icon: const Icon(Icons.bug_report),
+      ),
+    );
+  }
+}
+
+// ========================================
 // ✅ iOS MethodChannel - INTENSIVE DEBUG VERSION
 // ========================================
 const MethodChannel _notificationChannel =
@@ -32,35 +156,38 @@ const MethodChannel _notificationChannel =
 
 /// ✅ Setup iOS MethodChannel handler - WITH INTENSIVE DEBUG
 Future<void> setupNotificationChannelHandler() async {
-  debugPrint('🔧 ========================================');
-  debugPrint('🔧 Setting up iOS MethodChannel handler...');
-  debugPrint('🔧 Channel name: com.pocket.salaryinfo/notifications');
-  debugPrint('🔧 ========================================');
+  DebugLogger.instance.log('🔧 ========================================');
+  DebugLogger.instance.log('🔧 Setting up iOS MethodChannel handler...');
+  DebugLogger.instance.log('🔧 Channel: com.pocket.salaryinfo/notifications');
+  DebugLogger.instance.log('🔧 ========================================');
 
   try {
     _notificationChannel.setMethodCallHandler((MethodCall call) async {
-      debugPrint('📲 ========================================');
-      debugPrint('📲 📲 📲 MethodChannel RECEIVED CALL 📲 📲 📲');
-      debugPrint('📲 ========================================');
-      debugPrint('📲 Method: ${call.method}');
-      debugPrint('📲 Arguments type: ${call.arguments.runtimeType}');
+      DebugLogger.instance.log('📲 ========================================');
+      DebugLogger.instance.log('📲 MethodChannel CALL RECEIVED');
+      DebugLogger.instance.log('📲 Method: ${call.method}');
 
       if (call.method == 'onNotificationReceived') {
-        debugPrint('✅ Method is onNotificationReceived - processing...');
+        DebugLogger.instance.log('✅ Method = onNotificationReceived');
 
         try {
           final Map<dynamic, dynamic> rawArgs =
               call.arguments as Map<dynamic, dynamic>;
-          debugPrint('✅ Arguments cast to Map successfully');
 
           final String messageId = rawArgs['messageId']?.toString() ??
               'flutter_${DateTime.now().millisecondsSinceEpoch}';
           final String title = rawArgs['title']?.toString() ?? 'إشعار جديد';
           final String body = rawArgs['body']?.toString() ?? '';
+          final bool isForeground = rawArgs['isForeground'] as bool? ?? true;
+          final bool shouldNavigate =
+              rawArgs['shouldNavigate'] as bool? ?? false;
           final String timestamp = rawArgs['timestamp']?.toString() ??
               DateTime.now().toIso8601String();
 
-          debugPrint('✅ Extracted: messageId=$messageId, title=$title');
+          DebugLogger.instance.log('✅ MessageID: $messageId');
+          DebugLogger.instance.log('✅ Title: $title');
+          DebugLogger.instance.log('✅ isForeground: $isForeground');
+          DebugLogger.instance.log('✅ shouldNavigate: $shouldNavigate');
 
           final Map<dynamic, dynamic> rawData =
               rawArgs['data'] as Map<dynamic, dynamic>? ?? {};
@@ -69,8 +196,7 @@ Future<void> setupNotificationChannelHandler() async {
             data[key.toString()] = value;
           });
 
-          debugPrint(
-              '✅ Data: type=${data['type']}, image_url=${data['image_url']}');
+          DebugLogger.instance.log('✅ Data type: ${data['type'] ?? 'unknown'}');
 
           final NotificationItem notification = NotificationItem(
             id: messageId,
@@ -83,25 +209,44 @@ Future<void> setupNotificationChannelHandler() async {
             type: data['type']?.toString() ?? 'general',
           );
 
-          debugPrint(
-              '💾 Adding to NotificationManager... Count before: ${NotificationManager.instance.notifications.length}');
+          DebugLogger.instance.log('💾 Adding to NotificationManager...');
+          DebugLogger.instance.log(
+              '💾 Count BEFORE: ${NotificationManager.instance.notifications.length}');
 
           await NotificationManager.instance.addNotification(notification);
 
-          debugPrint(
-              '✅✅✅ NOTIFICATION SAVED! Count after: ${NotificationManager.instance.notifications.length}');
-          debugPrint('✅ Unread: ${NotificationManager.instance.unreadCount}');
+          DebugLogger.instance.log('✅✅✅ NOTIFICATION SAVED!');
+          DebugLogger.instance.log(
+              '✅ Count AFTER: ${NotificationManager.instance.notifications.length}');
+
+          // ✅ AUTO-NAVIGATE when user tapped notification!
+          if (shouldNavigate) {
+            DebugLogger.instance
+                .log('🚀 ========================================');
+            DebugLogger.instance.log('🚀 NAVIGATING TO NOTIFICATIONS PAGE!');
+            DebugLogger.instance
+                .log('🚀 ========================================');
+
+            await Future.delayed(const Duration(milliseconds: 500));
+
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(
+                builder: (context) => const NotificationsScreen(),
+              ),
+            );
+
+            DebugLogger.instance.log('✅ Navigation complete!');
+          }
         } catch (e, stackTrace) {
-          debugPrint('❌❌❌ ERROR: $e');
-          debugPrint('$stackTrace');
+          DebugLogger.instance.log('❌ ERROR: $e');
+          DebugLogger.instance.log('$stackTrace');
         }
       }
     });
 
-    debugPrint('✅ iOS MethodChannel handler setup COMPLETE');
-  } catch (e, stackTrace) {
-    debugPrint('❌ FAILED to setup MethodChannel: $e');
-    debugPrint('$stackTrace');
+    DebugLogger.instance.log('✅ iOS MethodChannel handler COMPLETE');
+  } catch (e) {
+    DebugLogger.instance.log('❌ FAILED to setup MethodChannel: $e');
   }
 }
 // ========================================
@@ -300,9 +445,6 @@ class NotificationManager extends ChangeNotifier {
   }
 }
 
-// GlobalKey للتنقل
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
 Future<void> _setupNativeFirebaseDelegate() async {
   if (Platform.isIOS) {
@@ -374,9 +516,10 @@ void main() async {
 
     // ✅ CRITICAL: Setup iOS MethodChannel handler
     if (Platform.isIOS) {
-      debugPrint('📱 Platform is iOS - setting up MethodChannel...');
+      DebugLogger.instance
+          .log('📱 Platform is iOS - setting up MethodChannel...');
       await setupNotificationChannelHandler();
-      debugPrint('✅ iOS MethodChannel handler initialized');
+      DebugLogger.instance.log('✅ iOS MethodChannel handler initialized');
     }
 
     debugPrint('✅ Firebase initialized successfully');
