@@ -9,7 +9,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
 import 'package:google_fonts/google_fonts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:gal/gal.dart';
@@ -23,6 +22,10 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+// ✅ SQLite imports - للحفظ الدائم
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart' as path_package;
 
 // ========================================
 // ✅ iOS MethodChannel - INTENSIVE DEBUG VERSION
@@ -172,6 +175,100 @@ class NotificationItem {
   }
 }
 
+
+// ============================================================================
+// NotificationDatabase - SQLite للإشعارات
+// ============================================================================
+class NotificationDatabase {
+  static final NotificationDatabase instance = NotificationDatabase._init();
+  static Database? _database;
+
+  NotificationDatabase._init();
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDB('notifications.db');
+    return _database!;
+  }
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final pathStr = path_package.join(dbPath, filePath);
+    debugPrint('📂 Database path: $pathStr');
+    return await openDatabase(pathStr, version: 1, onCreate: _createDB);
+  }
+
+  Future _createDB(Database db, int version) async {
+    await db.execute('''
+CREATE TABLE notifications (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  type TEXT NOT NULL,
+  imageUrl TEXT,
+  timestamp INTEGER NOT NULL,
+  isRead INTEGER NOT NULL,
+  data TEXT
+)
+''');
+    debugPrint('✅ Database table created');
+  }
+
+  Future<void> addNotification(Map<String, dynamic> notification) async {
+    final db = await instance.database;
+    final existing = await db.query('notifications', where: 'id = ?', whereArgs: [notification['id']]);
+    if (existing.isNotEmpty) {
+      debugPrint('⚠️ Notification already exists: \${notification["id"]}');
+      return;
+    }
+    await db.insert('notifications', {
+      'id': notification['id'],
+      'title': notification['title'],
+      'body': notification['body'],
+      'type': notification['type'],
+      'imageUrl': notification['imageUrl'],
+      'timestamp': notification['timestamp'],
+      'isRead': notification['isRead'] ? 1 : 0,
+      'data': notification['data'] != null ? jsonEncode(notification['data']) : null,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    debugPrint('✅ Notification added to database: \${notification["id"]}');
+  }
+
+  Future<List<Map<String, dynamic>>> getAllNotifications() async {
+    final db = await instance.database;
+    final result = await db.query('notifications', orderBy: 'timestamp DESC');
+    debugPrint('📊 Retrieved \${result.length} notifications from database');
+    return result.map((map) => {
+      'id': map['id'],
+      'title': map['title'],
+      'body': map['body'],
+      'type': map['type'],
+      'imageUrl': map['imageUrl'],
+      'timestamp': map['timestamp'],
+      'isRead': map['isRead'] == 1,
+      'data': map['data'] != null ? jsonDecode(map['data'] as String) : null,
+    }).toList();
+  }
+
+  Future<void> markAsRead(String id) async {
+    final db = await instance.database;
+    await db.update('notifications', {'isRead': 1}, where: 'id = ?', whereArgs: [id]);
+    debugPrint('✅ Notification marked as read: \$id');
+  }
+
+  Future<void> deleteNotification(String id) async {
+    final db = await instance.database;
+    await db.delete('notifications', where: 'id = ?', whereArgs: [id]);
+    debugPrint('🗑️ Notification deleted: \$id');
+  }
+
+  Future<void> deleteAllNotifications() async {
+    final db = await instance.database;
+    await db.delete('notifications');
+    debugPrint('🗑️ All notifications deleted');
+  }
+}
+
 // مدير الإشعارات
 class NotificationManager extends ChangeNotifier {
   static NotificationManager? _instance;
@@ -188,44 +285,51 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> loadNotifications() async {
     try {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? notificationsJson = prefs.getString('stored_notifications');
-
-      if (notificationsJson != null) {
-        List<dynamic> notificationsList = json.decode(notificationsJson);
-        _notifications = notificationsList
-            .map((json) => NotificationItem.fromJson(json))
-            .toList();
-        _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-        _updateUnreadCount();
-      }
+      debugPrint('📂 Loading notifications from SQLite...');
+      final notificationsData = await NotificationDatabase.instance.getAllNotifications();
+      _notifications = notificationsData.map((data) {
+        return NotificationItem(
+          id: data['id'] as String,
+          title: data['title'] as String,
+          body: data['body'] as String,
+          imageUrl: data['imageUrl'] as String?,
+          timestamp: DateTime.fromMillisecondsSinceEpoch(data['timestamp'] as int),
+          data: data['data'] as Map<String, dynamic>? ?? {},
+          isRead: data['isRead'] as bool,
+          type: data['type'] as String,
+        );
+      }).toList();
+      _updateUnreadCount();
+      debugPrint('✅ Loaded ${_notifications.length} notifications');
     } catch (e) {
-      debugPrint('❌ Error loading notifications: $e');
+      debugPrint('❌ Error: $e');
     }
   }
 
-  Future<void> saveNotifications() async {
-    try {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      String notificationsJson = json.encode(
-          _notifications.map((notification) => notification.toJson()).toList());
-      await prefs.setString('stored_notifications', notificationsJson);
-    } catch (e) {
-      debugPrint('❌ Error saving notifications: $e');
-    }
-  }
+
 
   Future<void> addNotification(NotificationItem notification) async {
-    if (!_notifications.any((n) => n.id == notification.id)) {
-      _notifications.insert(0, notification);
-      if (_notifications.length > 50) {
-        _notifications = _notifications.take(50).toList();
-      }
-      _updateUnreadCount();
-      await saveNotifications();
-      notifyListeners();
-      debugPrint('📱 Added notification: ${notification.title}');
+    if (_notifications.any((n) => n.id == notification.id)) {
+      debugPrint('⚠️ Duplicate - skipping');
+      return;
     }
+    await NotificationDatabase.instance.addNotification({
+      'id': notification.id,
+      'title': notification.title,
+      'body': notification.body,
+      'type': notification.type,
+      'imageUrl': notification.imageUrl,
+      'timestamp': notification.timestamp.millisecondsSinceEpoch,
+      'isRead': notification.isRead,
+      'data': notification.data,
+    });
+    _notifications.insert(0, notification);
+    if (_notifications.length > 50) {
+      _notifications = _notifications.take(50).toList();
+    }
+    _updateUnreadCount();
+    notifyListeners();
+    debugPrint('✅ Added: ${notification.title}');
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
@@ -237,11 +341,11 @@ class NotificationManager extends ChangeNotifier {
   Future<void> markAsRead(String notificationId) async {
     int index = _notifications.indexWhere((n) => n.id == notificationId);
     if (index != -1 && !_notifications[index].isRead) {
+      await NotificationDatabase.instance.markAsRead(notificationId);
       _notifications[index].isRead = true;
       _updateUnreadCount();
-      await saveNotifications();
       notifyListeners();
-      debugPrint('✅ Marked notification as read: $notificationId');
+      debugPrint('✅ Marked as read: $notificationId');
     }
   }
 
@@ -249,6 +353,7 @@ class NotificationManager extends ChangeNotifier {
     bool hasChanges = false;
     for (var notification in _notifications) {
       if (!notification.isRead) {
+        await NotificationDatabase.instance.markAsRead(notification.id);
         notification.isRead = true;
         hasChanges = true;
       }
@@ -256,30 +361,29 @@ class NotificationManager extends ChangeNotifier {
 
     if (hasChanges) {
       _updateUnreadCount();
-      await saveNotifications();
       notifyListeners();
-      debugPrint('✅ Marked all notifications as read');
+      debugPrint('✅ Marked all as read');
     }
   }
 
   Future<void> deleteNotification(String notificationId) async {
     int initialLength = _notifications.length;
+    await NotificationDatabase.instance.deleteNotification(notificationId);
     _notifications.removeWhere((n) => n.id == notificationId);
 
     if (_notifications.length != initialLength) {
       _updateUnreadCount();
-      await saveNotifications();
       notifyListeners();
-      debugPrint('🗑️ Deleted notification: $notificationId');
+      debugPrint('🗑️ Deleted: $notificationId');
     }
   }
 
   Future<void> clearAllNotifications() async {
+    await NotificationDatabase.instance.deleteAllNotifications();
     _notifications.clear();
     _updateUnreadCount();
-    await saveNotifications();
     notifyListeners();
-    debugPrint('🗑️ Cleared all notifications');
+    debugPrint('🗑️ Cleared all');
   }
 
   void _updateUnreadCount() {
@@ -346,6 +450,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   // ✅ مهم جدًا لـ iOS - يجب أن يكون أول سطر
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ تهيئة SQLite Database
+  debugPrint('📂 Initializing SQLite...');
+  await NotificationDatabase.instance.database;
+  debugPrint('✅ SQLite ready');
 
   // Initialize date formatting for Arabic locale
   try {
