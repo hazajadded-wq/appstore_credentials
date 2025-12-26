@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:salaryinfo/firebase_options.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'; // ✅ ADDED for iOS
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -23,17 +23,17 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
-// ✅ SQLite imports - للحفظ الدائم
+// SQLite imports
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path_package;
 
 // ========================================
-// ✅ iOS MethodChannel - INTENSIVE DEBUG VERSION
+// ✅ iOS MethodChannel - FIXED VERSION
 // ========================================
 const MethodChannel _notificationChannel =
     MethodChannel('com.pocket.salaryinfo/notifications');
 
-/// ✅ Setup iOS MethodChannel handler - WITH INTENSIVE DEBUG
+/// ✅ Setup iOS MethodChannel handler
 Future<void> setupNotificationChannelHandler() async {
   debugPrint('🔧 ========================================');
   debugPrint('🔧 Setting up iOS MethodChannel handler...');
@@ -56,12 +56,13 @@ Future<void> setupNotificationChannelHandler() async {
               call.arguments as Map<dynamic, dynamic>;
           debugPrint('✅ Arguments cast to Map successfully');
 
-          final String messageId = rawArgs['messageId']?.toString() ??
+          final String messageId = rawArgs['id']?.toString() ??
               'flutter_${DateTime.now().millisecondsSinceEpoch}';
           final String title = rawArgs['title']?.toString() ?? 'إشعار جديد';
           final String body = rawArgs['body']?.toString() ?? '';
-          final String timestamp = rawArgs['timestamp']?.toString() ??
-              DateTime.now().toIso8601String();
+          final int timestamp = rawArgs['timestamp'] is int
+              ? rawArgs['timestamp']
+              : DateTime.now().millisecondsSinceEpoch;
 
           debugPrint('✅ Extracted: messageId=$messageId, title=$title');
 
@@ -80,7 +81,7 @@ Future<void> setupNotificationChannelHandler() async {
             title: title,
             body: body,
             imageUrl: data['image_url']?.toString(),
-            timestamp: DateTime.tryParse(timestamp) ?? DateTime.now(),
+            timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
             data: data,
             isRead: false,
             type: data['type']?.toString() ?? 'general',
@@ -175,7 +176,6 @@ class NotificationItem {
   }
 }
 
-
 // ============================================================================
 // NotificationDatabase - SQLite للإشعارات
 // ============================================================================
@@ -216,50 +216,61 @@ CREATE TABLE notifications (
 
   Future<void> addNotification(Map<String, dynamic> notification) async {
     final db = await instance.database;
-    final existing = await db.query('notifications', where: 'id = ?', whereArgs: [notification['id']]);
+    final existing = await db.query('notifications',
+        where: 'id = ?', whereArgs: [notification['id']]);
     if (existing.isNotEmpty) {
-      debugPrint('⚠️ Notification already exists: \${notification["id"]}');
+      debugPrint('⚠️ Notification already exists: ${notification["id"]}');
       return;
     }
-    await db.insert('notifications', {
-      'id': notification['id'],
-      'title': notification['title'],
-      'body': notification['body'],
-      'type': notification['type'],
-      'imageUrl': notification['imageUrl'],
-      'timestamp': notification['timestamp'],
-      'isRead': notification['isRead'] ? 1 : 0,
-      'data': notification['data'] != null ? jsonEncode(notification['data']) : null,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-    debugPrint('✅ Notification added to database: \${notification["id"]}');
+    await db.insert(
+        'notifications',
+        {
+          'id': notification['id'],
+          'title': notification['title'],
+          'body': notification['body'],
+          'type': notification['type'],
+          'imageUrl': notification['imageUrl'],
+          'timestamp': notification['timestamp'],
+          'isRead': notification['isRead'] ? 1 : 0,
+          'data': notification['data'] != null
+              ? jsonEncode(notification['data'])
+              : null,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    debugPrint('✅ Notification added to database: ${notification["id"]}');
   }
 
   Future<List<Map<String, dynamic>>> getAllNotifications() async {
     final db = await instance.database;
     final result = await db.query('notifications', orderBy: 'timestamp DESC');
-    debugPrint('📊 Retrieved \${result.length} notifications from database');
-    return result.map((map) => {
-      'id': map['id'],
-      'title': map['title'],
-      'body': map['body'],
-      'type': map['type'],
-      'imageUrl': map['imageUrl'],
-      'timestamp': map['timestamp'],
-      'isRead': map['isRead'] == 1,
-      'data': map['data'] != null ? jsonDecode(map['data'] as String) : null,
-    }).toList();
+    debugPrint('📊 Retrieved ${result.length} notifications from database');
+    return result
+        .map((map) => {
+              'id': map['id'],
+              'title': map['title'],
+              'body': map['body'],
+              'type': map['type'],
+              'imageUrl': map['imageUrl'],
+              'timestamp': map['timestamp'],
+              'isRead': map['isRead'] == 1,
+              'data': map['data'] != null
+                  ? jsonDecode(map['data'] as String)
+                  : null,
+            })
+        .toList();
   }
 
   Future<void> markAsRead(String id) async {
     final db = await instance.database;
-    await db.update('notifications', {'isRead': 1}, where: 'id = ?', whereArgs: [id]);
-    debugPrint('✅ Notification marked as read: \$id');
+    await db.update('notifications', {'isRead': 1},
+        where: 'id = ?', whereArgs: [id]);
+    debugPrint('✅ Notification marked as read: $id');
   }
 
   Future<void> deleteNotification(String id) async {
     final db = await instance.database;
     await db.delete('notifications', where: 'id = ?', whereArgs: [id]);
-    debugPrint('🗑️ Notification deleted: \$id');
+    debugPrint('🗑️ Notification deleted: $id');
   }
 
   Future<void> deleteAllNotifications() async {
@@ -286,14 +297,16 @@ class NotificationManager extends ChangeNotifier {
   Future<void> loadNotifications() async {
     try {
       debugPrint('📂 Loading notifications from SQLite...');
-      final notificationsData = await NotificationDatabase.instance.getAllNotifications();
+      final notificationsData =
+          await NotificationDatabase.instance.getAllNotifications();
       _notifications = notificationsData.map((data) {
         return NotificationItem(
           id: data['id'] as String,
           title: data['title'] as String,
           body: data['body'] as String,
           imageUrl: data['imageUrl'] as String?,
-          timestamp: DateTime.fromMillisecondsSinceEpoch(data['timestamp'] as int),
+          timestamp:
+              DateTime.fromMillisecondsSinceEpoch(data['timestamp'] as int),
           data: data['data'] as Map<String, dynamic>? ?? {},
           isRead: data['isRead'] as bool,
           type: data['type'] as String,
@@ -305,8 +318,6 @@ class NotificationManager extends ChangeNotifier {
       debugPrint('❌ Error: $e');
     }
   }
-
-
 
   Future<void> addNotification(NotificationItem notification) async {
     if (_notifications.any((n) => n.id == notification.id)) {
@@ -411,10 +422,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 Future<void> _setupNativeFirebaseDelegate() async {
   if (Platform.isIOS) {
     try {
-      // Now that Firebase is initialized, we can safely set up native delegates
       final messaging = FirebaseMessaging.instance;
-
-      // This call will trigger the native AppDelegate MessagingDelegate methods
       String? token = await messaging.getToken();
       debugPrint(
           "✅ Native Firebase delegate setup complete: ${token?.substring(0, 20)}...");
@@ -427,7 +435,6 @@ Future<void> _setupNativeFirebaseDelegate() async {
 // ✅ Background message handler for Firebase Messaging
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // IMPORTANT: Initialize Firebase in background handler
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -435,10 +442,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('📱 Background FCM Message received: ${message.messageId}');
   debugPrint('📱 Message data: ${message.data}');
 
-  // Add to notification manager
   await NotificationManager.instance.addFirebaseMessage(message);
 
-  // Show notification if needed
   if (message.notification != null) {
     debugPrint('📱 Notification Title: ${message.notification!.title}');
     debugPrint('📱 Notification Body: ${message.notification!.body}');
@@ -447,16 +452,42 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('✅ Background message processed successfully');
 }
 
+// ✅ FIXED: Better navigation handler
+Future<void> _handleNotificationTap(RemoteMessage message) async {
+  debugPrint('👆 Notification tapped! Message: ${message.messageId}');
+
+  // Add small delay to ensure UI is ready
+  await Future.delayed(const Duration(milliseconds: 500));
+
+  try {
+    // Verify navigator is ready
+    if (navigatorKey.currentState == null) {
+      debugPrint('❌ Navigator not ready yet, waiting...');
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    if (navigatorKey.currentState != null) {
+      debugPrint('✅ Navigator ready - pushing NotificationsScreen');
+      navigatorKey.currentState!.push(
+        MaterialPageRoute(
+          builder: (context) => const NotificationsScreen(),
+        ),
+      );
+    } else {
+      debugPrint('❌ Navigator still not available after waiting');
+    }
+  } catch (e) {
+    debugPrint('❌ Error navigating to NotificationsScreen: $e');
+  }
+}
+
 void main() async {
-  // ✅ مهم جدًا لـ iOS - يجب أن يكون أول سطر
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ تهيئة SQLite Database
   debugPrint('📂 Initializing SQLite...');
   await NotificationDatabase.instance.database;
   debugPrint('✅ SQLite ready');
 
-  // Initialize date formatting for Arabic locale
   try {
     await initializeDateFormatting('ar_IQ', null);
     debugPrint('✅ Date formatting initialized');
@@ -473,13 +504,12 @@ void main() async {
   🚀 =================================
   ''');
 
-  // ✅ تهيئة Firebase بأمان (بدون كراش أو timeout معقد)
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
 
-    await configureFirebaseMessaging(); // 🔔 THIS IS THE FIX
+    await configureFirebaseMessaging();
 
     // ✅ CRITICAL: Setup iOS MethodChannel handler
     if (Platform.isIOS) {
@@ -490,19 +520,14 @@ void main() async {
 
     debugPrint('✅ Firebase initialized successfully');
 
-    // Test Firebase configuration
     final app = Firebase.app();
     debugPrint('✅ Firebase App Name: ${app.name}');
     debugPrint('✅ Firebase Project ID: ${app.options.projectId}');
 
-    // Setup native Firebase delegate
     await _setupNativeFirebaseDelegate();
-
-    // Initialize Notification Manager
     await NotificationManager.instance.loadNotifications();
     debugPrint('✅ Notification Manager initialized');
 
-    // Register background message handler
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     debugPrint('✅ Background message handler registered');
   } catch (e) {
@@ -510,7 +535,6 @@ void main() async {
     debugPrint('⚠️ Continuing without Firebase features');
   }
 
-  // Preload Google Fonts
   try {
     await GoogleFonts.pendingFonts([GoogleFonts.cairo()]);
     debugPrint('✅ Google Fonts loaded');
@@ -519,13 +543,11 @@ void main() async {
   }
 
   debugPrint('✅ All initializations complete - Running app');
-
-  // Run the app
   runApp(const MyApp());
 }
 
 Future<void> configureFirebaseMessaging() async {
-  // 🍎 REQUIRED FOR iOS (WITHOUT THIS → NO BANNER / NO SOUND)
+  // 🎁 REQUIRED FOR iOS (WITHOUT THIS → NO BANNER / NO SOUND)
   if (Platform.isIOS) {
     await FirebaseMessaging.instance
         .setForegroundNotificationPresentationOptions(
@@ -551,7 +573,6 @@ Future<void> configureFirebaseMessaging() async {
     debugPrint(
         '🔔 Notification permission status: ${settings.authorizationStatus}');
 
-    // Get FCM token with timeout
     String? token = await messaging.getToken().timeout(
       const Duration(seconds: 5),
       onTimeout: () {
@@ -563,7 +584,6 @@ Future<void> configureFirebaseMessaging() async {
     if (token != null) {
       debugPrint('🔑 FCM Token: ${token.substring(0, 20)}...');
 
-      // Subscribe to topic
       await messaging.subscribeToTopic('all_employees').timeout(
         const Duration(seconds: 3),
         onTimeout: () {
@@ -575,46 +595,51 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received');
     }
 
-    // Foreground message handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      debugPrint('📱 Foreground FCM Message received: ${message.messageId}');
-      debugPrint('📱 Title: ${message.notification?.title}');
-      debugPrint('📱 Body: ${message.notification?.body}');
-      debugPrint('📱 Data: ${message.data}');
+    // ✅ FIXED: Only handle in Flutter for ANDROID, iOS uses native delegate
+    if (Platform.isAndroid) {
+      debugPrint('🤖 Setting up Android-only Firebase handlers');
 
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-    });
-
-    // Notification opened handler
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('👆 Notification tapped! Opening notifications screen');
-      debugPrint('📱 Message data: ${message.data}');
-
-      // Add to notification manager
-      NotificationManager.instance.addFirebaseMessage(message);
-
-      // Navigate to notifications screen
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
+      // Foreground message handler (Android only)
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        debugPrint('📱 [Android] Foreground FCM Message: ${message.messageId}');
+        debugPrint('📱 Title: ${message.notification?.title}');
+        debugPrint('📱 Body: ${message.notification?.body}');
+        debugPrint('📱 Data: ${message.data}');
+        NotificationManager.instance.addFirebaseMessage(message);
       });
-    });
 
-    // Get initial message
-    RemoteMessage? initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint('📱 App launched from notification');
-      debugPrint('📱 Initial message data: ${initialMessage.data}');
-
-      NotificationManager.instance.addFirebaseMessage(initialMessage);
-
-      Future.delayed(const Duration(seconds: 1), () {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-        );
+      // Notification opened handler (Android only)
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        debugPrint('👆 [Android] Notification tapped: ${message.messageId}');
+        debugPrint('📱 Message data: ${message.data}');
+        NotificationManager.instance.addFirebaseMessage(message);
+        _handleNotificationTap(message);
       });
+
+      // Get initial message (Android only)
+      RemoteMessage? initialMessage = await messaging.getInitialMessage();
+      if (initialMessage != null) {
+        debugPrint('📱 [Android] App launched from notification');
+        debugPrint('📱 Initial message data: ${initialMessage.data}');
+        NotificationManager.instance.addFirebaseMessage(initialMessage);
+        Future.delayed(const Duration(seconds: 1), () {
+          _handleNotificationTap(initialMessage);
+        });
+      }
+    } else {
+      debugPrint(
+          '🍎 iOS detected - Firebase handlers DISABLED (using native AppDelegate)');
+
+      // ✅ CRITICAL: Check for initial notification on iOS
+      RemoteMessage? initialMessage = await messaging.getInitialMessage();
+      if (initialMessage != null) {
+        debugPrint(
+            '📱 [iOS] App launched from notification - navigating after delay');
+        // Don't add to manager (iOS AppDelegate already did via MethodChannel)
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          _handleNotificationTap(initialMessage);
+        });
+      }
     }
 
     debugPrint('✅ Firebase Messaging configured successfully');
@@ -969,8 +994,7 @@ class NotificationDetailScreen extends StatelessWidget {
               notification.body,
               textAlign: TextAlign.justify,
               style: GoogleFonts.cairo(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
+                fontSize: 16,
                 height: 1.6,
                 color: const Color(0xFF4A5568),
               ),
@@ -981,9 +1005,10 @@ class NotificationDetailScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'الشركة العامة لتعبئة وخدمات الغاز',
+                    'معلومات إضافية',
                     style: GoogleFonts.cairo(
-                      fontSize: 10,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                       color: const Color(0xFF2D3748),
                     ),
                   ),
@@ -1032,7 +1057,6 @@ class NotificationDetailScreen extends StatelessWidget {
     try {
       Uri uri = Uri.parse(imageUrl);
 
-      // تحقق مما إذا كان الرابط صالحاً
       if (!uri.hasScheme) {
         uri = Uri.parse('https://$imageUrl');
       }
@@ -1055,7 +1079,7 @@ class NotificationDetailScreen extends StatelessWidget {
             ),
             errorWidget: (context, url, error) {
               debugPrint('❌ Error loading image: $error');
-              debugPrint('📁 Image URL: $url');
+              debugPrint('🔍 Image URL: $url');
 
               return Container(
                 color: Colors.grey[100],
@@ -1179,7 +1203,7 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _fadeAnimation;
   late Animation<double> _slideAnimation;
   late Animation<double> _scaleAnimation;
-  bool _hasError = false; // ✅ iOS FIX: Error state tracking
+  bool _hasError = false;
 
   @override
   void initState() {
@@ -1208,7 +1232,6 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller.forward();
 
-    // ✅ iOS FIX: Navigate with error handling
     Timer(const Duration(seconds: 3), () {
       debugPrint('⏰ Timer completed - Navigating to Privacy Policy');
       if (mounted) {
@@ -1240,7 +1263,6 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    // ✅ iOS FIX: Show error screen if navigation fails
     if (_hasError) {
       return Scaffold(
         body: Center(
@@ -1539,11 +1561,9 @@ class PrivacyPolicyScreen extends StatelessWidget {
             ),
             child: ModernButton(
               onPressed: () {
-                // ✅ CRITICAL: Changed back to sync - don't block UI
                 debugPrint(
                     '✅ Privacy Policy accepted - Navigating to WebView IMMEDIATELY');
                 try {
-                  // ✅ CRITICAL FIX: Navigate FIRST without waiting for anything
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => const WebViewScreen(),
@@ -1551,7 +1571,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   );
                 } catch (e) {
                   debugPrint('❌ Navigation error: $e');
-                  // Emergency fallback - try direct push instead of replace
                   try {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -2331,7 +2350,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
     debugPrint('🌐 WebViewScreen initState - SCREEN VISIBLE NOW');
     debugPrint('🔗 Login URL: $loginUrl');
 
-    // ✅ CRITICAL: Initialize immediately - no delay
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         debugPrint('🚀 Starting WebView initialization...');
@@ -2362,8 +2380,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         controller!.enableZoom(true);
         debugPrint('✅ Android WebView settings configured');
       } else if (Platform.isIOS) {
-        // ✅ iOS FIX: Configure WKWebView for iOS
-        debugPrint('🍎 Configuring iOS WebView settings');
+        debugPrint('🎁 Configuring iOS WebView settings');
         final wkWebViewController =
             controller!.platform as WebKitWebViewController;
         wkWebViewController.setAllowsBackForwardNavigationGestures(true);
@@ -2373,7 +2390,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller!.setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
-            debugPrint('📄 Page started: $url');
+            debugPrint('🔄 Page started: $url');
 
             if (!url.contains('download=1')) {
               navigationCount = 0;
@@ -2391,7 +2408,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
             }
           },
           onProgress: (int progress) {
-            debugPrint('⏳ Progress: $progress%');
             if (mounted) {
               setState(() {
                 loadingProgress = progress / 100;
@@ -2414,12 +2430,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
             _updateCanGoBack();
 
             if (url.contains('/login')) {
-              debugPrint('🔐 Login page detected - hiding notifications');
               _hideNotificationsOnLoginPage();
             }
 
             if (url.contains('/payslips/view') || url.contains('/salary')) {
-              debugPrint('📄 Payslip page detected - auto-fitting to screen');
               setState(() {
                 zoomLevel = 1.0;
               });
@@ -2433,8 +2447,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onWebResourceError: (WebResourceError error) {
             debugPrint('❌ WebView Error:');
             debugPrint('   Description: ${error.description}');
-            debugPrint('   Error code: ${error.errorCode}');
-            debugPrint('   Error type: ${error.errorType}');
 
             if (mounted) {
               setState(() {
@@ -2459,14 +2471,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
             } else {
               lastNavigatedUrl = request.url;
               navigationCount = 1;
-            }
-
-            if (request.url.contains('/login') ||
-                request.url.contains('/dashboard') ||
-                request.url.contains('/salary') ||
-                request.url.contains('/payslips') ||
-                request.url.contains('109.224.38.44')) {
-              return NavigationDecision.navigate;
             }
 
             return NavigationDecision.navigate;
@@ -2505,13 +2509,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _autoFitPageToScreen() async {
     if (controller == null) return;
 
-    debugPrint('📐 Auto-fitting page to screen...');
-
     try {
       await controller!.runJavaScript('''
         (function() {
-          console.log('Auto-fit page script loading...');
-          
           var existingViewports = document.querySelectorAll('meta[name="viewport"]');
           existingViewports.forEach(function(viewport) {
             viewport.remove();
@@ -2519,122 +2519,57 @@ class _WebViewScreenState extends State<WebViewScreen> {
           
           var meta = document.createElement('meta');
           meta.name = 'viewport';
-          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
+          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes';
           document.getElementsByTagName('head')[0].appendChild(meta);
           
-          document.body.style.margin = '0';
-          document.body.style.padding = '8px';
-          document.body.style.boxSizing = 'border-box';
-          document.body.style.overflow = 'auto';
           document.body.style.width = '100%';
-          
-          var containers = document.querySelectorAll('div.container, div.content, main, article');
-          containers.forEach(function(container) {
-            container.style.maxWidth = '100%';
-            container.style.width = '100%';
-            container.style.padding = '8px';
-            container.style.boxSizing = 'border-box';
-          });
-          
-          var tables = document.querySelectorAll('table');
-          tables.forEach(function(table) {
-            table.style.width = '100%';
-            table.style.maxWidth = '100%';
-            table.style.fontSize = '14px';
-            table.style.display = 'block';
-            table.style.overflowX = 'auto';
-          });
-          
-          console.log('✅ Page auto-fitted to screen');
         })();
       ''');
-
-      debugPrint('✅ Auto-fit completed');
     } catch (e) {
       debugPrint('⚠️ Error auto-fitting page: $e');
     }
   }
 
   void _zoomIn() {
-    debugPrint('➕ Zoom In pressed, current zoom: $zoomLevel');
     if (zoomLevel < 3.0) {
       setState(() {
         zoomLevel += 0.2;
-        debugPrint('🔄 New zoom level: $zoomLevel');
       });
       _applyZoom();
-    } else {
-      debugPrint('⛔ Max zoom reached');
     }
   }
 
   void _zoomOut() {
-    debugPrint('➖ Zoom Out pressed, current zoom: $zoomLevel');
     if (zoomLevel > 0.5) {
       setState(() {
         zoomLevel -= 0.2;
-        debugPrint('🔄 New zoom level: $zoomLevel');
       });
       _applyZoom();
-    } else {
-      debugPrint('⛔ Min zoom reached');
     }
   }
 
   Future<void> _applyZoom() async {
-    if (controller == null) {
-      debugPrint('⛔ Controller is null, cannot apply zoom');
-      return;
-    }
-
-    debugPrint('🎯 Applying zoom: $zoomLevel');
+    if (controller == null) return;
 
     try {
       if (Platform.isIOS) {
         await controller!.runJavaScript('''
           (function() {
             var body = document.body;
-            var html = document.documentElement;
-            
-            body.style.transform = '';
-            body.style.webkitTransform = '';
-            html.style.transform = '';
-            html.style.webkitTransform = '';
-            
-            body.style.transform = 'scale(' + $zoomLevel + ')';
-            body.style.webkitTransform = 'scale(' + $zoomLevel + ')';
+            body.style.transform = 'scale($zoomLevel)';
             body.style.transformOrigin = 'top right';
-            body.style.webkitTransformOrigin = 'top right';
-            
             body.style.width = (100 / $zoomLevel) + '%';
-            body.style.height = (100 / $zoomLevel) + '%';
-            
-            body.style.overflow = 'auto';
-            html.style.overflow = 'auto';
-            
-            console.log('✅ iOS zoom applied: scale(' + $zoomLevel + ')');
           })();
         ''');
       } else {
         await controller!.runJavaScript('''
           (function() {
             var html = document.documentElement;
-            var body = document.body;
-            
-            html.style.transformOrigin = '0 0';
-            body.style.transformOrigin = '0 0';
-            
             html.style.transform = 'scale($zoomLevel)';
             html.style.width = (100 / $zoomLevel) + '%';
-            
-            body.style.width = '100%';
-            body.style.minHeight = '100vh';
-            
-            console.log('✅ CSS transform zoom applied: $zoomLevel');
           })();
         ''');
       }
-      debugPrint('✅ Zoom applied successfully: $zoomLevel');
     } catch (e) {
       debugPrint('❌ Error applying zoom: $e');
     }
@@ -2643,23 +2578,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _hideNotificationsOnLoginPage() async {
     if (controller == null) return;
 
-    debugPrint('🔕 Hiding notifications on login page...');
-
     try {
       await controller!.runJavaScript('''
         (function() {
-          console.log('Notification blocker loading...');
-          
-          var notifications = document.querySelectorAll('.alert, .notification, .toast, [role="alert"], .flash-message, .alert-success, .alert-danger, .alert-warning, .alert-info');
+          var notifications = document.querySelectorAll('.alert, .notification, [role="alert"]');
           notifications.forEach(function(notif) {
             notif.style.display = 'none';
           });
-          
-          console.log('✅ Notifications hidden on login page');
         })();
       ''');
-
-      debugPrint('✅ Notifications hidden');
     } catch (e) {
       debugPrint('⚠️ Error hiding notifications: $e');
     }
@@ -2668,37 +2595,24 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _injectAndroidFix() async {
     if (controller == null) return;
 
-    debugPrint('💉 Injecting Android fix for HTML downloads');
-
     const String jsCode = '''
       (function() {
-        console.log('Android WebView fix loading...');
-        
         var originalOpen = window.open;
-        
         window.open = function(url, name, specs) {
-          console.log('Intercepted window.open:', url);
-          
           if (url) {
             var cleanUrl = url.replace(/[?&]download=1/, '');
-            console.log('Cleaned URL:', cleanUrl);
-            
             if (cleanUrl !== window.location.href) {
               window.location.href = cleanUrl;
             }
             return window;
           }
-          
           return originalOpen.call(window, url, name, specs);
         };
-        
-        console.log('Android WebView fix injected successfully');
       })();
     ''';
 
     try {
       await controller!.runJavaScript(jsCode);
-      debugPrint('✅ Android fix injected successfully');
     } catch (e) {
       debugPrint('❌ Error injecting JavaScript: $e');
     }
@@ -2710,47 +2624,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
         final androidInfo = await DeviceInfoPlugin().androidInfo;
         final sdkInt = androidInfo.version.sdkInt;
 
-        debugPrint('📱 Android SDK: $sdkInt');
-
         if (sdkInt >= 29) {
-          debugPrint(
-              '✅ Android 10+ detected - using MediaStore (no permissions required)');
           return true;
         }
 
-        debugPrint('📱 Android 9 or below - requesting storage permission...');
-
         final status = await Permission.storage.status;
         if (status.isGranted) {
-          debugPrint('✅ Storage permission already granted');
           return true;
         }
 
         final result = await Permission.storage.request();
-        if (result.isGranted) {
-          debugPrint('✅ Storage permission granted');
-          return true;
-        }
-
-        debugPrint('❌ Storage permission denied');
-        return false;
+        return result.isGranted;
       } catch (e) {
-        debugPrint('❌ Permission check error: $e');
-        try {
-          final androidInfo = await DeviceInfoPlugin().androidInfo;
-          if (androidInfo.version.sdkInt >= 29) {
-            debugPrint('✅ Android 10+ - proceeding without permissions');
-            return true;
-          }
-        } catch (e2) {
-          debugPrint('❌ Failed to check Android version: $e2');
-        }
-        return false;
+        return true;
       }
     }
 
-    debugPrint('✅ iOS - no permission needed');
-    return true; // iOS
+    return true;
   }
 
   Future<Uint8List> _captureWebView() async {
@@ -2768,8 +2658,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<void> _savePageAsImage() async {
     try {
-      debugPrint('📸 Starting screenshot capture...');
-
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
         _showMessage('الرجاء منح صلاحية الوصول للصور لحفظ لقطة الشاشة');
@@ -2784,50 +2672,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
       await Future.delayed(const Duration(milliseconds: 1000));
 
-      Uint8List screenshot;
-
-      try {
-        screenshot = await _captureWebView();
-      } catch (e) {
-        debugPrint('❌ WebView capture failed: $e');
-
-        try {
-          debugPrint('🔄 Trying alternative capture method...');
-
-          RenderBox? renderBox =
-              _webViewKey.currentContext?.findRenderObject() as RenderBox?;
-          if (renderBox == null) {
-            throw Exception('RenderBox not found');
-          }
-
-          final size = renderBox.size;
-          final recorder = ui.PictureRecorder();
-          final canvas = Canvas(recorder,
-              Rect.fromPoints(Offset.zero, Offset(size.width, size.height)));
-
-          canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-              Paint()..color = Colors.white);
-
-          renderBox.paint(canvas as PaintingContext, Offset.zero);
-
-          final picture = recorder.endRecording();
-          final image =
-              await picture.toImage(size.width.toInt(), size.height.toInt());
-          final byteData =
-              await image.toByteData(format: ui.ImageByteFormat.png);
-
-          if (byteData == null) {
-            throw Exception('Could not convert alternative image to byte data');
-          }
-
-          screenshot = byteData.buffer.asUint8List();
-          debugPrint(
-              '✅ Alternative capture successful: ${screenshot.length} bytes');
-        } catch (e2) {
-          debugPrint('❌ Alternative capture also failed: $e2');
-          throw Exception('All capture methods failed');
-        }
-      }
+      Uint8List screenshot = await _captureWebView();
 
       if (screenshot.isEmpty) {
         _showMessage('فشل التقاط الصورة - الرجاء المحاولة مرة أخرى');
@@ -2839,8 +2684,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         return;
       }
 
-      debugPrint('💾 Saving screenshot to gallery...');
-
       final tempDir = await getTemporaryDirectory();
       final fileName =
           'salary_slip_${DateTime.now().millisecondsSinceEpoch}.png';
@@ -2849,7 +2692,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
       try {
         await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
-        debugPrint('✅ Image saved to gallery successfully');
 
         if (mounted) {
           setState(() {
@@ -2867,8 +2709,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           }
         });
       } catch (e) {
-        debugPrint('❌ Error saving to gallery: $e');
-
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -2877,8 +2717,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         _showMessage('فشل حفظ الصورة في المعرض');
       }
     } catch (e) {
-      debugPrint('❌ Error saving screenshot: $e');
-
       if (mounted) {
         setState(() {
           isLoading = false;
@@ -2911,7 +2749,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<bool> _onWillPop() async {
     if (canGoBack && controller != null) {
-      debugPrint('⬅️ Going back in WebView history');
       controller!.goBack();
       return false;
     }
@@ -3010,9 +2847,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    debugPrint(
-        '🎨 Building WebViewScreen - isLoading: $isLoading, hasError: $hasError, isLoggedIn: $isLoggedIn');
-
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
@@ -3022,10 +2856,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () async {
               if (canGoBack && controller != null) {
-                debugPrint('⬅️ Back button pressed - Going back in WebView');
                 controller!.goBack();
               } else {
-                debugPrint('🚪 Back button pressed - Showing exit dialog');
                 final shouldExit = await _showExitDialog();
                 if (shouldExit == true) {
                   SystemNavigator.pop();
@@ -3062,7 +2894,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ),
         body: Stack(
           children: [
-            // ✅ CRITICAL FIX: Always show white container as base
             Container(
               color: Colors.white,
               child: Center(
