@@ -2644,16 +2644,65 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<Uint8List> _captureWebView() async {
-    if (Platform.isIOS) {
-      final bytes = await _channel.invokeMethod('takeSnapshot');
-      return Uint8List.fromList(List<int>.from(bytes));
-    }
+    debugPrint(
+        '📸 _captureWebView called - Platform: ${Platform.operatingSystem}');
 
-    RenderRepaintBoundary boundary =
-        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-    ui.Image img = await boundary.toImage(pixelRatio: 3.0);
-    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
+    if (Platform.isIOS) {
+      try {
+        debugPrint('🍎 iOS: Calling native takeSnapshot method...');
+        final dynamic bytes = await _channel.invokeMethod('takeSnapshot');
+        debugPrint('✅ iOS: Received bytes from native');
+
+        if (bytes == null) {
+          throw Exception('iOS native method returned null');
+        }
+
+        final Uint8List imageBytes = Uint8List.fromList(List<int>.from(bytes));
+        debugPrint('✅ iOS: Screenshot captured: ${imageBytes.length} bytes');
+        return imageBytes;
+      } catch (e, stackTrace) {
+        debugPrint('❌ iOS screenshot error: $e');
+        debugPrint('❌ Stack trace: $stackTrace');
+        throw Exception('iOS screenshot failed: $e');
+      }
+    } else {
+      // Android
+      try {
+        debugPrint('🤖 Android: Capturing RepaintBoundary...');
+
+        if (_webViewKey.currentContext == null) {
+          throw Exception('WebView context is null');
+        }
+
+        RenderRepaintBoundary? boundary = _webViewKey.currentContext!
+            .findRenderObject() as RenderRepaintBoundary?;
+
+        if (boundary == null) {
+          throw Exception('RenderRepaintBoundary not found');
+        }
+
+        debugPrint('✅ Android: Found RepaintBoundary');
+
+        ui.Image img = await boundary.toImage(pixelRatio: 3.0);
+        debugPrint('✅ Android: Image created from boundary');
+
+        ByteData? byteData =
+            await img.toByteData(format: ui.ImageByteFormat.png);
+
+        if (byteData == null) {
+          throw Exception('Failed to convert image to ByteData');
+        }
+
+        final Uint8List imageBytes = byteData.buffer.asUint8List();
+        debugPrint(
+            '✅ Android: Screenshot captured: ${imageBytes.length} bytes');
+        return imageBytes;
+      } catch (e, stackTrace) {
+        debugPrint('❌ Android screenshot error: $e');
+        debugPrint('❌ Stack trace: $stackTrace');
+        throw Exception('Android screenshot failed: $e');
+      }
+    }
   }
 
   Future<void> _savePageAsImage() async {
