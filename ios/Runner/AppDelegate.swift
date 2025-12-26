@@ -9,6 +9,10 @@ import FirebaseMessaging
     private let CHANNEL = "com.pocket.salaryinfo/notifications"
     private var methodChannel: FlutterMethodChannel?
     
+    // ✅ Track processed notification IDs to prevent duplicates
+    private var processedNotificationIds = Set<String>()
+    private let maxProcessedIds = 100 // Keep last 100 IDs
+    
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -18,7 +22,6 @@ import FirebaseMessaging
         // ⚠️ CRITICAL: Do NOT call FirebaseApp.configure() here!
         // It's already called in main.dart Flutter code
         // Calling it twice will cause: "The default Firebase app has already been configured"
-        // This crash happens at line 20 in your crash log
         
         // Setup notifications
         setupNotifications(application: application)
@@ -71,10 +74,38 @@ import FirebaseMessaging
         print("✅ MethodChannel setup completed")
     }
     
+    // ✅ FIXED: Add duplicate detection
+    private func isNotificationProcessed(_ notificationId: String) -> Bool {
+        if processedNotificationIds.contains(notificationId) {
+            print("⚠️ Duplicate notification detected: \(notificationId)")
+            return true
+        }
+        
+        // Add to processed set
+        processedNotificationIds.insert(notificationId)
+        
+        // Keep set size manageable
+        if processedNotificationIds.count > maxProcessedIds {
+            // Remove oldest (first) elements
+            let elementsToRemove = processedNotificationIds.count - maxProcessedIds
+            processedNotificationIds.removeFirst(elementsToRemove)
+        }
+        
+        return false
+    }
+    
     private func sendNotificationToFlutter(_ notification: [String: Any]) -> Bool {
         guard let channel = methodChannel else {
             print("❌ MethodChannel not initialized")
             return false
+        }
+        
+        // ✅ Check for duplicates
+        if let notificationId = notification["id"] as? String {
+            if isNotificationProcessed(notificationId) {
+                print("🚫 Skipping duplicate notification: \(notificationId)")
+                return false
+            }
         }
         
         print("📤 Sending notification to Flutter:")
@@ -111,7 +142,7 @@ extension AppDelegate {
         if success {
             print("✅ Notification sent to Flutter successfully")
         } else {
-            print("❌ Failed to send notification to Flutter")
+            print("❌ Failed to send notification to Flutter (possibly duplicate)")
         }
         
         // عرض الإشعار
@@ -133,33 +164,22 @@ extension AppDelegate {
         print("👆 didReceive - User TAPPED notification")
         print("📱 Notification ID: \(response.notification.request.identifier)")
         
-        // استخراج البيانات
-        let notificationData = extractNotificationData(
-            from: userInfo,
-            identifier: response.notification.request.identifier
+        // ✅ IMPORTANT: Don't send to Flutter here - let Flutter's onMessageOpenedApp handle it
+        // This prevents duplicate handling when user taps notification
+        print("ℹ️ Notification tap will be handled by Flutter's onMessageOpenedApp")
+        
+        // حذف هذا الإشعار فقط من Notification Center
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: [response.notification.request.identifier]
         )
-        
-        // إرسال إلى Flutter
-        let success = sendNotificationToFlutter(notificationData)
-        
-        if success {
-            print("✅ Tapped notification sent to Flutter successfully")
-            
-            // حذف هذا الإشعار فقط من Notification Center
-            UNUserNotificationCenter.current().removeDeliveredNotifications(
-                withIdentifiers: [response.notification.request.identifier]
-            )
-            print("🗑️ Removed tapped notification from Notification Center")
-        } else {
-            print("❌ Failed to send tapped notification to Flutter")
-        }
+        print("🗑️ Removed tapped notification from Notification Center")
         
         completionHandler()
     }
     
     private func extractNotificationData(from userInfo: [AnyHashable: Any], identifier: String) -> [String: Any] {
         var notificationData: [String: Any] = [
-            "id": identifier,
+            "id": identifier, // ✅ Changed from "messageId" to "id" to match Flutter
             "timestamp": Date().timeIntervalSince1970 * 1000
         ]
         
