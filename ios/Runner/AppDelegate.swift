@@ -6,7 +6,7 @@ import FirebaseMessaging
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
-    private let CHANNEL = "com.scgfs.salaryinfo/ios_notifications"
+    private let CHANNEL = "com.pocket.salaryinfo/notifications"
     private var methodChannel: FlutterMethodChannel?
     
     override func application(
@@ -15,10 +15,10 @@ import FirebaseMessaging
     ) -> Bool {
         GeneratedPluginRegistrant.register(with: self)
         
-        // Firebase initialization
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
+        // ⚠️ CRITICAL: Do NOT call FirebaseApp.configure() here!
+        // It's already called in main.dart Flutter code
+        // Calling it twice will cause: "The default Firebase app has already been configured"
+        // This crash happens at line 20 in your crash log
         
         // Setup notifications
         setupNotifications(application: application)
@@ -26,10 +26,7 @@ import FirebaseMessaging
         // Setup MethodChannel
         setupMethodChannel()
         
-        // ⚠️ REMOVED: checkDeliveredNotifications()
-        // السبب: هذا كان يحذف الإشعارات عند فتح التطبيق!
-        
-        print("✅ AppDelegate initialized - WITHOUT checkDeliveredNotifications")
+        print("✅ AppDelegate initialized - Firebase configured by Flutter")
         
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
@@ -50,7 +47,12 @@ import FirebaseMessaging
         )
         
         application.registerForRemoteNotifications()
-        Messaging.messaging().delegate = self
+        
+        // Set Firebase Messaging delegate AFTER Flutter initializes Firebase
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            Messaging.messaging().delegate = self
+            print("✅ Firebase Messaging delegate set")
+        }
         
         print("✅ Notifications setup completed")
     }
@@ -113,7 +115,11 @@ extension AppDelegate {
         }
         
         // عرض الإشعار
-        completionHandler([.banner, .sound, .badge])
+        if #available(iOS 14.0, *) {
+            completionHandler([.banner, .sound, .badge])
+        } else {
+            completionHandler([.alert, .sound, .badge])
+        }
     }
     
     // عندما ينقر المستخدم على الإشعار
