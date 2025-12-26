@@ -86,9 +86,14 @@ import FirebaseMessaging
         
         // Keep set size manageable
         if processedNotificationIds.count > maxProcessedIds {
-            // Remove oldest (first) elements
+            // Remove excess elements (Sets don't have removeFirst for multiple elements)
             let elementsToRemove = processedNotificationIds.count - maxProcessedIds
-            processedNotificationIds.removeFirst(elementsToRemove)
+            for _ in 0..<elementsToRemove {
+                if let first = processedNotificationIds.first {
+                    processedNotificationIds.remove(first)
+                }
+            }
+            print("🧹 Cleaned up \(elementsToRemove) old notification IDs")
         }
         
         return false
