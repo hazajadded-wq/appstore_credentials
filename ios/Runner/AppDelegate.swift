@@ -7,7 +7,9 @@ import FirebaseMessaging
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
     private let CHANNEL = "com.pocket.salaryinfo/notifications"
+    private let WEBVIEW_CHANNEL = "snap_webview" // ✅ For screenshot functionality
     private var methodChannel: FlutterMethodChannel?
+    private var webviewChannel: FlutterMethodChannel?
     
     // ✅ Track processed notification IDs to prevent duplicates
     private var processedNotificationIds = Set<String>()
@@ -66,12 +68,78 @@ import FirebaseMessaging
             return
         }
         
+        // ✅ Setup notification channel
         methodChannel = FlutterMethodChannel(
             name: CHANNEL,
             binaryMessenger: controller.binaryMessenger
         )
         
-        print("✅ MethodChannel setup completed")
+        // ✅ Setup webview/screenshot channel
+        webviewChannel = FlutterMethodChannel(
+            name: WEBVIEW_CHANNEL,
+            binaryMessenger: controller.binaryMessenger
+        )
+        
+        // ✅ Handle webview channel method calls from Flutter
+        webviewChannel?.setMethodCallHandler { [weak self] (call, result) in
+            if call.method == "takeSnapshot" {
+                self?.takeScreenshot(result: result)
+            } else {
+                result(FlutterMethodNotImplemented)
+            }
+        }
+        
+        print("✅ MethodChannel setup completed (notifications + webview)")
+    }
+    
+    // ✅ Take screenshot of current view
+    private func takeScreenshot(result: @escaping FlutterResult) {
+        guard let window = self.window else {
+            print("❌ Window not available for screenshot")
+            result(FlutterError(code: "NO_WINDOW", message: "Window not available", details: nil))
+            return
+        }
+        
+        print("📸 Taking screenshot...")
+        
+        // Get the window bounds
+        let bounds = window.bounds
+        
+        // Create a graphics context
+        UIGraphicsBeginImageContextWithOptions(bounds.size, false, UIScreen.main.scale)
+        
+        guard let context = UIGraphicsGetCurrentContext() else {
+            print("❌ Failed to create graphics context")
+            UIGraphicsEndImageContext()
+            result(FlutterError(code: "CONTEXT_ERROR", message: "Failed to create graphics context", details: nil))
+            return
+        }
+        
+        // Render the window layer into the context
+        window.layer.render(in: context)
+        
+        // Get the image from the context
+        guard let image = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("❌ Failed to get image from context")
+            UIGraphicsEndImageContext()
+            result(FlutterError(code: "IMAGE_ERROR", message: "Failed to capture image", details: nil))
+            return
+        }
+        
+        UIGraphicsEndImageContext()
+        
+        // Convert to PNG data
+        guard let imageData = image.pngData() else {
+            print("❌ Failed to convert image to PNG")
+            result(FlutterError(code: "PNG_ERROR", message: "Failed to convert to PNG", details: nil))
+            return
+        }
+        
+        print("✅ Screenshot captured successfully: \(imageData.count) bytes")
+        
+        // Convert to FlutterStandardTypedData
+        let flutterData = FlutterStandardTypedData(bytes: imageData)
+        result(flutterData.data)
     }
     
     // ✅ FIXED: Add duplicate detection
