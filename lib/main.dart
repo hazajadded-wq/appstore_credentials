@@ -24,127 +24,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
-
-// ========================================
-// ✅ Global Navigator Key for Auto-Navigation
-// ========================================
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-// ========================================
-// ✅ ON-SCREEN DEBUG LOGGER
-// ========================================
-class DebugLogger {
-  static final DebugLogger instance = DebugLogger._();
-  DebugLogger._();
-  
-  final List<String> _logs = [];
-  final ValueNotifier<int> updateNotifier = ValueNotifier(0);
-  
-  void log(String message) {
-    final timestamp = DateTime.now().toString().substring(11, 19);
-    _logs.add('[$timestamp] $message');
-    
-    if (_logs.length > 100) {
-      _logs.removeAt(0);
-    }
-    
-    updateNotifier.value++;
-    debugPrint(message);
-  }
-  
-  List<String> get logs => List.unmodifiable(_logs);
-  
-  void clear() {
-    _logs.clear();
-    updateNotifier.value++;
-  }
-}
-
-class DebugLogsScreen extends StatelessWidget {
-  const DebugLogsScreen({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Debug Logs'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete),
-            onPressed: () {
-              DebugLogger.instance.clear();
-            },
-          ),
-        ],
-      ),
-      body: ValueListenableBuilder<int>(
-        valueListenable: DebugLogger.instance.updateNotifier,
-        builder: (context, _, __) {
-          final logs = DebugLogger.instance.logs;
-          
-          if (logs.isEmpty) {
-            return const Center(
-              child: Text('No logs yet. Send a notification while app is open!'),
-            );
-          }
-          
-          return ListView.builder(
-            reverse: true,
-            padding: const EdgeInsets.all(8),
-            itemCount: logs.length,
-            itemBuilder: (context, index) {
-              final log = logs[logs.length - 1 - index];
-              
-              Color bgColor = Colors.white;
-              Color textColor = Colors.black87;
-              
-              if (log.contains('❌')) {
-                bgColor = Colors.red.shade50;
-                textColor = Colors.red.shade900;
-              } else if (log.contains('✅')) {
-                bgColor = Colors.green.shade50;
-                textColor = Colors.green.shade900;
-              } else if (log.contains('📲') || log.contains('📱')) {
-                bgColor = Colors.blue.shade50;
-                textColor = Colors.blue.shade900;
-              } else if (log.contains('💾')) {
-                bgColor = Colors.purple.shade50;
-                textColor = Colors.purple.shade900;
-              }
-              
-              return Container(
-                margin: const EdgeInsets.only(bottom: 4),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: bgColor,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: SelectableText(
-                  log,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: textColor,
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          DebugLogger.instance.log('🧪 Test log at ${DateTime.now()}');
-          DebugLogger.instance.log('📊 Total notifications: ${NotificationManager.instance.notifications.length}');
-          DebugLogger.instance.log('🔔 Unread count: ${NotificationManager.instance.unreadCount}');
-        },
-        label: const Text('Test Log'),
-        icon: const Icon(Icons.bug_report),
-      ),
-    );
-  }
-}
 // ========================================
 // ✅ iOS MethodChannel - INTENSIVE DEBUG VERSION
 // ========================================
@@ -153,45 +32,46 @@ const MethodChannel _notificationChannel =
 
 /// ✅ Setup iOS MethodChannel handler - WITH INTENSIVE DEBUG
 Future<void> setupNotificationChannelHandler() async {
-  DebugLogger.instance.log('🔧 ========================================');
-  DebugLogger.instance.log('🔧 Setting up iOS MethodChannel handler...');
-  DebugLogger.instance.log('🔧 Channel: com.pocket.salaryinfo/notifications');
-  DebugLogger.instance.log('🔧 ========================================');
-  
+  debugPrint('🔧 ========================================');
+  debugPrint('🔧 Setting up iOS MethodChannel handler...');
+  debugPrint('🔧 Channel name: com.pocket.salaryinfo/notifications');
+  debugPrint('🔧 ========================================');
+
   try {
     _notificationChannel.setMethodCallHandler((MethodCall call) async {
-      DebugLogger.instance.log('📲 ========================================');
-      DebugLogger.instance.log('📲 MethodChannel CALL RECEIVED');
-      DebugLogger.instance.log('📲 Method: ${call.method}');
-      
+      debugPrint('📲 ========================================');
+      debugPrint('📲 📲 📲 MethodChannel RECEIVED CALL 📲 📲 📲');
+      debugPrint('📲 ========================================');
+      debugPrint('📲 Method: ${call.method}');
+      debugPrint('📲 Arguments type: ${call.arguments.runtimeType}');
+
       if (call.method == 'onNotificationReceived') {
-        DebugLogger.instance.log('✅ Method = onNotificationReceived');
-        
+        debugPrint('✅ Method is onNotificationReceived - processing...');
+
         try {
-          final Map<dynamic, dynamic> rawArgs = call.arguments as Map<dynamic, dynamic>;
-          
-          final String messageId = rawArgs['messageId']?.toString() ?? 
+          final Map<dynamic, dynamic> rawArgs =
+              call.arguments as Map<dynamic, dynamic>;
+          debugPrint('✅ Arguments cast to Map successfully');
+
+          final String messageId = rawArgs['messageId']?.toString() ??
               'flutter_${DateTime.now().millisecondsSinceEpoch}';
           final String title = rawArgs['title']?.toString() ?? 'إشعار جديد';
           final String body = rawArgs['body']?.toString() ?? '';
-          final bool isForeground = rawArgs['isForeground'] as bool? ?? true;
-          final bool shouldNavigate = rawArgs['shouldNavigate'] as bool? ?? false;
-          final String timestamp = rawArgs['timestamp']?.toString() ?? 
+          final String timestamp = rawArgs['timestamp']?.toString() ??
               DateTime.now().toIso8601String();
-          
-          DebugLogger.instance.log('✅ MessageID: $messageId');
-          DebugLogger.instance.log('✅ Title: $title');
-          DebugLogger.instance.log('✅ isForeground: $isForeground');
-          DebugLogger.instance.log('✅ shouldNavigate: $shouldNavigate');
-          
-          final Map<dynamic, dynamic> rawData = rawArgs['data'] as Map<dynamic, dynamic>? ?? {};
+
+          debugPrint('✅ Extracted: messageId=$messageId, title=$title');
+
+          final Map<dynamic, dynamic> rawData =
+              rawArgs['data'] as Map<dynamic, dynamic>? ?? {};
           final Map<String, dynamic> data = {};
           rawData.forEach((key, value) {
             data[key.toString()] = value;
           });
-          
-          DebugLogger.instance.log('✅ Data type: ${data['type'] ?? 'unknown'}');
-          
+
+          debugPrint(
+              '✅ Data: type=${data['type']}, image_url=${data['image_url']}');
+
           final NotificationItem notification = NotificationItem(
             id: messageId,
             title: title,
@@ -202,43 +82,26 @@ Future<void> setupNotificationChannelHandler() async {
             isRead: false,
             type: data['type']?.toString() ?? 'general',
           );
-          
-          DebugLogger.instance.log('💾 Adding to NotificationManager...');
-          DebugLogger.instance.log('💾 Count BEFORE: ${NotificationManager.instance.notifications.length}');
-          
+
+          debugPrint(
+              '💾 Adding to NotificationManager... Count before: ${NotificationManager.instance.notifications.length}');
+
           await NotificationManager.instance.addNotification(notification);
-          
-          DebugLogger.instance.log('✅✅✅ NOTIFICATION SAVED!');
-          DebugLogger.instance.log('✅ Count AFTER: ${NotificationManager.instance.notifications.length}');
-          
-          // ✅ AUTO-NAVIGATE when user tapped notification!
-          if (shouldNavigate) {
-            DebugLogger.instance.log('🚀 ========================================');
-            DebugLogger.instance.log('🚀 NAVIGATING TO NOTIFICATIONS PAGE!');
-            DebugLogger.instance.log('🚀 ========================================');
-            
-            await Future.delayed(const Duration(milliseconds: 500));
-            
-            navigatorKey.currentState?.push(
-              MaterialPageRoute(
-                builder: (context) => const NotificationsScreen(),
-              ),
-            );
-            
-            DebugLogger.instance.log('✅ Navigation complete!');
-          }
-          
+
+          debugPrint(
+              '✅✅✅ NOTIFICATION SAVED! Count after: ${NotificationManager.instance.notifications.length}');
+          debugPrint('✅ Unread: ${NotificationManager.instance.unreadCount}');
         } catch (e, stackTrace) {
-          DebugLogger.instance.log('❌ ERROR: $e');
-          DebugLogger.instance.log('$stackTrace');
+          debugPrint('❌❌❌ ERROR: $e');
+          debugPrint('$stackTrace');
         }
       }
     });
-    
-    DebugLogger.instance.log('✅ iOS MethodChannel handler COMPLETE');
-    
+
+    debugPrint('✅ iOS MethodChannel handler setup COMPLETE');
   } catch (e, stackTrace) {
-    DebugLogger.instance.log('❌ FAILED to setup MethodChannel: $e');
+    debugPrint('❌ FAILED to setup MethodChannel: $e');
+    debugPrint('$stackTrace');
   }
 }
 // ========================================
@@ -323,91 +186,45 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
 
-  // ✅ Load notifications من SharedPreferences مع debug logs
   Future<void> loadNotifications() async {
     try {
-      DebugLogger.instance.log('📂 Loading notifications from storage...');
-      
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? notificationsJson = prefs.getString('stored_notifications');
 
-      if (notificationsJson != null && notificationsJson.isNotEmpty) {
+      if (notificationsJson != null) {
         List<dynamic> notificationsList = json.decode(notificationsJson);
         _notifications = notificationsList
             .map((json) => NotificationItem.fromJson(json))
             .toList();
         _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         _updateUnreadCount();
-        
-        DebugLogger.instance.log('✅ Loaded ${_notifications.length} notifications from storage');
-        DebugLogger.instance.log('✅ Unread count: $_unreadCount');
-      } else {
-        DebugLogger.instance.log('📭 No stored notifications found');
       }
-    } catch (e, stackTrace) {
-      DebugLogger.instance.log('❌ Error loading notifications: $e');
-      debugPrint('Stack trace: $stackTrace');
+    } catch (e) {
+      debugPrint('❌ Error loading notifications: $e');
     }
   }
 
-  // ✅ Save notifications إلى SharedPreferences مع verification
   Future<void> saveNotifications() async {
     try {
-      DebugLogger.instance.log('💾 Saving ${_notifications.length} notifications to storage...');
-      
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String notificationsJson = json.encode(
           _notifications.map((notification) => notification.toJson()).toList());
-      
-      bool success = await prefs.setString('stored_notifications', notificationsJson);
-      
-      if (success) {
-        DebugLogger.instance.log('✅ Successfully saved notifications to storage');
-        
-        // ✅ Verify save
-        String? verify = prefs.getString('stored_notifications');
-        if (verify != null && verify == notificationsJson) {
-          DebugLogger.instance.log('✅ Save verified successfully');
-        } else {
-          DebugLogger.instance.log('⚠️ Save verification failed!');
-        }
-      } else {
-        DebugLogger.instance.log('❌ Failed to save notifications!');
-      }
-    } catch (e, stackTrace) {
-      DebugLogger.instance.log('❌ Error saving notifications: $e');
-      debugPrint('Stack trace: $stackTrace');
+      await prefs.setString('stored_notifications', notificationsJson);
+    } catch (e) {
+      debugPrint('❌ Error saving notifications: $e');
     }
   }
 
-  // ✅ Add notification مع debug logs
   Future<void> addNotification(NotificationItem notification) async {
-    try {
-      if (!_notifications.any((n) => n.id == notification.id)) {
-        DebugLogger.instance.log('➕ Adding new notification: ${notification.title}');
-        
-        _notifications.insert(0, notification);
-        
-        if (_notifications.length > 50) {
-          DebugLogger.instance.log('⚠️ Limiting notifications to 50 (was ${_notifications.length})');
-          _notifications = _notifications.take(50).toList();
-        }
-        
-        _updateUnreadCount();
-        
-        // ✅ Save to storage
-        await saveNotifications();
-        
-        notifyListeners();
-        
-        DebugLogger.instance.log('✅ Notification added successfully');
-        DebugLogger.instance.log('✅ Total: ${_notifications.length}, Unread: $_unreadCount');
-      } else {
-        DebugLogger.instance.log('⚠️ Notification already exists (ID: ${notification.id}) - skipping');
+    if (!_notifications.any((n) => n.id == notification.id)) {
+      _notifications.insert(0, notification);
+      if (_notifications.length > 50) {
+        _notifications = _notifications.take(50).toList();
       }
-    } catch (e, stackTrace) {
-      DebugLogger.instance.log('❌ Error adding notification: $e');
-      debugPrint('Stack trace: $stackTrace');
+      _updateUnreadCount();
+      await saveNotifications();
+      notifyListeners();
+      debugPrint('📱 Added notification: ${notification.title}');
     }
   }
 
@@ -420,14 +237,11 @@ class NotificationManager extends ChangeNotifier {
   Future<void> markAsRead(String notificationId) async {
     int index = _notifications.indexWhere((n) => n.id == notificationId);
     if (index != -1 && !_notifications[index].isRead) {
-      DebugLogger.instance.log('📖 Marking notification as read: $notificationId');
-      
       _notifications[index].isRead = true;
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      
-      DebugLogger.instance.log('✅ Notification marked as read');
+      debugPrint('✅ Marked notification as read: $notificationId');
     }
   }
 
@@ -441,19 +255,14 @@ class NotificationManager extends ChangeNotifier {
     }
 
     if (hasChanges) {
-      DebugLogger.instance.log('📖 Marking all notifications as read...');
-      
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      
-      DebugLogger.instance.log('✅ All notifications marked as read');
+      debugPrint('✅ Marked all notifications as read');
     }
   }
 
   Future<void> deleteNotification(String notificationId) async {
-    DebugLogger.instance.log('🗑️ Deleting notification: $notificationId');
-    
     int initialLength = _notifications.length;
     _notifications.removeWhere((n) => n.id == notificationId);
 
@@ -461,21 +270,16 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await saveNotifications();
       notifyListeners();
-      
-      DebugLogger.instance.log('✅ Notification deleted');
-      DebugLogger.instance.log('✅ Remaining: ${_notifications.length}');
+      debugPrint('🗑️ Deleted notification: $notificationId');
     }
   }
 
   Future<void> clearAllNotifications() async {
-    DebugLogger.instance.log('🗑️ Clearing all notifications...');
-    
     _notifications.clear();
     _updateUnreadCount();
     await saveNotifications();
     notifyListeners();
-    
-    DebugLogger.instance.log('✅ All notifications cleared');
+    debugPrint('🗑️ Cleared all notifications');
   }
 
   void _updateUnreadCount() {
@@ -496,6 +300,8 @@ class NotificationManager extends ChangeNotifier {
   }
 }
 
+// GlobalKey للتنقل
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // ✅ NEW: Setup native Firebase delegate after Flutter Firebase initialization
 Future<void> _setupNativeFirebaseDelegate() async {
@@ -568,9 +374,9 @@ void main() async {
 
     // ✅ CRITICAL: Setup iOS MethodChannel handler
     if (Platform.isIOS) {
-      DebugLogger.instance.log('📱 Platform is iOS - setting up MethodChannel...');
+      debugPrint('📱 Platform is iOS - setting up MethodChannel...');
       await setupNotificationChannelHandler();
-      DebugLogger.instance.log('✅ iOS MethodChannel handler initialized');
+      debugPrint('✅ iOS MethodChannel handler initialized');
     }
 
     debugPrint('✅ Firebase initialized successfully');
