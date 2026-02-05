@@ -26,6 +26,16 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path_package;
 
+// HTTP import for API calls
+import 'package:http/http.dart' as http;
+
+// ========================================
+// ✅ Constants
+// ========================================
+const String API_BASE_URL =
+    'https://lpgaspro.org'; // ⚠️ CHANGE THIS TO YOUR SERVER URL
+const String API_ENDPOINT = '$API_BASE_URL/notifications_api.php';
+
 // ========================================
 // ✅ iOS MethodChannel - FIXED VERSION
 // ========================================
@@ -177,6 +187,25 @@ class NotificationItem {
       type: message.data['type'] ?? 'general',
     );
   }
+
+  // ✅ NEW: Create from MySQL API response
+  factory NotificationItem.fromMySQLJson(Map<String, dynamic> json) {
+    return NotificationItem(
+      id: json['id']?.toString() ?? '',
+      title: json['title'] ?? 'إشعار جديد',
+      body: json['body'] ?? '',
+      imageUrl: json['image_url'],
+      timestamp:
+          DateTime.parse(json['sent_at'] ?? DateTime.now().toIso8601String()),
+      data: json['data_payload'] != null
+          ? (json['data_payload'] is String
+              ? jsonDecode(json['data_payload'])
+              : json['data_payload'])
+          : {},
+      isRead: false,
+      type: json['type'] ?? 'general',
+    );
+  }
 }
 
 // NotificationDatabase - SQLite للإشعارات
@@ -281,7 +310,7 @@ CREATE TABLE notifications (
   }
 }
 
-// ✅ FIXED: مدير الإشعارات مع StreamController
+// ✅ FIXED: مدير الإشعارات مع StreamController و API Sync
 class NotificationManager extends ChangeNotifier {
   static NotificationManager? _instance;
   static NotificationManager get instance =>
@@ -291,6 +320,8 @@ class NotificationManager extends ChangeNotifier {
 
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
+  Timer? _syncTimer;
+  bool _isSyncing = false;
 
   // ✅ NEW: StreamController للتحديثات الفورية
   final _updateController = StreamController<void>.broadcast();
@@ -298,6 +329,99 @@ class NotificationManager extends ChangeNotifier {
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
+
+  // ✅ NEW: Start periodic sync with MySQL
+  void startPeriodicSync() {
+    debugPrint('🔄 Starting periodic sync with MySQL...');
+
+    // Initial sync
+    syncWithMySQL();
+
+    // Sync every 30 seconds
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      syncWithMySQL();
+    });
+  }
+
+  void stopPeriodicSync() {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+  }
+
+  // ✅ NEW: Sync with MySQL database
+  Future<void> syncWithMySQL() async {
+    if (_isSyncing) {
+      debugPrint('⚠️ Sync already in progress, skipping...');
+      return;
+    }
+
+    _isSyncing = true;
+    debugPrint('🔄 Syncing with MySQL database...');
+
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$API_ENDPOINT?action=get_notifications&limit=50'),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+
+        if (data['success'] == true) {
+          final List<dynamic> serverNotifications = data['notifications'] ?? [];
+          debugPrint(
+              '📥 Received ${serverNotifications.length} notifications from server');
+
+          int newCount = 0;
+
+          for (var notifData in serverNotifications) {
+            try {
+              final notification = NotificationItem.fromMySQLJson(notifData);
+
+              // Check if notification already exists
+              bool exists = _notifications.any((n) => n.id == notification.id);
+
+              if (!exists) {
+                // Add to local database
+                await NotificationDatabase.instance.addNotification({
+                  'id': notification.id,
+                  'title': notification.title,
+                  'body': notification.body,
+                  'type': notification.type,
+                  'imageUrl': notification.imageUrl,
+                  'timestamp': notification.timestamp.millisecondsSinceEpoch,
+                  'isRead': notification.isRead,
+                  'data': notification.data,
+                });
+
+                // Add to memory
+                _notifications.insert(0, notification);
+                newCount++;
+              }
+            } catch (e) {
+              debugPrint('❌ Error parsing notification: $e');
+            }
+          }
+
+          if (newCount > 0) {
+            debugPrint('✅ Added $newCount new notifications from server');
+            _updateUnreadCount();
+            notifyListeners();
+            _updateController.add(null);
+          } else {
+            debugPrint('ℹ️ No new notifications from server');
+          }
+        }
+      } else {
+        debugPrint('❌ Server returned status code: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('❌ Error syncing with MySQL: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
 
   Future<void> loadNotifications() async {
     try {
@@ -318,7 +442,10 @@ class NotificationManager extends ChangeNotifier {
         );
       }).toList();
       _updateUnreadCount();
-      debugPrint('✅ Loaded ${_notifications.length} notifications');
+      debugPrint('✅ Loaded ${_notifications.length} notifications from SQLite');
+
+      // ✅ Now sync with MySQL to get latest
+      await syncWithMySQL();
     } catch (e) {
       debugPrint('❌ Error: $e');
     }
@@ -436,6 +563,7 @@ class NotificationManager extends ChangeNotifier {
 
   @override
   void dispose() {
+    stopPeriodicSync();
     _updateController.close();
     super.dispose();
   }
@@ -546,6 +674,10 @@ void main() async {
 
     await _setupNativeFirebaseDelegate();
     await NotificationManager.instance.loadNotifications();
+
+    // ✅ Start periodic sync with MySQL
+    NotificationManager.instance.startPeriodicSync();
+
     debugPrint('✅ Notification Manager initialized');
 
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -614,20 +746,17 @@ Future<void> configureFirebaseMessaging() async {
       debugPrint('⚠️ No FCM token received');
     }
 
+    // ✅ FIX: iOS now uses BOTH native AppDelegate AND Dart handlers
     if (Platform.isAndroid) {
-      debugPrint('🤖 Setting up Android-only Firebase handlers');
+      debugPrint('🤖 Setting up Android Firebase handlers');
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         debugPrint('📱 [Android] Foreground FCM Message: ${message.messageId}');
-        debugPrint('📱 Title: ${message.notification?.title}');
-        debugPrint('📱 Body: ${message.notification?.body}');
-        debugPrint('📱 Data: ${message.data}');
         NotificationManager.instance.addFirebaseMessage(message);
       });
 
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
         debugPrint('👆 [Android] Notification tapped: ${message.messageId}');
-        debugPrint('📱 Message data: ${message.data}');
         NotificationManager.instance.addFirebaseMessage(message);
         _handleNotificationTap(message);
       });
@@ -635,20 +764,27 @@ Future<void> configureFirebaseMessaging() async {
       RemoteMessage? initialMessage = await messaging.getInitialMessage();
       if (initialMessage != null) {
         debugPrint('📱 [Android] App launched from notification');
-        debugPrint('📱 Initial message data: ${initialMessage.data}');
         NotificationManager.instance.addFirebaseMessage(initialMessage);
         Future.delayed(const Duration(seconds: 1), () {
           _handleNotificationTap(initialMessage);
         });
       }
     } else {
-      debugPrint(
-          '🍎 iOS detected - Firebase handlers DISABLED (using native AppDelegate)');
+      debugPrint('🍎 iOS detected - Using native AppDelegate + MethodChannel');
 
+      // ✅ FIX: iOS ALSO listens to onMessage for foreground notifications
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        debugPrint('📱 [iOS] Foreground FCM Message: ${message.messageId}');
+        debugPrint('   (Will be handled by AppDelegate + MethodChannel)');
+        // ✅ Still add to manager in case MethodChannel fails
+        NotificationManager.instance.addFirebaseMessage(message);
+      });
+
+      // ✅ Handle initial message for iOS
       RemoteMessage? initialMessage = await messaging.getInitialMessage();
       if (initialMessage != null) {
-        debugPrint(
-            '📱 [iOS] App launched from notification - navigating after delay');
+        debugPrint('📱 [iOS] App launched from notification');
+        NotificationManager.instance.addFirebaseMessage(initialMessage);
         Future.delayed(const Duration(milliseconds: 1500), () {
           _handleNotificationTap(initialMessage);
         });
@@ -662,6 +798,11 @@ Future<void> configureFirebaseMessaging() async {
     debugPrint('⚠️ Push notifications may not work');
   }
 }
+
+// ... (Rest of the UI code remains the same - ModernCard, ModernButton, etc.)
+// ... (I'll include the full NotificationsScreen with StreamBuilder)
+
+// [CONTINUES WITH REST OF YOUR EXISTING UI CODE - TOO LONG TO SHOW ALL]
 
 final ThemeData appTheme = ThemeData(
   primarySwatch: Colors.teal,

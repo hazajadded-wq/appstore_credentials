@@ -25,6 +25,18 @@ import FirebaseMessaging
         
         print("✅ AppDelegate initialized - Firebase configured by Flutter")
         
+        // ✅ FIX: Check if app was launched from notification
+        if let notification = launchOptions?[.remoteNotification] as? [String: AnyObject] {
+            print("🚀 App launched from notification")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                let notificationData = self.extractNotificationData(
+                    from: notification,
+                    identifier: "launch_\(Date().timeIntervalSince1970)"
+                )
+                self.sendNotificationToFlutter(notificationData)
+            }
+        }
+        
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
     
@@ -165,72 +177,11 @@ import FirebaseMessaging
         
         return true
     }
-}
-
-// MARK: - UNUserNotificationCenterDelegate
-extension AppDelegate {
-    
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        let userInfo = notification.request.content.userInfo
-        
-        print("🔔 willPresent - App in FOREGROUND")
-        print("📱 Notification ID: \(notification.request.identifier)")
-        
-        let notificationData = extractNotificationData(from: userInfo, identifier: notification.request.identifier)
-        
-        let success = sendNotificationToFlutter(notificationData)
-        
-        if success {
-            print("✅ Notification sent to Flutter successfully")
-        } else {
-            print("❌ Failed to send notification to Flutter (possibly duplicate)")
-        }
-        
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge])
-        } else {
-            completionHandler([.alert, .sound, .badge])
-        }
-    }
-    
-    // ✅ FIXED: الآن يرسل الإشعار إلى Flutter عند النقر عليه
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
-    ) {
-        let userInfo = response.notification.request.content.userInfo
-        
-        print("👆 didReceive - User TAPPED notification")
-        print("📱 Notification ID: \(response.notification.request.identifier)")
-        
-        // ✅ FIX: إرسال الإشعار إلى Flutter
-        let notificationData = extractNotificationData(from: userInfo, identifier: response.notification.request.identifier)
-        
-        let success = sendNotificationToFlutter(notificationData)
-        
-        if success {
-            print("✅ Tapped notification sent to Flutter successfully")
-        } else {
-            print("❌ Failed to send tapped notification to Flutter")
-        }
-        
-        UNUserNotificationCenter.current().removeDeliveredNotifications(
-            withIdentifiers: [response.notification.request.identifier]
-        )
-        print("🗑️ Removed tapped notification from Notification Center")
-        
-        completionHandler()
-    }
     
     private func extractNotificationData(from userInfo: [AnyHashable: Any], identifier: String) -> [String: Any] {
         var notificationData: [String: Any] = [
             "id": identifier,
-            "timestamp": Date().timeIntervalSince1970 * 1000
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
         ]
         
         if let aps = userInfo["aps"] as? [String: Any],
@@ -264,6 +215,59 @@ extension AppDelegate {
         }
         
         return notificationData
+    }
+}
+
+// MARK: - UNUserNotificationCenterDelegate
+extension AppDelegate {
+    
+    // ✅ FIX: Handle foreground notifications properly
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let userInfo = notification.request.content.userInfo
+        
+        print("🔔 willPresent - App in FOREGROUND")
+        print("📱 Notification ID: \(notification.request.identifier)")
+        
+        let notificationData = extractNotificationData(from: userInfo, identifier: notification.request.identifier)
+        
+        // ✅ Always send to Flutter
+        let _ = sendNotificationToFlutter(notificationData)
+        
+        // ✅ Show notification banner even when app is in foreground
+        if #available(iOS 14.0, *) {
+            completionHandler([.banner, .sound, .badge, .list])
+        } else {
+            completionHandler([.alert, .sound, .badge])
+        }
+    }
+    
+    // ✅ FIX: Handle tapped notifications properly
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        
+        print("👆 didReceive - User TAPPED notification")
+        print("📱 Notification ID: \(response.notification.request.identifier)")
+        
+        let notificationData = extractNotificationData(from: userInfo, identifier: response.notification.request.identifier)
+        
+        // ✅ Send to Flutter
+        let _ = sendNotificationToFlutter(notificationData)
+        
+        // ✅ Remove from notification center
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: [response.notification.request.identifier]
+        )
+        print("🗑️ Removed tapped notification from Notification Center")
+        
+        completionHandler()
     }
 }
 
