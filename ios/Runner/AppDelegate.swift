@@ -1,297 +1,287 @@
 import UIKit
 import Flutter
-import FirebaseMessaging
 import UserNotifications
+import FirebaseCore
+import FirebaseMessaging
 
-@main
+@UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
-
-  // ✅ CRITICAL: MethodChannel for direct communication with Flutter
-  private var notificationChannel: FlutterMethodChannel?
-  private var isChannelReady = false
-
-  override func application(
-    _ application: UIApplication,
-    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-  ) -> Bool {
-
-    print("🚀 ========================================")
-    print("🚀 SalaryInfo App Started")
-    print("🚀 ========================================")
-
-    // ❌ لا تستدعي FirebaseApp.configure()
-    // FlutterFire يقوم بها تلقائياً
-
-    // ✅ CRITICAL: Set up MethodChannel FIRST
-    let controller = window?.rootViewController as! FlutterViewController
-    notificationChannel = FlutterMethodChannel(
-      name: "com.pocket.salaryinfo/notifications",
-      binaryMessenger: controller.binaryMessenger
-    )
+    private let CHANNEL = "com.pocket.salaryinfo/notifications"
+    private let WEBVIEW_CHANNEL = "snap_webview"
+    private var methodChannel: FlutterMethodChannel?
+    private var webviewChannel: FlutterMethodChannel?
     
-    if notificationChannel != nil {
-      isChannelReady = true
-      print("✅ MethodChannel created successfully")
-      print("✅ Channel name: com.pocket.salaryinfo/notifications")
-    } else {
-      print("❌ FAILED to create MethodChannel!")
-    }
-
-    // ✅ CRITICAL: Set delegate BEFORE registering plugins
-    if #available(iOS 10.0, *) {
-      UNUserNotificationCenter.current().delegate = self
-      print("✅ UNUserNotificationCenter delegate set (BEFORE plugins)")
+    private var processedNotificationIds = Set<String>()
+    private let maxProcessedIds = 100
+    
+    override func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+        GeneratedPluginRegistrant.register(with: self)
+        
+        setupNotifications(application: application)
+        setupMethodChannel()
+        
+        print("✅ AppDelegate initialized - Firebase configured by Flutter")
+        
+        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
     
-    application.registerForRemoteNotifications()
-    print("✅ Registered for remote notifications")
-
-    GeneratedPluginRegistrant.register(with: self)
-    print("✅ Plugins registered")
-
-    // ✅ CRITICAL: Set delegate AGAIN AFTER plugins to ensure it's not overridden
-    if #available(iOS 10.0, *) {
-      UNUserNotificationCenter.current().delegate = self
-      print("✅ UNUserNotificationCenter delegate set (AFTER plugins)")
-    }
-
-    Messaging.messaging().delegate = self
-    print("✅ Firebase Messaging delegate set")
-
-    print("✅ ========================================")
-    print("✅ AppDelegate initialization complete")
-    print("✅ ========================================")
-
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
-
-  // MARK: - APNs token
-  override func application(
-    _ application: UIApplication,
-    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-  ) {
-    Messaging.messaging().apnsToken = deviceToken
-    let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-    print("✅ APNs token set: \(token.prefix(20))...")
-  }
-
-  override func application(
-    _ application: UIApplication,
-    didFailToRegisterForRemoteNotificationsWithError error: Error
-  ) {
-    print("❌ APNs registration failed: \(error.localizedDescription)")
-  }
-
-  // MARK: - Foreground notification (CRITICAL FIX!)
-  override func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-  ) {
-    print("📱 ========================================")
-    print("📱 📱 📱 FOREGROUND NOTIFICATION RECEIVED 📱 📱 📱")
-    print("📱 ========================================")
-    
-    let userInfo = notification.request.content.userInfo
-    let title = notification.request.content.title
-    let body = notification.request.content.body
-    
-    print("📱 Notification title: \(title)")
-    print("📱 Notification body: \(body)")
-    print("📱 Full userInfo: \(userInfo)")
-    
-    // ✅ Send to Flutter via MethodChannel (PRIMARY METHOD)
-    let success = sendNotificationToFlutter(
-      title: title,
-      body: body,
-      userInfo: userInfo,
-      isForeground: true
-    )
-    
-    if success {
-      print("✅✅✅ Notification sent to Flutter via MethodChannel")
-    } else {
-      print("❌❌❌ FAILED to send notification to Flutter!")
+    private func setupNotifications(application: UIApplication) {
+        UNUserNotificationCenter.current().delegate = self
+        
+        let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: authOptions,
+            completionHandler: { granted, error in
+                if let error = error {
+                    print("❌ Error requesting authorization: \(error)")
+                } else {
+                    print("✅ Notification authorization granted: \(granted)")
+                }
+            }
+        )
+        
+        application.registerForRemoteNotifications()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            Messaging.messaging().delegate = self
+            print("✅ Firebase Messaging delegate set")
+        }
+        
+        print("✅ Notifications setup completed")
     }
     
-    // ✅ Also try Firebase method (backup)
-    Messaging.messaging().appDidReceiveMessage(userInfo)
-    print("✅ Also sent via Firebase appDidReceiveMessage (backup)")
-    
-    // ✅ CRITICAL: Show banner/alert even when app is open
-    if #available(iOS 14.0, *) {
-      completionHandler([.banner, .sound, .badge])
-      print("✅ Showing notification with banner (iOS 14+)")
-    } else {
-      completionHandler([.alert, .sound, .badge])
-      print("✅ Showing notification with alert (iOS 13)")
+    private func setupMethodChannel() {
+        guard let controller = window?.rootViewController as? FlutterViewController else {
+            print("❌ Failed to get FlutterViewController")
+            return
+        }
+        
+        methodChannel = FlutterMethodChannel(
+            name: CHANNEL,
+            binaryMessenger: controller.binaryMessenger
+        )
+        
+        webviewChannel = FlutterMethodChannel(
+            name: WEBVIEW_CHANNEL,
+            binaryMessenger: controller.binaryMessenger
+        )
+        
+        webviewChannel?.setMethodCallHandler { [weak self] (call, result) in
+            if call.method == "takeSnapshot" {
+                self?.takeScreenshot(result: result)
+            } else {
+                result(FlutterMethodNotImplemented)
+            }
+        }
+        
+        print("✅ MethodChannel setup completed (notifications + webview)")
     }
     
-    print("📱 ========================================")
-    print("📱 willPresent COMPLETE")
-    print("📱 ========================================")
-  }
-
-  // MARK: - Notification tap
-  override func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void
-  ) {
-    print("👆 ========================================")
-    print("👆 👆 👆 USER TAPPED NOTIFICATION 👆 👆 👆")
-    print("👆 ========================================")
-    
-    let userInfo = response.notification.request.content.userInfo
-    let title = response.notification.request.content.title
-    let body = response.notification.request.content.body
-    
-    print("📱 Action: \(response.actionIdentifier)")
-    print("📱 Title: \(title)")
-    print("📱 Body: \(body)")
-    print("📱 Full userInfo: \(userInfo)")
-    
-    // ✅ Send to Flutter via MethodChannel
-    let success = sendNotificationToFlutter(
-      title: title,
-      body: body,
-      userInfo: userInfo,
-      isForeground: false
-    )
-    
-    if success {
-      print("✅✅✅ Tapped notification sent to Flutter")
-    } else {
-      print("❌❌❌ FAILED to send tapped notification!")
+    private func takeScreenshot(result: @escaping FlutterResult) {
+        guard let window = self.window else {
+            print("❌ Window not available for screenshot")
+            result(FlutterError(code: "NO_WINDOW", message: "Window not available", details: nil))
+            return
+        }
+        
+        print("📸 Taking screenshot...")
+        
+        let bounds = window.bounds
+        UIGraphicsBeginImageContextWithOptions(bounds.size, false, UIScreen.main.scale)
+        
+        guard let context = UIGraphicsGetCurrentContext() else {
+            print("❌ Failed to create graphics context")
+            UIGraphicsEndImageContext()
+            result(FlutterError(code: "CONTEXT_ERROR", message: "Failed to create graphics context", details: nil))
+            return
+        }
+        
+        window.layer.render(in: context)
+        
+        guard let image = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("❌ Failed to get image from context")
+            UIGraphicsEndImageContext()
+            result(FlutterError(code: "IMAGE_ERROR", message: "Failed to capture image", details: nil))
+            return
+        }
+        
+        UIGraphicsEndImageContext()
+        
+        guard let imageData = image.pngData() else {
+            print("❌ Failed to convert image to PNG")
+            result(FlutterError(code: "PNG_ERROR", message: "Failed to convert to PNG", details: nil))
+            return
+        }
+        
+        print("✅ Screenshot captured successfully: \(imageData.count) bytes")
+        
+        let flutterData = FlutterStandardTypedData(bytes: imageData)
+        result(flutterData.data)
     }
     
-    // ✅ Also try Firebase method (backup)
-    Messaging.messaging().appDidReceiveMessage(userInfo)
-    print("✅ Also sent via Firebase appDidReceiveMessage (backup)")
-    
-    print("👆 ========================================")
-    print("👆 didReceive COMPLETE")
-    print("👆 ========================================")
-    
-    completionHandler()
-  }
-  
-  // MARK: - Send notification to Flutter via MethodChannel
-  @discardableResult
-  private func sendNotificationToFlutter(
-    title: String,
-    body: String,
-    userInfo: [AnyHashable: Any],
-    isForeground: Bool
-  ) -> Bool {
-    
-    print("📤 ========================================")
-    print("📤 Preparing to send to Flutter...")
-    print("📤 ========================================")
-    
-    guard isChannelReady else {
-      print("❌ MethodChannel is NOT ready!")
-      return false
+    private func isNotificationProcessed(_ notificationId: String) -> Bool {
+        if processedNotificationIds.contains(notificationId) {
+            print("⚠️ Duplicate notification detected: \(notificationId)")
+            return true
+        }
+        
+        processedNotificationIds.insert(notificationId)
+        
+        if processedNotificationIds.count > maxProcessedIds {
+            let elementsToRemove = processedNotificationIds.count - maxProcessedIds
+            for _ in 0..<elementsToRemove {
+                if let first = processedNotificationIds.first {
+                    processedNotificationIds.remove(first)
+                }
+            }
+            print("🧹 Cleaned up \(elementsToRemove) old notification IDs")
+        }
+        
+        return false
     }
     
-    guard let channel = notificationChannel else {
-      print("❌ MethodChannel is nil!")
-      return false
+    private func sendNotificationToFlutter(_ notification: [String: Any]) -> Bool {
+        guard let channel = methodChannel else {
+            print("❌ MethodChannel not initialized")
+            return false
+        }
+        
+        if let notificationId = notification["id"] as? String {
+            if isNotificationProcessed(notificationId) {
+                print("🚫 Skipping duplicate notification: \(notificationId)")
+                return false
+            }
+        }
+        
+        print("📤 Sending notification to Flutter:")
+        print("   Title: \(notification["title"] ?? "N/A")")
+        print("   Body: \(notification["body"] ?? "N/A")")
+        print("   Type: \(notification["type"] ?? "N/A")")
+        
+        channel.invokeMethod("onNotificationReceived", arguments: notification)
+        
+        return true
     }
-    
-    print("✅ MethodChannel is ready and available")
-    
-    // Extract data from userInfo
-    var dataDict: [String: Any] = [:]
-    
-    // Get 'type' from userInfo
-    if let type = userInfo["type"] as? String {
-      dataDict["type"] = type
-      print("📤 Found type: \(type)")
-    } else if let gcmData = userInfo["gcm.notification.type"] as? String {
-      dataDict["type"] = gcmData
-      print("📤 Found type in gcm: \(gcmData)")
-    } else {
-      dataDict["type"] = "general"
-      print("📤 No type found, using: general")
-    }
-    
-    // Get 'image_url' from userInfo
-    if let imageUrl = userInfo["image_url"] as? String {
-      dataDict["image_url"] = imageUrl
-      print("📤 Found image_url: \(imageUrl)")
-    } else if let gcmImage = userInfo["gcm.notification.image_url"] as? String {
-      dataDict["image_url"] = gcmImage
-      print("📤 Found image_url in gcm: \(gcmImage)")
-    } else {
-      print("📤 No image_url found")
-    }
-    
-    // Get 'timestamp' from userInfo
-    if let timestamp = userInfo["timestamp"] as? String {
-      dataDict["timestamp"] = timestamp
-      print("📤 Found timestamp: \(timestamp)")
-    } else {
-      print("📤 No timestamp found")
-    }
-    
-    // Get message ID
-    var messageId = ""
-    if let gcmMessageId = userInfo["gcm.message_id"] as? String {
-      messageId = gcmMessageId
-      print("📤 Found gcm.message_id: \(messageId)")
-    } else if let msgId = userInfo["message_id"] as? String {
-      messageId = msgId
-      print("📤 Found message_id: \(messageId)")
-    } else {
-      // Generate unique ID
-      messageId = "ios_\(Date().timeIntervalSince1970)"
-      print("📤 Generated messageId: \(messageId)")
-    }
-    
-    // Prepare complete notification data
-    let notificationData: [String: Any] = [
-      "messageId": messageId,
-      "title": title,
-      "body": body,
-      "data": dataDict,
-      "isForeground": isForeground,
-      "timestamp": ISO8601DateFormatter().string(from: Date())
-    ]
-    
-    print("📤 ========================================")
-    print("📤 Sending notification data to Flutter:")
-    print("📤 MessageID: \(messageId)")
-    print("📤 Title: \(title)")
-    print("📤 Body: \(body)")
-    print("📤 Type: \(dataDict["type"] ?? "unknown")")
-    print("📤 Image URL: \(dataDict["image_url"] ?? "none")")
-    print("📤 isForeground: \(isForeground)")
-    print("📤 Full data: \(notificationData)")
-    print("📤 ========================================")
-    
-    // Send to Flutter
-    channel.invokeMethod("onNotificationReceived", arguments: notificationData)
-    print("✅✅✅ channel.invokeMethod called successfully!")
-    print("✅ Method: onNotificationReceived")
-    print("✅ Arguments sent")
-    
-    return true
-  }
 }
 
-// MARK: - Firebase Messaging
-extension AppDelegate: MessagingDelegate {
-
-  func messaging(
-    _ messaging: Messaging,
-    didReceiveRegistrationToken fcmToken: String?
-  ) {
-    guard let token = fcmToken else { 
-      print("❌ No FCM token received")
-      return 
+// MARK: - UNUserNotificationCenterDelegate
+extension AppDelegate {
+    
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let userInfo = notification.request.content.userInfo
+        
+        print("🔔 willPresent - App in FOREGROUND")
+        print("📱 Notification ID: \(notification.request.identifier)")
+        
+        let notificationData = extractNotificationData(from: userInfo, identifier: notification.request.identifier)
+        
+        let success = sendNotificationToFlutter(notificationData)
+        
+        if success {
+            print("✅ Notification sent to Flutter successfully")
+        } else {
+            print("❌ Failed to send notification to Flutter (possibly duplicate)")
+        }
+        
+        if #available(iOS 14.0, *) {
+            completionHandler([.banner, .sound, .badge])
+        } else {
+            completionHandler([.alert, .sound, .badge])
+        }
     }
-    print("✅ FCM token received")
-    print("✅ Token (first 30 chars): \(String(token.prefix(30)))...")
-  }
+    
+    // ✅ FIXED: الآن يرسل الإشعار إلى Flutter عند النقر عليه
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        
+        print("👆 didReceive - User TAPPED notification")
+        print("📱 Notification ID: \(response.notification.request.identifier)")
+        
+        // ✅ FIX: إرسال الإشعار إلى Flutter
+        let notificationData = extractNotificationData(from: userInfo, identifier: response.notification.request.identifier)
+        
+        let success = sendNotificationToFlutter(notificationData)
+        
+        if success {
+            print("✅ Tapped notification sent to Flutter successfully")
+        } else {
+            print("❌ Failed to send tapped notification to Flutter")
+        }
+        
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: [response.notification.request.identifier]
+        )
+        print("🗑️ Removed tapped notification from Notification Center")
+        
+        completionHandler()
+    }
+    
+    private func extractNotificationData(from userInfo: [AnyHashable: Any], identifier: String) -> [String: Any] {
+        var notificationData: [String: Any] = [
+            "id": identifier,
+            "timestamp": Date().timeIntervalSince1970 * 1000
+        ]
+        
+        if let aps = userInfo["aps"] as? [String: Any],
+           let alert = aps["alert"] as? [String: Any] {
+            notificationData["title"] = alert["title"] as? String ?? "إشعار جديد"
+            notificationData["body"] = alert["body"] as? String ?? ""
+        } else if let aps = userInfo["aps"] as? [String: Any],
+                  let alertString = aps["alert"] as? String {
+            notificationData["title"] = "إشعار جديد"
+            notificationData["body"] = alertString
+        }
+        
+        notificationData["type"] = userInfo["type"] as? String ?? "general"
+        
+        if let imageUrl = userInfo["image_url"] as? String {
+            notificationData["imageUrl"] = imageUrl
+        }
+        
+        var additionalData: [String: Any] = [:]
+        for (key, value) in userInfo {
+            if let keyString = key as? String,
+               keyString != "aps" &&
+               keyString != "gcm.message_id" &&
+               keyString != "google.c.a.e" {
+                additionalData[keyString] = value
+            }
+        }
+        
+        if !additionalData.isEmpty {
+            notificationData["data"] = additionalData
+        }
+        
+        return notificationData
+    }
+}
+
+// MARK: - MessagingDelegate
+extension AppDelegate: MessagingDelegate {
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        guard let token = fcmToken else {
+            print("❌ FCM token is nil")
+            return
+        }
+        
+        print("🔑 FCM Token: \(token)")
+        
+        let dataDict: [String: String] = ["token": token]
+        NotificationCenter.default.post(
+            name: Notification.Name("FCMToken"),
+            object: nil,
+            userInfo: dataDict
+        )
+    }
 }
