@@ -1,8 +1,8 @@
-# Force use of GitHub repo instead of CDN (more reliable)
-source 'https://github.com/CocoaPods/Specs.git'
+# Use the CocoaPods CDN for faster, standard specs resolution
+source 'https://cdn.cocoapods.org/'
 
 # Uncomment this line to define a global platform for your project
-platform :ios, '13.0'
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -49,8 +49,8 @@ post_install do |installer|
       # ✅ Fix for Firebase Messaging compatibility
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
       
-      # ✅ Ensure iOS 13.0 deployment target
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      # ✅ Ensure iOS 15.0 deployment target
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       
       # ✅ Enable module support
       config.build_settings['DEFINES_MODULE'] = 'YES'
