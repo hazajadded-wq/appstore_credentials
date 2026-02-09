@@ -18,15 +18,13 @@ import FirebaseMessaging
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        // تهيئة Firebase أولاً
-        FirebaseApp.configure()
-        
+        // ✅ GeneratedPluginRegistrant handles Firebase initialization automatically
         GeneratedPluginRegistrant.register(with: self)
         
         setupNotifications(application: application)
         setupMethodChannel()
         
-        print("✅ AppDelegate initialized - Firebase configured")
+        print("✅ AppDelegate initialized")
         
         // التحقق مما إذا كان التطبيق قد تم تشغيله عن طريق النقر على إشعار
         if let notification = launchOptions?[.remoteNotification] as? [String: AnyObject] {

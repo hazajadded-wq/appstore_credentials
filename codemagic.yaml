@@ -5,16 +5,13 @@ workflows:
     max_build_duration: 75
 
     environment:
-      groups:
-        - appstore_credentials
-
       vars:
         BUNDLE_ID: "com.pocket.salaryinfo"
         APP_STORE_APPLE_ID: 6756042000
         XCODE_WORKSPACE: "Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
         FLUTTER_BUILD_NAME: "1.0.12"
-        FLUTTER_BUILD_NUMBER: "62"   # ⬅️ زد الرقم دائمًا
+        FLUTTER_BUILD_NUMBER: "63"   # ⬅️ زد الرقم دائمًا
 
       flutter: "3.22.0"
       xcode: latest
