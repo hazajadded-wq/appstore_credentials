@@ -76,11 +76,16 @@
     <key>NSCameraUsageDescription</key>
     <string>يحتاج التطبيق إلى الكاميرا لالتقاط الصور والمستندات.</string>
 
-    <!-- ✅ Firebase Background Notifications -->
+    <!-- ✅ Firebase Background Notifications & Fetch -->
     <key>UIBackgroundModes</key>
     <array>
+        <string>fetch</string>
         <string>remote-notification</string>
     </array>
+
+    <!-- ✅ Enable Firebase Proxy to handle swizzling correctly -->
+    <key>FirebaseAppDelegateProxyEnabled</key>
+    <true/>
 
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
