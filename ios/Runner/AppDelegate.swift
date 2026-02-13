@@ -1,258 +1,245 @@
 import UIKit
 import Flutter
-import UserNotifications
 import FirebaseCore
 import FirebaseMessaging
+import UserNotifications
 
-@UIApplicationMain
+@main
 @objc class AppDelegate: FlutterAppDelegate {
-    private let CHANNEL = "com.pocket.salaryinfo/notifications"
-    private let WEBVIEW_CHANNEL = "snap_webview"
-    private var methodChannel: FlutterMethodChannel?
-    private var webviewChannel: FlutterMethodChannel?
+  
+  override func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+  ) -> Bool {
     
-    // منع تكرار معالجة نفس الإشعار
-    private var processedNotificationIds = Set<String>()
+    // 1. Setup Method Channel for WebView Snapshots
+    let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
+    let webviewChannel = FlutterMethodChannel(name: "snap_webview",
+                                              binaryMessenger: controller.binaryMessenger)
     
-    override func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-    ) -> Bool {
-        // ✅ GeneratedPluginRegistrant handles Firebase initialization automatically
-        GeneratedPluginRegistrant.register(with: self)
-        
-        setupNotifications(application: application)
-        setupMethodChannel()
-        
-        print("✅ AppDelegate initialized")
-        
-        // التحقق مما إذا كان التطبيق قد تم تشغيله عن طريق النقر على إشعار
-        if let notification = launchOptions?[.remoteNotification] as? [String: AnyObject] {
-            print("🚀 App launched from notification (Cold Start)")
-            // تأخير بسيط لضمان جاهزية Flutter
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                let notificationData = self.extractNotificationData(
-                    from: notification,
-                    identifier: "launch_\(Date().timeIntervalSince1970)"
-                )
-                self.sendNotificationToFlutter(notificationData)
-            }
-        }
-        
-        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    webviewChannel.setMethodCallHandler({
+      (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+      if (call.method == "takeSnapshot") {
+        self.takeScreenshot(result: result)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    })
+
+    // 2. Register Plugins
+    GeneratedPluginRegistrant.register(with: self)
+    
+    // 3. CRITICAL: Setup Notification Center Delegate
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().delegate = self
+      
+      let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
+      UNUserNotificationCenter.current().requestAuthorization(
+        options: authOptions,
+        completionHandler: { _, _ in }
+      )
     }
     
-    private func setupNotifications(application: UIApplication) {
-        if #available(iOS 10.0, *) {
-            UNUserNotificationCenter.current().delegate = self
-            let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
-            UNUserNotificationCenter.current().requestAuthorization(
-                options: authOptions,
-                completionHandler: { granted, error in
-                    if let error = error {
-                        print("❌ Error requesting authorization: \(error)")
-                    } else {
-                        print("✅ Notification authorization granted: \(granted)")
-                    }
-                }
-            )
-        }
-        
-        application.registerForRemoteNotifications()
-        Messaging.messaging().delegate = self
-        print("✅ Notifications setup completed")
+    application.registerForRemoteNotifications()
+    
+    // 4. Set Firebase Messaging Delegate
+    Messaging.messaging().delegate = self
+    
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // Helper function for WebView screenshots
+  private func takeScreenshot(result: @escaping FlutterResult) {
+      guard let window = self.window else {
+          result(FlutterError(code: "NO_WINDOW", message: "Window not available", details: nil))
+          return
+      }
+      
+      let bounds = window.bounds
+      UIGraphicsBeginImageContextWithOptions(bounds.size, false, 6.0)
+      
+      guard let context = UIGraphicsGetCurrentContext() else {
+          UIGraphicsEndImageContext()
+          result(FlutterError(code: "CONTEXT_ERROR", message: "Failed to create graphics context", details: nil))
+          return
+      }
+      
+      window.layer.render(in: context)
+      
+      guard let image = UIGraphicsGetImageFromCurrentImageContext(), let imageData = image.pngData() else {
+          UIGraphicsEndImageContext()
+          result(FlutterError(code: "IMAGE_ERROR", message: "Failed to capture image", details: nil))
+          return
+      }
+      
+      UIGraphicsEndImageContext()
+      let flutterData = FlutterStandardTypedData(bytes: imageData)
+      result(flutterData.data)
+  }
+  
+  // MARK: - UNUserNotificationCenterDelegate Methods
+  // Note: We don't declare conformance again as FlutterAppDelegate already conforms to it
+  
+  // CRITICAL: Called when notification arrives while app is in FOREGROUND
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    let userInfo = notification.request.content.userInfo
+    
+    print("📱 [iOS] Foreground notification received")
+    print("📱 [iOS] UserInfo: \(userInfo)")
+    
+    // Save to local storage via Flutter
+    saveNotificationToFlutter(userInfo: userInfo)
+    
+    // Show banner, badge, and sound
+    if #available(iOS 14.0, *) {
+      completionHandler([[.banner, .badge, .sound]])
+    } else {
+      completionHandler([[.alert, .badge, .sound]])
+    }
+  }
+  
+  // Called when user TAPS on notification
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let userInfo = response.notification.request.content.userInfo
+    
+    print("👆 [iOS] Notification tapped")
+    print("👆 [iOS] UserInfo: \(userInfo)")
+    
+    // Save to local storage
+    saveNotificationToFlutter(userInfo: userInfo)
+    
+    // CRITICAL: Navigate to notifications screen
+    if let controller = window?.rootViewController as? FlutterViewController {
+      let navigationChannel = FlutterMethodChannel(
+        name: "notification_handler",
+        binaryMessenger: controller.binaryMessenger
+      )
+      navigationChannel.invokeMethod("navigateToNotifications", arguments: nil)
+      print("📱 [iOS] Sent navigation command to Flutter")
     }
     
-    private func setupMethodChannel() {
-        guard let controller = window?.rootViewController as? FlutterViewController else {
-            print("❌ Failed to get FlutterViewController")
-            return
-        }
-        
-        methodChannel = FlutterMethodChannel(
-            name: CHANNEL,
-            binaryMessenger: controller.binaryMessenger
-        )
-        
-        webviewChannel = FlutterMethodChannel(
-            name: WEBVIEW_CHANNEL,
-            binaryMessenger: controller.binaryMessenger
-        )
-        
-        webviewChannel?.setMethodCallHandler { [weak self] (call, result) in
-            if call.method == "takeSnapshot" {
-                self?.takeScreenshot(result: result)
-            } else {
-                result(FlutterMethodNotImplemented)
-            }
-        }
-        
-        print("✅ MethodChannel setup completed")
+    completionHandler()
+  }
+  
+  // CRITICAL: Save notification to Flutter's storage system
+  private func saveNotificationToFlutter(userInfo: [AnyHashable: Any]) {
+    guard let controller = window?.rootViewController as? FlutterViewController else {
+      print("❌ [iOS] FlutterViewController not found")
+      return
     }
     
-    private func takeScreenshot(result: @escaping FlutterResult) {
-        guard let window = self.window else {
-            result(FlutterError(code: "NO_WINDOW", message: "Window not available", details: nil))
-            return
-        }
-        
-        let bounds = window.bounds
-        UIGraphicsBeginImageContextWithOptions(bounds.size, false, UIScreen.main.scale)
-        
-        guard let context = UIGraphicsGetCurrentContext() else {
-            UIGraphicsEndImageContext()
-            result(FlutterError(code: "CONTEXT_ERROR", message: "Failed to create graphics context", details: nil))
-            return
-        }
-        
-        window.layer.render(in: context)
-        
-        guard let image = UIGraphicsGetImageFromCurrentImageContext(), let imageData = image.pngData() else {
-            UIGraphicsEndImageContext()
-            result(FlutterError(code: "IMAGE_ERROR", message: "Failed to capture image", details: nil))
-            return
-        }
-        
-        UIGraphicsEndImageContext()
-        let flutterData = FlutterStandardTypedData(bytes: imageData)
-        result(flutterData.data)
+    let channel = FlutterMethodChannel(
+      name: "notification_handler",
+      binaryMessenger: controller.binaryMessenger
+    )
+    
+    // Convert userInfo to Swift Dictionary
+    var notificationData: [String: Any] = [:]
+    
+    // CRITICAL: Extract title and body from multiple possible locations, prioritizing data
+    var title = ""
+    var body = ""
+    var imageUrl: String? = nil
+    var type = "general"
+    
+    // First, try to get from data payload (highest priority)
+    if let data = userInfo["data"] as? [String: Any] {
+      title = data["title"] as? String ?? title
+      body = data["body"] as? String ?? body
+      type = data["type"] as? String ?? type
+      imageUrl = data["image_url"] as? String ?? data["imageUrl"] as? String ?? imageUrl
     }
     
-    private func sendNotificationToFlutter(_ notification: [String: Any]) -> Bool {
-        guard let channel = methodChannel else {
-            print("❌ MethodChannel not initialized")
-            return false
-        }
-        
-        // التحقق من التكرار
-        if let id = notification["id"] as? String {
-            if processedNotificationIds.contains(id) {
-                print("🚫 Duplicate notification skipped: \(id)")
-                return false
-            }
-            processedNotificationIds.insert(id)
-            // تنظيف القائمة إذا كبرت
-            if processedNotificationIds.count > 100 {
-                processedNotificationIds.removeAll()
-            }
-        }
-        
-        print("📤 Sending notification to Flutter via MethodChannel...")
-        channel.invokeMethod("onNotificationReceived", arguments: notification)
-        return true
+    // Then try FCM notification structure
+    if let fcmTitle = userInfo["gcm.notification.title"] as? String, !fcmTitle.isEmpty {
+      title = fcmTitle
+    }
+    if let fcmBody = userInfo["gcm.notification.body"] as? String, !fcmBody.isEmpty {
+      body = fcmBody
     }
     
-    private func extractNotificationData(from userInfo: [AnyHashable: Any], identifier: String) -> [String: Any] {
-        var notificationData: [String: Any] = [
-            "id": identifier,
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        
-        // استخراج العنوان والجسم من aps
-        if let aps = userInfo["aps"] as? [String: Any],
-           let alert = aps["alert"] as? [String: Any] {
-            notificationData["title"] = alert["title"] as? String ?? "إشعار جديد"
-            notificationData["body"] = alert["body"] as? String ?? ""
-        } else if let aps = userInfo["aps"] as? [String: Any],
-                  let alertString = aps["alert"] as? String {
-            notificationData["title"] = "إشعار جديد"
-            notificationData["body"] = alertString
-        } else {
-            // محاولة الاستخراج من المستوى الأعلى (بيانات مباشرة من FCM)
-            notificationData["title"] = userInfo["title"] as? String ?? "إشعار جديد"
-            notificationData["body"] = userInfo["body"] as? String ?? ""
-        }
-        
-        notificationData["type"] = userInfo["type"] as? String ?? "general"
-        
-        if let imageUrl = userInfo["image_url"] as? String ?? userInfo["image"] as? String {
-            notificationData["imageUrl"] = imageUrl
-        }
-        
-        // تجميع البيانات الإضافية
-        var additionalData: [String: Any] = [:]
-        for (key, value) in userInfo {
-            if let keyString = key as? String,
-               keyString != "aps" && keyString != "gcm.message_id" {
-                additionalData[keyString] = value
-            }
-        }
-        notificationData["data"] = additionalData
-        
-        return notificationData
+    // Try direct keys
+    if let directTitle = userInfo["title"] as? String, !directTitle.isEmpty {
+      title = directTitle
+    }
+    if let directBody = userInfo["body"] as? String, !directBody.isEmpty {
+      body = directBody
     }
     
-    // ✅ معالجة الإشعارات عندما يكون التطبيق في الواجهة (Foreground)
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        let userInfo = notification.request.content.userInfo
-        print("🔔 willPresent - App in FOREGROUND")
-        
-        let notificationData = extractNotificationData(
-            from: userInfo,
-            identifier: notification.request.identifier
-        )
-        
-        // إرسال البيانات لـ Flutter لحفظها في قاعدة البيانات
-        _ = sendNotificationToFlutter(notificationData)
-        
-        // عرض الإشعار كـ Banner وصوت وشارة حتى لو التطبيق مفتوح
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge, .list])
-        } else {
-            completionHandler([.alert, .sound, .badge])
-        }
+    // Try notification object first
+    if let aps = userInfo["aps"] as? [String: Any],
+       let alert = aps["alert"] as? [String: Any] {
+      if let apsTitle = alert["title"] as? String, !apsTitle.isEmpty {
+        title = apsTitle
+      }
+      if let apsBody = alert["body"] as? String, !apsBody.isEmpty {
+        body = apsBody
+      }
     }
     
-    // ✅ معالجة النقر على الإشعار (Background / Terminated -> Open)
-    override func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
-    ) {
-        let userInfo = response.notification.request.content.userInfo
-        print("👆 didReceive - User TAPPED notification")
-        
-        let notificationData = extractNotificationData(
-            from: userInfo,
-            identifier: response.notification.request.identifier
-        )
-        
-        _ = sendNotificationToFlutter(notificationData)
-        
-        completionHandler()
+    // Fallback to default if still empty
+    if title.isEmpty {
+      title = "إشعار جديد"
     }
     
-    // ✅ دعم Silent Push Notifications / Background Fetch
-    override func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        print("🔄 didReceiveRemoteNotification (Silent/Background fetch)")
-        
-        // توليد ID مؤقت إذا لم يكن موجوداً
-        let messageId = (userInfo["gcm.message_id"] as? String) ?? "bg_\(Date().timeIntervalSince1970)"
-        
-        let notificationData = extractNotificationData(
-            from: userInfo,
-            identifier: messageId
-        )
-        
-        if sendNotificationToFlutter(notificationData) {
-            completionHandler(.newData)
-        } else {
-            completionHandler(.noData)
-        }
+    // Image URL from various sources
+    if imageUrl == nil {
+      imageUrl = userInfo["image_url"] as? String
+        ?? userInfo["imageUrl"] as? String
+        ?? userInfo["gcm.notification.image_url"] as? String
     }
+    
+    // Type from various sources
+    if let userType = userInfo["type"] as? String {
+      type = userType
+    }
+    
+    let messageId = userInfo["gcm.message_id"] as? String 
+                    ?? userInfo["message_id"] as? String
+                    ?? UUID().uuidString
+    
+    notificationData["id"] = messageId
+    notificationData["title"] = title
+    notificationData["body"] = body
+    notificationData["imageUrl"] = imageUrl
+    notificationData["type"] = type
+    notificationData["timestamp"] = Int(Date().timeIntervalSince1970 * 1000)
+    notificationData["data"] = userInfo as? [String: Any] ?? [:]
+    notificationData["isRead"] = false
+    
+    print("💾 [iOS] Saving notification")
+    print("📱 [iOS] Title: \(title)")
+    print("📱 [iOS] Body: \(body)")
+    print("📱 [iOS] Type: \(type)")
+    
+    // Send to Flutter
+    channel.invokeMethod("saveNotification", arguments: notificationData)
+  }
 }
 
+// MARK: - MessagingDelegate
 extension AppDelegate: MessagingDelegate {
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        print("🔑 FCM Token: \(String(describing: fcmToken))")
-        // Flutter plugin handles token registration usually, but logging helps debug
+  
+  // Called when FCM token is refreshed
+  func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+    print("🔑 [iOS] FCM Token: \(fcmToken ?? "nil")")
+    
+    // You can send this token to your server
+    if let token = fcmToken {
+      let dataDict: [String: String] = ["token": token]
+      NotificationCenter.default.post(
+        name: Notification.Name("FCMToken"),
+        object: nil,
+        userInfo: dataDict
+      )
     }
+  }
 }
