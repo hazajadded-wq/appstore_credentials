@@ -53,7 +53,7 @@ class NotificationService {
       _saveToServerAsync(notification);
 
       // Update unread count
-      await _updateUnreadCount();
+      await updateUnreadCountImmediately();
 
       debugPrint(
           '✅ [NotificationService] Saved notification immediately: ${notification['id']}');
@@ -77,7 +77,7 @@ class NotificationService {
   }
 
   // ============================================
-  // SERVER SYNC (WhatsApp-style background sync)
+  // SERVER SYNC (WhatsApp-style background sync) - FIXED
   // ============================================
 
   static Future<List<Map<String, dynamic>>>
@@ -103,7 +103,7 @@ class NotificationService {
           final serverNotifications =
               List<Map<String, dynamic>>.from(data['notifications']);
 
-          // Sync with local database
+          // Sync with local database - PRESERVING READ STATUS
           await _syncWithLocalDatabase(serverNotifications);
 
           debugPrint(
@@ -119,20 +119,44 @@ class NotificationService {
     return await getLocalNotifications();
   }
 
+  // ============================================
+  // FIXED: Preserve Read Status During Sync
+  // ============================================
   static Future<void> _syncWithLocalDatabase(
       List<Map<String, dynamic>> serverNotifications) async {
     try {
+      // Get current local notifications to preserve read status
+      final localNotifications =
+          await getLocalNotifications(limit: 1000); // Get all
+      final localReadStatus = <String, bool>{};
+
+      // Create map of local read status
+      for (final local in localNotifications) {
+        localReadStatus[local['id'].toString()] = local['isRead'] ?? false;
+      }
+
+      // Apply preserved read status to server notifications
+      for (final serverNotif in serverNotifications) {
+        final id = serverNotif['id'].toString();
+        if (localReadStatus.containsKey(id)) {
+          serverNotif['isRead'] = localReadStatus[id];
+        } else {
+          serverNotif['isRead'] = false;
+        }
+      }
+
+      // Now save with preserved read status
       final companions = serverNotifications
           .map((n) => NotificationDataExtension.fromJson(n))
           .toList();
       await NotificationDatabase.instance.bulkInsertNotifications(companions);
 
-      // Clean up old notifications
-      await NotificationDatabase.instance.deleteOldNotifications(keepLast: 300);
+      // Clean up old notifications (keep more to preserve history)
+      await NotificationDatabase.instance.deleteOldNotifications(keepLast: 500);
 
-      await _updateUnreadCount();
+      await updateUnreadCountImmediately();
       debugPrint(
-          '💾 [NotificationService] Synced ${serverNotifications.length} to local DB');
+          '💾 [NotificationService] Synced ${serverNotifications.length} to local DB with preserved read status');
     } catch (e) {
       debugPrint('❌ [NotificationService] Local sync failed: $e');
     }
@@ -174,13 +198,17 @@ class NotificationService {
     }
   }
 
-  static Future<void> _updateUnreadCount() async {
+  // ============================================
+  // FIXED: Force Immediate Counter Updates
+  // ============================================
+  static Future<void> updateUnreadCountImmediately() async {
     final count = await getUnreadCount();
     _unreadCountController?.add(count);
+    debugPrint('🔢 [NotificationService] Counter updated: $count');
   }
 
   // ============================================
-  // USER ACTIONS
+  // USER ACTIONS - FIXED with immediate updates
   // ============================================
 
   static Future<bool> markAsRead(String notificationId) async {
@@ -188,7 +216,7 @@ class NotificationService {
       final success =
           await NotificationDatabase.instance.markAsRead(notificationId);
       if (success) {
-        await _updateUnreadCount();
+        await updateUnreadCountImmediately(); // Force immediate update
 
         // Update server in background
         _markAsReadOnServer(notificationId);
@@ -205,8 +233,7 @@ class NotificationService {
       final deleted = await NotificationDatabase.instance
           .deleteNotification(notificationId);
       if (deleted > 0) {
-        await _updateUnreadCount();
-        // Could delete from server too if needed
+        await updateUnreadCountImmediately(); // Force immediate update
       }
       return deleted > 0;
     } catch (e) {
@@ -218,7 +245,7 @@ class NotificationService {
   static Future<void> clearAllNotifications() async {
     try {
       await NotificationDatabase.instance.clearAll();
-      await _updateUnreadCount();
+      await updateUnreadCountImmediately(); // Force immediate update
       debugPrint('🗑️ [NotificationService] Cleared all notifications');
     } catch (e) {
       debugPrint('❌ [NotificationService] Clear failed: $e');
@@ -287,15 +314,38 @@ class NotificationService {
   }
 
   // ============================================
-  // PERIODIC SYNC (WhatsApp-style)
+  // FIXED: Periodic Sync Timer - More Reliable
   // ============================================
 
   static void _startPeriodicSync() {
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      debugPrint('⏰ [NotificationService] Periodic sync with server');
-      getAllNotificationsFromServer();
+    _syncTimer?.cancel(); // Cancel any existing timer
+
+    // Use a more reliable timer approach
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
+      try {
+        debugPrint('⏰ [NotificationService] Periodic sync with server');
+
+        // Check if we have internet before attempting sync
+        if (await hasInternetConnection()) {
+          await getAllNotificationsFromServer();
+        } else {
+          debugPrint('📡 [NotificationService] Skipping sync - no internet');
+        }
+      } catch (e) {
+        debugPrint('❌ [NotificationService] Periodic sync failed: $e');
+        // Don't cancel timer on error, just continue
+      }
     });
+
+    debugPrint('✅ [NotificationService] Periodic sync timer started');
+  }
+
+  // ============================================
+  // ADDED: Restart sync method
+  // ============================================
+  static void restartPeriodicSync() {
+    debugPrint('🔄 [NotificationService] Restarting periodic sync');
+    _startPeriodicSync();
   }
 
   static void dispose() {
