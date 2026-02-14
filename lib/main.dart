@@ -504,14 +504,19 @@ void _navigateToNotifications() {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+  debugPrint('🌙 [BG] Notification: ${message.notification?.title}');
+  debugPrint('🌙 [BG] Data Title: ${message.data['title']}');
+  debugPrint('🌙 [BG] Data Body: ${message.data['body']}');
 
   final item = NotificationItem.fromFirebaseMessage(message);
 
-  // ALWAYS save to disk, even for empty notifications
-  // The Flutter app will handle display
+  // Save to disk
   await NotificationService.saveToLocalDisk(item.toJson());
-
   debugPrint('🌙 [BG] Notification Saved to Disk: ${item.id}');
+
+  // NOTE: FCM automatically displays notification from the "notification" payload
+  // No need to manually show notification if PHP sends correct payload
+  // Check scgfs_ultra_modern.php to ensure it sends "notification" block
 }
 
 /// =========================
