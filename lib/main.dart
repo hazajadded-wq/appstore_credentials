@@ -191,7 +191,7 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
-  // FIXED: Preserve Read Status During Sync
+  // WHATSAPP-STYLE BACKGROUND SYNC
   // ============================================
   Future<void> _syncWithServer() async {
     if (_isSyncing) return;
@@ -211,24 +211,8 @@ class NotificationManager extends ChangeNotifier {
           .map((m) => NotificationItem.fromMySQL(m))
           .toList();
 
-      // CRITICAL: Preserve existing read status
-      final existingReadStatus = <String, bool>{};
-      for (final existing in _notifications) {
-        existingReadStatus[existing.id] = existing.isRead;
-      }
-
-      // Apply preserved read status to server items
-      for (final serverItem in serverItems) {
-        if (existingReadStatus.containsKey(serverItem.id)) {
-          serverItem.isRead = existingReadStatus[serverItem.id]!;
-        }
-      }
-
-      // Update local list (server is source of truth but preserve read status)
+      // Update local list (server is source of truth)
       _notifications = serverItems;
-
-      // Sort by timestamp (newest first)
-      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
       // Limit display to 100 for performance
       if (_notifications.length > 100) {
@@ -282,15 +266,16 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> markAllAsRead() async {
-    // Mark all notifications as read locally
-    for (final notification in _notifications) {
-      notification.isRead = true;
+    bool hasChanges = false;
+    for (var notification in _notifications) {
+      if (!notification.isRead) {
+        notification.isRead = true;
+        hasChanges = true;
+        await NotificationService.markAsRead(notification.id);
+      }
     }
-    notifyListeners();
-
-    // Update database and server
-    for (final notification in _notifications) {
-      await NotificationService.markAsRead(notification.id);
+    if (hasChanges) {
+      notifyListeners();
     }
   }
 
@@ -313,10 +298,36 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
-  // ADDED: Force counter update method
+  // ADD NOTIFICATION FROM NATIVE (iOS)
   // ============================================
-  void refreshUnreadCount() {
-    NotificationService.updateUnreadCountImmediately();
+  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
+    final item = NotificationItem(
+      id: data['id']?.toString() ??
+          DateTime.now().millisecondsSinceEpoch.toString(),
+      title: data['title'] ?? 'إشعار جديد',
+      body: data['body'] ?? '',
+      imageUrl: data['imageUrl'],
+      timestamp: DateTime.now(),
+      data: data,
+      isRead: false,
+      type: data['type'] ?? 'general',
+    );
+
+    debugPrint(
+        '📱 [Manager] Received native notification: ${item.id} - ${item.title}');
+
+    // Remove if exists (prevent duplicates)
+    _notifications.removeWhere((n) => n.id == item.id);
+
+    // Add to top of list
+    _notifications.insert(0, item);
+
+    // Save immediately
+    await NotificationService.saveNotificationImmediately(item.toJson());
+
+    notifyListeners();
+    debugPrint(
+        '✅ [Manager] Native notification saved instantly, total: ${_notifications.length}');
   }
 
   // ============================================
@@ -324,25 +335,6 @@ class NotificationManager extends ChangeNotifier {
   // ============================================
 
   int get unreadCount => _notifications.where((n) => !n.isRead).length;
-
-  // ============================================
-  // ADD NOTIFICATION FROM NATIVE
-  // ============================================
-  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    final notification = NotificationItem.fromJson(data);
-
-    // Remove if exists (prevent duplicates)
-    _notifications.removeWhere((n) => n.id == notification.id);
-
-    // Add to top of list
-    _notifications.insert(0, notification);
-
-    // Save immediately
-    await NotificationService.saveNotificationImmediately(
-        notification.toJson());
-
-    notifyListeners();
-  }
 
   List<NotificationItem> searchNotifications(String query) {
     if (query.isEmpty) return _notifications;
@@ -631,9 +623,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       debugPrint('🔄 [Lifecycle] App resumed - force sync');
       NotificationManager.instance.forceRefresh();
-
-      // FIXED: Ensure periodic sync is still running
-      NotificationService.restartPeriodicSync();
     }
   }
 
@@ -765,9 +754,6 @@ class ModernButton extends StatelessWidget {
   }
 }
 
-// ============================================
-// FIXED: NotificationIcon with proper stream listening
-// ============================================
 class NotificationIcon extends StatelessWidget {
   final VoidCallback onTap;
 
@@ -777,7 +763,6 @@ class NotificationIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<int>(
       stream: NotificationService.unreadCountStream,
-      initialData: 0,
       builder: (context, snapshot) {
         final count = snapshot.data ?? 0;
         return Stack(
@@ -2343,7 +2328,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             window.location.href = cleanUrl;
             return window;
           }
-          return originalOpen.call(url, name, specs);
+          return originalOpen.call(window, url, name, specs);
         };
       })();
     ''';
