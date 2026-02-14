@@ -99,6 +99,7 @@ class NotificationService {
   // ============================================
   // CRITICAL: Merge server notifications with local
   // Preserve read status from local storage
+  // FIXED: Sort by sent_at instead of timestamp
   // ============================================
   static Future<void> _mergeWithLocal(
       List<Map<String, dynamic>> serverNotifications) async {
@@ -147,12 +148,11 @@ class NotificationService {
         }
       }
 
-      // Convert back to list and sort by timestamp
+      // Convert back to list and sort by sent_at (CRITICAL FIX)
       List<Map<String, dynamic>> mergedList = mergedMap.values.toList();
       mergedList.sort((a, b) {
-        final aTime = DateTime.tryParse(a['timestamp'] ?? '') ??
-            DateTime(1970); // إصلاح: استخدام 'timestamp' بدلاً من 'sent_at'
-        final bTime = DateTime.tryParse(b['timestamp'] ?? '') ?? DateTime(1970);
+        final aTime = DateTime.tryParse(a['sent_at'] ?? '') ?? DateTime(1970);
+        final bTime = DateTime.tryParse(b['sent_at'] ?? '') ?? DateTime(1970);
         return bTime.compareTo(aTime);
       });
 
