@@ -22,8 +22,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
-import 'services/notification_service.dart';
-
+import 'notification_service.dart';
 import 'firebase_options.dart';
 
 /// =========================
@@ -150,48 +149,25 @@ class NotificationManager extends ChangeNotifier {
 
   // ============================================
   // INITIALIZE - Call this when app starts
-  // ULTRA-AGGRESSIVE FETCH STRATEGY
+  // CRITICAL iOS FIX: Fetch from server FIRST, then load local as fallback
   // ============================================
   Future<void> initialize() async {
-    debugPrint('');
-    debugPrint('🚀🚀🚀 [Manager] ========================================');
-    debugPrint('🚀 [Manager] INITIALIZING NOTIFICATION MANAGER');
-    debugPrint('🚀🚀🚀 [Manager] ========================================');
+    debugPrint('🚀 [Manager] Initializing...');
 
-    // IMMEDIATE LOAD: Load from local disk first (instant display)
-    await loadNotifications();
-    debugPrint(
-        '📂 [Manager] Loaded ${_notifications.length} notifications from local storage');
-
-    // ULTRA-AGGRESSIVE SERVER FETCH: Try 10 times over 30 seconds
-    final attempts = [
-      0,
-      500,
-      1000,
-      2000,
-      3000,
-      5000,
-      7000,
-      10000,
-      15000,
-      20000,
-      30000
-    ];
-
-    for (int i = 0; i < attempts.length; i++) {
-      final delay = attempts[i];
-      Future.delayed(Duration(milliseconds: delay), () {
-        debugPrint(
-            '🔄 [Manager] Fetch attempt ${i + 1}/${attempts.length} (${delay}ms)');
-        fetchFromMySQL();
-      });
+    // CRITICAL iOS FIX: Try to fetch from server FIRST
+    try {
+      debugPrint('🌐 [Manager] Fetching from server on startup...');
+      await fetchFromMySQL();
+      debugPrint(
+          '✅ [Manager] Server fetch complete: ${_notifications.length} notifications');
+    } catch (e) {
+      debugPrint('⚠️ [Manager] Server fetch failed, loading from disk: $e');
+      // Fallback to local if server fails
+      await loadNotifications();
     }
 
-    // Start periodic sync (every 3 seconds)
+    // Start periodic sync
     _startPeriodicSync();
-
-    debugPrint('🚀 [Manager] Initialize complete - monitoring started');
-    debugPrint('');
   }
 
   // ============================================
@@ -214,11 +190,12 @@ class NotificationManager extends ChangeNotifier {
 
   // ============================================
   // CRITICAL FIXED: SYNC FROM SERVER
-  // ULTRA-AGGRESSIVE: Called many times, handles duplicates
+  // Called when app opens, resumes, or periodically
+  // iOS FIX: This is now the PRIMARY source of truth
   // ============================================
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) {
-      debugPrint('⏳ [Manager] Already syncing, queuing next attempt...');
+      debugPrint('⏳ [Manager] Already syncing, skipping...');
       return;
     }
 
@@ -226,16 +203,15 @@ class NotificationManager extends ChangeNotifier {
     notifyListeners();
 
     try {
-      debugPrint('🌐 [Manager] ========================================');
-      debugPrint('🌐 [Manager] FETCHING FROM MYSQL...');
+      debugPrint('🌐 [Manager] Fetching from MySQL...');
 
       final serverListRaw =
           await NotificationService.getAllNotifications(limit: 100);
 
       if (serverListRaw.isEmpty) {
-        debugPrint('⚠️ [Manager] Server returned 0 notifications');
-        debugPrint(
-            '📂 [Manager] Keeping local notifications: ${_notifications.length}');
+        debugPrint('⚠️ [Manager] No notifications from server, loading local');
+        // If server is empty, load from local as fallback
+        await loadNotifications();
         _isSyncing = false;
         notifyListeners();
         return;
@@ -244,10 +220,11 @@ class NotificationManager extends ChangeNotifier {
       final serverItems =
           serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
-      debugPrint('✅ [Manager] Fetched ${serverItems.length} from server');
+      // CRITICAL iOS FIX: Replace entire list with server data
+      // Don't merge - server is source of truth
+      final Map<String, NotificationItem> serverMap = {};
 
       // Build map from server items
-      final Map<String, NotificationItem> serverMap = {};
       for (var serverItem in serverItems) {
         serverMap[serverItem.id] = serverItem;
       }
@@ -260,7 +237,6 @@ class NotificationManager extends ChangeNotifier {
       }
 
       // Replace notifications list with server data
-      final oldCount = _notifications.length;
       _notifications = serverMap.values.toList();
       _sortAndCount();
 
@@ -272,19 +248,15 @@ class NotificationManager extends ChangeNotifier {
       // Save to disk for offline access
       await _saveToDisk();
 
-      final newCount = _notifications.length;
-      debugPrint('✅ [Manager] Updated: $oldCount → $newCount notifications');
-      debugPrint('📊 [Manager] Unread: $_unreadCount');
-      debugPrint('🌐 [Manager] ========================================');
-    } catch (e, stacktrace) {
-      debugPrint('❌ [Manager] ========================================');
-      debugPrint('❌ [Manager] FETCH ERROR: $e');
-      debugPrint('❌ [Manager] Stacktrace: $stacktrace');
-      debugPrint('❌ [Manager] ========================================');
-
-      // Don't clear notifications on error - keep what we have
       debugPrint(
-          '📂 [Manager] Keeping local notifications: ${_notifications.length}');
+          '✅ [Manager] Synced ${_notifications.length} notifications from server');
+    } catch (e, stacktrace) {
+      debugPrint('❌ [Manager] Sync Error: $e');
+      debugPrint('❌ [Manager] Stacktrace: $stacktrace');
+
+      // Fallback to local storage on error
+      debugPrint('📂 [Manager] Loading from local storage as fallback');
+      await loadNotifications();
     } finally {
       _isSyncing = false;
       notifyListeners();
@@ -441,11 +413,10 @@ class NotificationManager extends ChangeNotifier {
 
   void _startPeriodicSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      debugPrint('⏰ [Manager] Periodic sync (every 2s)');
+    _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      debugPrint('⏰ [Manager] Periodic sync from server');
       fetchFromMySQL();
     });
-    debugPrint('⏰ [Manager] Started periodic sync every 2 seconds');
   }
 
   void dispose() {
@@ -528,47 +499,45 @@ void _navigateToNotifications() {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  debugPrint('🌙 [BG] ========================================');
-  debugPrint('🌙 [BG] BACKGROUND NOTIFICATION RECEIVED');
-  debugPrint('🌙 [BG] Message ID: ${message.messageId}');
+  // CRITICAL iOS FIX: Initialize notification service
+  await NotificationService.initialize();
+
+  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
   debugPrint('🌙 [BG] Title: ${message.notification?.title}');
   debugPrint('🌙 [BG] Body: ${message.notification?.body}');
-  debugPrint('🌙 [BG] Data: ${message.data}');
-  debugPrint('🌙 [BG] ========================================');
 
-  // CRITICAL iOS FIX: Initialize and try to fetch from server
+  final item = NotificationItem.fromFirebaseMessage(message);
+
   try {
-    await NotificationService.initialize();
+    // CRITICAL iOS FIX: Save to SERVER FIRST with priority
+    debugPrint('🌐 [BG] Saving to server with HIGH PRIORITY...');
 
-    // STRATEGY 1: Try to fetch from MySQL immediately
-    // This works if iOS allows network in background
-    debugPrint('🌐 [BG] Attempting to fetch from MySQL in background...');
-    try {
-      final notifications =
-          await NotificationService.getAllNotifications(limit: 50);
-      if (notifications.isNotEmpty) {
-        debugPrint(
-            '✅ [BG] Successfully fetched ${notifications.length} from MySQL in background!');
-        // Save to local for instant display
-        for (var notif in notifications.take(20)) {
-          await NotificationService.saveToLocalDisk(notif);
-        }
-      }
-    } catch (e) {
-      debugPrint(
-          '⚠️ [BG] MySQL fetch failed in background (expected on iOS): $e');
+    // Save to server first (returns bool)
+    final serverSaved =
+        await NotificationService.saveNotificationToServer(item.toJson());
+    debugPrint('✅ [BG] Server save result: $serverSaved');
+
+    // Then save to local disk (returns void)
+    await NotificationService.saveToLocalDisk(item.toJson());
+    debugPrint('✅ [BG] Local save completed');
+
+    // CRITICAL: Small wait to ensure data is committed
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // Verify the local save
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final verifyStr = prefs.getString(NotificationService.storageKey);
+    if (verifyStr != null) {
+      final list = jsonDecode(verifyStr);
+      final found = list.any((notif) => notif['id'].toString() == item.id);
+      debugPrint('✅ [BG] Local save verified: $found');
     }
 
-    // STRATEGY 2: Always save the current notification locally
-    final item = NotificationItem.fromFirebaseMessage(message);
-    await NotificationService.saveToLocalDisk(item.toJson());
-    debugPrint('✅ [BG] Saved notification to local disk');
+    debugPrint('✅ [BG] Background processing complete');
   } catch (e) {
     debugPrint('❌ [BG] Error: $e');
   }
-
-  debugPrint('🌙 [BG] Background processing complete');
-  debugPrint('🌙 [BG] ========================================');
 }
 
 /// =========================
@@ -757,41 +726,19 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('');
-      debugPrint('🔄🔄🔄 [Lifecycle] ========================================');
-      debugPrint('🔄 [Lifecycle] APP RESUMED - ULTRA-AGGRESSIVE SYNC');
-      debugPrint('🔄🔄🔄 [Lifecycle] ========================================');
+      debugPrint('🔄 [Lifecycle] App Resumed - Syncing from server');
 
-      // ULTRA-AGGRESSIVE: Try 15 times over 30 seconds
-      final attempts = [
-        0, // Immediate
-        200, // 0.2s
-        500, // 0.5s
-        1000, // 1s
-        1500, // 1.5s
-        2000, // 2s
-        3000, // 3s
-        4000, // 4s
-        5000, // 5s
-        7000, // 7s
-        10000, // 10s
-        15000, // 15s
-        20000, // 20s
-        25000, // 25s
-        30000, // 30s
-      ];
+      // CRITICAL iOS FIX: Add small delay to allow background handler to complete
+      Future.delayed(const Duration(milliseconds: 500), () {
+        debugPrint('🔄 [Lifecycle] First fetch attempt');
+        NotificationManager.instance.fetchFromMySQL();
 
-      for (int i = 0; i < attempts.length; i++) {
-        final delay = attempts[i];
-        Future.delayed(Duration(milliseconds: delay), () {
-          debugPrint(
-              '🔄 [Lifecycle] Resume fetch ${i + 1}/${attempts.length} (${delay}ms)');
+        // CRITICAL: Retry after another delay to catch any late saves
+        Future.delayed(const Duration(seconds: 2), () {
+          debugPrint('🔄 [Lifecycle] Second fetch attempt (retry)');
           NotificationManager.instance.fetchFromMySQL();
         });
-      }
-
-      debugPrint('🔄 [Lifecycle] Started ${attempts.length} fetch attempts');
-      debugPrint('');
+      });
     }
   }
 
