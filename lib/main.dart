@@ -149,25 +149,18 @@ class NotificationManager extends ChangeNotifier {
 
   // ============================================
   // INITIALIZE - Call this when app starts
-  // CRITICAL iOS FIX: Fetch from server FIRST, then load local as fallback
   // ============================================
   Future<void> initialize() async {
     debugPrint('🚀 [Manager] Initializing...');
 
-    // CRITICAL iOS FIX: Try to fetch from server FIRST
-    try {
-      debugPrint('🌐 [Manager] Fetching from server on startup...');
-      await fetchFromMySQL();
-      debugPrint(
-          '✅ [Manager] Server fetch complete: ${_notifications.length} notifications');
-    } catch (e) {
-      debugPrint('⚠️ [Manager] Server fetch failed, loading from disk: $e');
-      // Fallback to local if server fails
-      await loadNotifications();
-    }
+    // Load from disk first
+    await loadNotifications();
 
     // Start periodic sync
     _startPeriodicSync();
+
+    // Fetch from server immediately
+    fetchFromMySQL();
   }
 
   // ============================================
@@ -191,7 +184,6 @@ class NotificationManager extends ChangeNotifier {
   // ============================================
   // CRITICAL FIXED: SYNC FROM SERVER
   // Called when app opens, resumes, or periodically
-  // iOS FIX: This is now the PRIMARY source of truth
   // ============================================
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) {
@@ -209,9 +201,7 @@ class NotificationManager extends ChangeNotifier {
           await NotificationService.getAllNotifications(limit: 100);
 
       if (serverListRaw.isEmpty) {
-        debugPrint('⚠️ [Manager] No notifications from server, loading local');
-        // If server is empty, load from local as fallback
-        await loadNotifications();
+        debugPrint('⚠️ [Manager] No notifications from server');
         _isSyncing = false;
         notifyListeners();
         return;
@@ -220,24 +210,42 @@ class NotificationManager extends ChangeNotifier {
       final serverItems =
           serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
-      // CRITICAL iOS FIX: Replace entire list with server data
-      // Don't merge - server is source of truth
-      final Map<String, NotificationItem> serverMap = {};
+      // Merge with existing notifications
+      final Map<String, NotificationItem> mergedMap = {};
 
-      // Build map from server items
-      for (var serverItem in serverItems) {
-        serverMap[serverItem.id] = serverItem;
+      // Add existing notifications first
+      for (var item in _notifications) {
+        mergedMap[item.id] = item;
       }
 
-      // Preserve read status from local notifications
-      for (var localItem in _notifications) {
-        if (serverMap.containsKey(localItem.id) && localItem.isRead) {
-          serverMap[localItem.id]!.isRead = true;
+      // Add/update with server notifications
+      bool hasChanges = false;
+      for (var serverItem in serverItems) {
+        final existing = mergedMap[serverItem.id];
+
+        if (existing == null) {
+          // New notification from server
+          mergedMap[serverItem.id] = serverItem;
+          hasChanges = true;
+          debugPrint(
+              '➕ [Manager] New notification from server: ${serverItem.id}');
+        } else {
+          // Update existing but PRESERVE read status
+          mergedMap[serverItem.id] = NotificationItem(
+            id: serverItem.id,
+            title: serverItem.title,
+            body: serverItem.body,
+            imageUrl: serverItem.imageUrl,
+            timestamp: serverItem.timestamp,
+            data: serverItem.data,
+            type: serverItem.type,
+            isRead: existing.isRead, // CRITICAL: Keep read status
+          );
         }
       }
 
-      // Replace notifications list with server data
-      _notifications = serverMap.values.toList();
+      // Convert back to list and sort
+      _notifications = mergedMap.values.toList();
       _sortAndCount();
 
       // Limit to 200
@@ -245,18 +253,14 @@ class NotificationManager extends ChangeNotifier {
         _notifications = _notifications.sublist(0, 200);
       }
 
-      // Save to disk for offline access
-      await _saveToDisk();
-
-      debugPrint(
-          '✅ [Manager] Synced ${_notifications.length} notifications from server');
+      if (hasChanges) {
+        await _saveToDisk();
+        debugPrint(
+            '✅ [Manager] Updated with server data, total: ${_notifications.length}');
+      }
     } catch (e, stacktrace) {
       debugPrint('❌ [Manager] Sync Error: $e');
       debugPrint('❌ [Manager] Stacktrace: $stacktrace');
-
-      // Fallback to local storage on error
-      debugPrint('📂 [Manager] Loading from local storage as fallback');
-      await loadNotifications();
     } finally {
       _isSyncing = false;
       notifyListeners();
@@ -413,8 +417,8 @@ class NotificationManager extends ChangeNotifier {
 
   void _startPeriodicSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      debugPrint('⏰ [Manager] Periodic sync from server');
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) { // Increased frequency for real-time
+      debugPrint('⏰ [Manager] Periodic sync');
       fetchFromMySQL();
     });
   }
@@ -498,46 +502,15 @@ void _navigateToNotifications() {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // CRITICAL iOS FIX: Initialize notification service
-  await NotificationService.initialize();
-
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-  debugPrint('🌙 [BG] Title: ${message.notification?.title}');
-  debugPrint('🌙 [BG] Body: ${message.notification?.body}');
 
   final item = NotificationItem.fromFirebaseMessage(message);
 
-  try {
-    // CRITICAL iOS FIX: Save to SERVER FIRST with priority
-    debugPrint('🌐 [BG] Saving to server with HIGH PRIORITY...');
+  // ALWAYS save to disk, even for empty notifications
+  // The Flutter app will handle display
+  await NotificationService.saveToLocalDisk(item.toJson());
 
-    // Save to server first (returns bool)
-    final serverSaved =
-        await NotificationService.saveNotificationToServer(item.toJson());
-    debugPrint('✅ [BG] Server save result: $serverSaved');
-
-    // Then save to local disk (returns void)
-    await NotificationService.saveToLocalDisk(item.toJson());
-    debugPrint('✅ [BG] Local save completed');
-
-    // CRITICAL: Small wait to ensure data is committed
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    // Verify the local save
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final verifyStr = prefs.getString(NotificationService.storageKey);
-    if (verifyStr != null) {
-      final list = jsonDecode(verifyStr);
-      final found = list.any((notif) => notif['id'].toString() == item.id);
-      debugPrint('✅ [BG] Local save verified: $found');
-    }
-
-    debugPrint('✅ [BG] Background processing complete');
-  } catch (e) {
-    debugPrint('❌ [BG] Error: $e');
-  }
+  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.id}');
 }
 
 /// =========================
@@ -587,8 +560,7 @@ void main() async {
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // CRITICAL iOS FIX: Initialize notification manager
-    // This will fetch from server first, then fallback to local
+    // Initialize notification manager
     await NotificationManager.instance.initialize();
 
     final messaging = FirebaseMessaging.instance;
@@ -726,16 +698,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Lifecycle] App Resumed - Syncing from server');
+      debugPrint('🔄 [Lifecycle] App Resumed - Force refresh notifications');
 
-      // CRITICAL iOS FIX: Add small delay to allow background handler to complete
+      // CRITICAL FIX: Force reload when app resumes
       Future.delayed(const Duration(milliseconds: 500), () {
-        debugPrint('🔄 [Lifecycle] First fetch attempt');
-        NotificationManager.instance.fetchFromMySQL();
-
-        // CRITICAL: Retry after another delay to catch any late saves
-        Future.delayed(const Duration(seconds: 2), () {
-          debugPrint('🔄 [Lifecycle] Second fetch attempt (retry)');
+        NotificationManager.instance.loadNotifications().then((_) {
           NotificationManager.instance.fetchFromMySQL();
         });
       });
@@ -1524,8 +1491,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       await _forceRefresh();
     });
 
-    // Start periodic refresh every 3 seconds for real-time updates
-    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+    // Start periodic refresh every 10 seconds for real-time updates
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (mounted) {
         _forceRefresh();
       }
@@ -1553,22 +1520,11 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   }
 
   Future<void> _forceRefresh() async {
-    debugPrint('🔄 [Notifications Screen] Force refresh started');
-
     // First load from disk
     await NotificationManager.instance.loadNotifications();
 
     // Then fetch from server
     await NotificationManager.instance.fetchFromMySQL();
-
-    // CRITICAL iOS FIX: Retry after delay to catch late notifications
-    Future.delayed(const Duration(seconds: 2), () async {
-      if (mounted) {
-        debugPrint(
-            '🔄 [Notifications Screen] Retry fetch for late notifications');
-        await NotificationManager.instance.fetchFromMySQL();
-      }
-    });
 
     if (mounted) {
       setState(() {});
