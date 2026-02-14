@@ -60,7 +60,7 @@ class NotificationService {
           'Content-Type': 'application/json; charset=utf-8',
           'Accept': 'application/json',
         },
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 30));
 
       debugPrint(
           '📥 [NotificationService] Response status: ${response.statusCode}');
@@ -173,26 +173,18 @@ class NotificationService {
   }
 
   // ============================================
-  // CRITICAL iOS FIX: Save to Local Disk (Immediate Write)
+  // CRITICAL: Save to Local Disk (Safe for Background)
   // Used by background handler to store notifications
-  // iOS OPTIMIZATION: Force immediate write with reload before and after
-  // EXTRA: Multiple verification steps for force-closed apps
   // ============================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
     try {
-      debugPrint('💾 [NotificationService] Starting save for: ${newNotificationJson['id']}');
-      
       final prefs = await SharedPreferences.getInstance();
-      
-      // CRITICAL iOS FIX: Force reload to get latest data
       await prefs.reload();
-      debugPrint('🔄 [NotificationService] SharedPreferences reloaded');
 
       // Get existing list
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
-      debugPrint('📂 [NotificationService] Current list size: ${list.length}');
 
       // Add new item to TOP of list
       final newId = newNotificationJson['id'].toString();
@@ -208,41 +200,9 @@ class NotificationService {
         list = list.sublist(0, 200);
       }
 
-      // CRITICAL iOS FIX: Save with error handling
-      bool success = false;
-      int attempts = 0;
-      while (!success && attempts < 3) {
-        attempts++;
-        success = await prefs.setString(storageKey, jsonEncode(list));
-        if (!success) {
-          debugPrint('⚠️ [NotificationService] Save attempt $attempts failed, retrying...');
-          await Future.delayed(Duration(milliseconds: 100 * attempts));
-        }
-      }
-      
-      debugPrint('💾 [NotificationService] Save result: $success (attempts: $attempts)');
-      
-      if (!success) {
-        debugPrint('❌ [NotificationService] Failed to save after $attempts attempts');
-        return;
-      }
-      
-      // CRITICAL iOS FIX: Reload again to ensure it's written
-      await prefs.reload();
-      
-      // EXTRA: Wait for iOS to finish writing (reduced to 50ms)
-      await Future.delayed(const Duration(milliseconds: 50));
-      
-      // Verify the save
-      final verifyStr = prefs.getString(storageKey);
-      if (verifyStr != null) {
-        final verifyList = jsonDecode(verifyStr);
-        final found = verifyList.any((item) => item['id'].toString() == newId);
-        debugPrint('✅ [NotificationService] Verified notification $newId saved: $found');
-        debugPrint('💾 [NotificationService] Total stored: ${verifyList.length}');
-      } else {
-        debugPrint('⚠️ [NotificationService] Verification failed - no data found');
-      }
+      await prefs.setString(storageKey, jsonEncode(list));
+      debugPrint('💾 [NotificationService] Saved notification $newId to disk');
+      debugPrint('💾 [NotificationService] Total stored: ${list.length}');
 
       // Try to sync to server if we have connection
       if (await hasInternetConnection()) {
@@ -254,25 +214,20 @@ class NotificationService {
               _pendingServerSync.sublist(_pendingServerSync.length - 50);
         }
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       debugPrint('❌ [NotificationService] Save Failed: $e');
-      debugPrint('❌ [NotificationService] StackTrace: $stackTrace');
     }
   }
 
   // ============================================
   // Save notification to server
-  // CRITICAL: Primary storage method for iOS
   // ============================================
   static Future<bool> saveNotificationToServer(
       Map<String, dynamic> notification) async {
     try {
       if (!await hasInternetConnection()) {
-        debugPrint('⚠️ [NotificationService] No internet for server save');
         return false;
       }
-
-      debugPrint('🌐 [NotificationService] Saving to server: ${notification['id']}');
 
       final response = await http.post(
         Uri.parse(apiEndpoint),
@@ -287,31 +242,25 @@ class NotificationService {
           'type': notification['type'] ?? 'general',
           'data_payload': jsonEncode(notification['data'] ?? {}),
         },
-      ).timeout(const Duration(seconds: 8));
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final success = data['success'] == true;
-        debugPrint('✅ [NotificationService] Server save: $success');
-        return success;
+        return data['success'] == true;
       }
-      
-      debugPrint('⚠️ [NotificationService] Server responded with: ${response.statusCode}');
       return false;
     } catch (e) {
-      debugPrint('❌ [NotificationService] Server save error: $e');
+      debugPrint('❌ [NotificationService] Save error: $e');
       return false;
     }
   }
 
   // ============================================
-  // CRITICAL iOS FIX: Get local notifications with forced reload
+  // Get local notifications
   // ============================================
   static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
-      // CRITICAL iOS FIX: Always reload to get latest data
       await prefs.reload();
 
       final jsonStr = prefs.getString(storageKey);
@@ -357,7 +306,6 @@ class NotificationService {
 
         if (updated) {
           await prefs.setString(storageKey, jsonEncode(list));
-          await prefs.reload(); // iOS FIX
           debugPrint('✅ [NotificationService] Marked $id as read');
         }
       }
@@ -400,7 +348,6 @@ class NotificationService {
         List<dynamic> list = jsonDecode(jsonStr);
         list.removeWhere((item) => item['id'].toString() == id);
         await prefs.setString(storageKey, jsonEncode(list));
-        await prefs.reload(); // iOS FIX
         debugPrint('🗑️ [NotificationService] Deleted $id');
       }
     } catch (e) {
@@ -415,7 +362,6 @@ class NotificationService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(storageKey);
-      await prefs.reload(); // iOS FIX
       debugPrint('✅ [NotificationService] Cleared all notifications');
     } catch (e) {
       debugPrint('❌ [NotificationService] Clear failed: $e');
