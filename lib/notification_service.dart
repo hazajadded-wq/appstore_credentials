@@ -39,10 +39,11 @@ class NotificationService {
   }
 
   // ============================================
-  // FIXED: Get ALL notifications from MySQL (No limits - pull everything)
+  // CRITICAL FIXED: Get all notifications from MySQL
+  // Using GET request with proper parameters
   // ============================================
   static Future<List<Map<String, dynamic>>> getAllNotifications({
-    int? limit, // Optional limit, if null, fetch all
+    int limit = 100,
   }) async {
     try {
       if (!await hasInternetConnection()) {
@@ -50,25 +51,21 @@ class NotificationService {
         return [];
       }
 
-      // Build URL without limit if null
-      String url = '$apiEndpoint?action=get_all';
-      if (limit != null && limit > 0) {
-        url += '&limit=$limit';
-      }
-
-      debugPrint('📡 [NotificationService] Fetching ALL from: $url');
+      debugPrint(
+          '📡 [NotificationService] Fetching from: $apiEndpoint?action=get_all&limit=$limit');
 
       final response = await http.get(
-        Uri.parse(url),
+        Uri.parse('$apiEndpoint?action=get_all&limit=$limit'),
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
           'Accept': 'application/json',
         },
-      ).timeout(
-          const Duration(seconds: 15)); // Increased timeout for large data
+      ).timeout(const Duration(seconds: 10));
 
       debugPrint(
           '📥 [NotificationService] Response status: ${response.statusCode}');
+      debugPrint(
+          '📥 [NotificationService] Response body: ${response.body.substring(0, min(200, response.body.length))}...');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -77,22 +74,22 @@ class NotificationService {
           final notifications =
               List<Map<String, dynamic>>.from(data['notifications']);
           debugPrint(
-              '✅ [NotificationService] Received ${notifications.length} notifications from database');
+              '✅ [NotificationService] Received ${notifications.length} notifications');
 
-          // Merge with local storage
+          // Save to local disk
           await _mergeWithLocal(notifications);
 
           return notifications;
         } else {
           debugPrint(
-              '⚠️ [NotificationService] API response: success=${data['success']}');
+              '⚠️ [NotificationService] Server response: success=${data['success']}');
         }
       } else {
         debugPrint(
             '❌ [NotificationService] HTTP Error: ${response.statusCode}');
       }
     } catch (e, stacktrace) {
-      debugPrint('❌ [NotificationService] Error fetching from database: $e');
+      debugPrint('❌ [NotificationService] Network Error: $e');
       debugPrint('❌ [NotificationService] Stacktrace: $stacktrace');
     }
 
@@ -161,9 +158,9 @@ class NotificationService {
         return 0;
       });
 
-      // Limit to 1000 (adjust as needed)
-      if (mergedList.length > 1000) {
-        mergedList = mergedList.sublist(0, 1000);
+      // Limit to 200
+      if (mergedList.length > 200) {
+        mergedList = mergedList.sublist(0, 200);
       }
 
       // Save back to disk
@@ -184,11 +181,10 @@ class NotificationService {
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
     try {
-      debugPrint(
-          '💾 [NotificationService] Starting save for: ${newNotificationJson['id']}');
-
+      debugPrint('💾 [NotificationService] Starting save for: ${newNotificationJson['id']}');
+      
       final prefs = await SharedPreferences.getInstance();
-
+      
       // CRITICAL iOS FIX: Force reload to get latest data
       await prefs.reload();
       debugPrint('🔄 [NotificationService] SharedPreferences reloaded');
@@ -207,9 +203,9 @@ class NotificationService {
       // Insert at top
       list.insert(0, newNotificationJson);
 
-      // Limit to 1000
-      if (list.length > 1000) {
-        list = list.sublist(0, 1000);
+      // Limit to 200
+      if (list.length > 200) {
+        list = list.sublist(0, 200);
       }
 
       // CRITICAL iOS FIX: Save with error handling
@@ -219,39 +215,33 @@ class NotificationService {
         attempts++;
         success = await prefs.setString(storageKey, jsonEncode(list));
         if (!success) {
-          debugPrint(
-              '⚠️ [NotificationService] Save attempt $attempts failed, retrying...');
+          debugPrint('⚠️ [NotificationService] Save attempt $attempts failed, retrying...');
           await Future.delayed(Duration(milliseconds: 100 * attempts));
         }
       }
-
-      debugPrint(
-          '💾 [NotificationService] Save result: $success (attempts: $attempts)');
-
+      
+      debugPrint('💾 [NotificationService] Save result: $success (attempts: $attempts)');
+      
       if (!success) {
-        debugPrint(
-            '❌ [NotificationService] Failed to save after $attempts attempts');
+        debugPrint('❌ [NotificationService] Failed to save after $attempts attempts');
         return;
       }
-
+      
       // CRITICAL iOS FIX: Reload again to ensure it's written
       await prefs.reload();
-
+      
       // EXTRA: Wait for iOS to finish writing (reduced to 50ms)
       await Future.delayed(const Duration(milliseconds: 50));
-
+      
       // Verify the save
       final verifyStr = prefs.getString(storageKey);
       if (verifyStr != null) {
         final verifyList = jsonDecode(verifyStr);
         final found = verifyList.any((item) => item['id'].toString() == newId);
-        debugPrint(
-            '✅ [NotificationService] Verified notification $newId saved: $found');
-        debugPrint(
-            '💾 [NotificationService] Total stored: ${verifyList.length}');
+        debugPrint('✅ [NotificationService] Verified notification $newId saved: $found');
+        debugPrint('💾 [NotificationService] Total stored: ${verifyList.length}');
       } else {
-        debugPrint(
-            '⚠️ [NotificationService] Verification failed - no data found');
+        debugPrint('⚠️ [NotificationService] Verification failed - no data found');
       }
 
       // Try to sync to server if we have connection
@@ -282,8 +272,7 @@ class NotificationService {
         return false;
       }
 
-      debugPrint(
-          '🌐 [NotificationService] Saving to server: ${notification['id']}');
+      debugPrint('🌐 [NotificationService] Saving to server: ${notification['id']}');
 
       final response = await http.post(
         Uri.parse(apiEndpoint),
@@ -306,9 +295,8 @@ class NotificationService {
         debugPrint('✅ [NotificationService] Server save: $success');
         return success;
       }
-
-      debugPrint(
-          '⚠️ [NotificationService] Server responded with: ${response.statusCode}');
+      
+      debugPrint('⚠️ [NotificationService] Server responded with: ${response.statusCode}');
       return false;
     } catch (e) {
       debugPrint('❌ [NotificationService] Server save error: $e');
@@ -322,7 +310,7 @@ class NotificationService {
   static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
+      
       // CRITICAL iOS FIX: Always reload to get latest data
       await prefs.reload();
 
