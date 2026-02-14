@@ -82,10 +82,10 @@ class NotificationDatabase extends _$NotificationDatabase {
   Future<bool> markAsRead(String notificationId) {
     return (update(notificationsTable)
           ..where((t) => t.notificationId.equals(notificationId)))
-.write(NotificationsTableCompanion(
-  isRead: Value(true),
-  updatedAt: Value(DateTime.now()),
-))
+        .write(NotificationsTableCompanion(
+          isRead: Value(true),
+          updatedAt: Value(DateTime.now()),
+        ))
         .then((rowsAffected) => rowsAffected > 0);
   }
 
@@ -124,7 +124,7 @@ class NotificationDatabase extends _$NotificationDatabase {
   }
 
   // ============================================
-  // SYNC OPERATIONS
+  // SYNC OPERATIONS - CRITICAL FIX
   // ============================================
 
   Future<List<String>> getAllNotificationIds() {
@@ -140,12 +140,53 @@ class NotificationDatabase extends _$NotificationDatabase {
         .get();
   }
 
-  Future<void> bulkInsertNotifications(List<NotificationsTableCompanion> notifications) {
-    return batch((batch) {
+  /// CRITICAL FIX: Preserve isRead status during sync
+  Future<void> bulkInsertNotifications(List<NotificationsTableCompanion> notifications) async {
+    await batch((batch) async {
       for (final notification in notifications) {
-        batch.insert(notificationsTable, notification, onConflict: DoUpdate((old) => notification));
+        // Check if notification already exists
+        final notificationId = notification.notificationId.value;
+        final existing = await getNotificationById(notificationId);
+        
+        if (existing != null) {
+          // CRITICAL: Preserve isRead status for existing notifications
+          final preservedNotification = notification.copyWith(
+            isRead: Value(existing.isRead), // ← Keep local isRead status!
+            updatedAt: Value(DateTime.now()),
+          );
+          batch.insert(
+            notificationsTable, 
+            preservedNotification,
+            onConflict: DoUpdate((old) => preservedNotification),
+          );
+        } else {
+          // New notification - use server data
+          batch.insert(
+            notificationsTable, 
+            notification,
+            onConflict: DoUpdate((old) => notification),
+          );
+        }
       }
     });
+  }
+
+  /// NEW: Smart insert that preserves isRead
+  Future<void> insertNotificationPreservingReadStatus(NotificationsTableCompanion notification) async {
+    final notificationId = notification.notificationId.value;
+    final existing = await getNotificationById(notificationId);
+    
+    if (existing != null && existing.isRead) {
+      // Preserve read status
+      final preservedNotification = notification.copyWith(
+        isRead: Value(true),
+        updatedAt: Value(DateTime.now()),
+      );
+      await into(notificationsTable).insertOnConflictUpdate(preservedNotification);
+    } else {
+      // New or unread - use as is
+      await into(notificationsTable).insertOnConflictUpdate(notification);
+    }
   }
 }
 
@@ -169,7 +210,8 @@ extension NotificationDataExtension on NotificationsTableData {
     };
   }
 
-  static NotificationsTableCompanion fromJson(Map<String, dynamic> json) {
+  /// CRITICAL FIX: Don't override isRead from server
+  static NotificationsTableCompanion fromJson(Map<String, dynamic> json, {bool? preserveReadStatus}) {
     return NotificationsTableCompanion(
       notificationId: Value(json['id'].toString()),
       title: Value(json['title'] ?? ''),
@@ -178,10 +220,15 @@ extension NotificationDataExtension on NotificationsTableData {
       timestamp: Value(DateTime.fromMillisecondsSinceEpoch(
           json['timestamp'] ?? json['sent_at'] ?? DateTime.now().millisecondsSinceEpoch)),
       dataJson: Value(jsonEncode(json['data'] ?? {})),
-      isRead: Value(json['isRead'] ?? false),
+      // CRITICAL FIX: Only set isRead for new notifications
+      isRead: preserveReadStatus == true 
+          ? Value.absent() // Don't update isRead
+          : Value(false), // New notification = unread
       type: Value(json['type'] ?? 'general'),
-      createdAt: Value(DateTime.fromMillisecondsSinceEpoch(json['createdAt'] ?? DateTime.now().millisecondsSinceEpoch)),
-      updatedAt: Value(DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] ?? DateTime.now().millisecondsSinceEpoch)),
+      createdAt: Value(DateTime.fromMillisecondsSinceEpoch(
+          json['createdAt'] ?? DateTime.now().millisecondsSinceEpoch)),
+      updatedAt: Value(DateTime.fromMillisecondsSinceEpoch(
+          json['updatedAt'] ?? DateTime.now().millisecondsSinceEpoch)),
     );
   }
 }
