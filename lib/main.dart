@@ -417,7 +417,8 @@ class NotificationManager extends ChangeNotifier {
 
   void _startPeriodicSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) { // Increased frequency for real-time
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      // Increased frequency for real-time
       debugPrint('⏰ [Manager] Periodic sync');
       fetchFromMySQL();
     });
@@ -543,6 +544,44 @@ class NotificationMethodChannel {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// =========================
+/// APPLIFECYCLE HANDLER - ADDED
+/// =========================
+class AppLifecycleHandler extends StatefulWidget {
+  final Widget child;
+  const AppLifecycleHandler({required this.child});
+
+  @override
+  State<AppLifecycleHandler> createState() => _AppLifecycleHandlerState();
+}
+
+class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      NotificationService.getAllNotifications(limit: 100);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
+  }
+}
+
+/// =========================
 /// MAIN - FIXED
 /// =========================
 
@@ -553,6 +592,14 @@ void main() async {
   try {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
+
+    // ADDED: Enable foreground notification presentation for iOS
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
 
     LocalNotificationService.initialize();
 
@@ -591,7 +638,12 @@ void main() async {
     debugPrint('�� Init Error: $e');
   }
 
-  runApp(const MyApp());
+  // MODIFIED: Wrap with AppLifecycleHandler
+  runApp(
+    AppLifecycleHandler(
+      child: const MyApp(),
+    ),
+  );
 }
 
 Future<void> _requestIgnoreBatteryOptimizations() async {
@@ -2703,7 +2755,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعب��ة وخدمات الغاز',
+              'الشركة العامة لتعبئة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
