@@ -148,25 +148,23 @@ class NotificationManager extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
 
   // ============================================
-  // INITIALIZE - Call this when app starts
-  // CRITICAL iOS FIX: Fetch from server FIRST, then load local as fallback
+  // INITIALIZE - FIXED: Load local first, then sync server
   // ============================================
   Future<void> initialize() async {
     debugPrint('🚀 [Manager] Initializing...');
 
-    // CRITICAL iOS FIX: Try to fetch from server FIRST
+    // CRITICAL FIX: Load from local storage FIRST (contains notifications saved by background handler)
+    await loadNotifications();
+
+    // Then fetch from server to sync and merge any updates
     try {
-      debugPrint('🌐 [Manager] Fetching from server on startup...');
       await fetchFromMySQL();
-      debugPrint(
-          '✅ [Manager] Server fetch complete: ${_notifications.length} notifications');
+      debugPrint('✅ [Manager] Server sync complete after local load');
     } catch (e) {
-      debugPrint('⚠️ [Manager] Server fetch failed, loading from disk: $e');
-      // Fallback to local if server fails
-      await loadNotifications();
+      debugPrint('⚠️ [Manager] Initial server sync failed, using local data: $e');
     }
 
-    // Start periodic sync
+    // Start periodic sync to keep updated
     _startPeriodicSync();
   }
 
@@ -208,59 +206,59 @@ class NotificationManager extends ChangeNotifier {
       final serverListRaw =
           await NotificationService.getAllNotifications(limit: 100);
 
-      if (serverListRaw.isEmpty) {
-        debugPrint('⚠️ [Manager] No notifications from server, loading local');
-        // If server is empty, load from local as fallback
-        await loadNotifications();
-        _isSyncing = false;
-        notifyListeners();
-        return;
+      if (serverListRaw.isNotEmpty) {
+        final serverItems =
+            serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
+
+        // Merge server data with current notifications (preserving local read status)
+        _mergeServerWithCurrent(serverItems);
+
+        debugPrint('✅ [Manager] Synced ${serverItems.length} from server');
+      } else {
+        debugPrint('⚠️ [Manager] No new data from server');
       }
-
-      final serverItems =
-          serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
-
-      // CRITICAL iOS FIX: Replace entire list with server data
-      // Don't merge - server is source of truth
-      final Map<String, NotificationItem> serverMap = {};
-
-      // Build map from server items
-      for (var serverItem in serverItems) {
-        serverMap[serverItem.id] = serverItem;
-      }
-
-      // Preserve read status from local notifications
-      for (var localItem in _notifications) {
-        if (serverMap.containsKey(localItem.id) && localItem.isRead) {
-          serverMap[localItem.id]!.isRead = true;
-        }
-      }
-
-      // Replace notifications list with server data
-      _notifications = serverMap.values.toList();
-      _sortAndCount();
-
-      // Limit to 200
-      if (_notifications.length > 200) {
-        _notifications = _notifications.sublist(0, 200);
-      }
-
-      // Save to disk for offline access
-      await _saveToDisk();
-
-      debugPrint(
-          '✅ [Manager] Synced ${_notifications.length} notifications from server');
     } catch (e, stacktrace) {
       debugPrint('❌ [Manager] Sync Error: $e');
       debugPrint('❌ [Manager] Stacktrace: $stacktrace');
-
-      // Fallback to local storage on error
-      debugPrint('📂 [Manager] Loading from local storage as fallback');
-      await loadNotifications();
     } finally {
       _isSyncing = false;
       notifyListeners();
     }
+  }
+
+  // ============================================
+  // MERGE SERVER NOTIFICATIONS WITH CURRENT LIST
+  // ============================================
+  void _mergeServerWithCurrent(List<NotificationItem> serverItems) {
+    final Map<String, NotificationItem> mergedMap = {};
+
+    // Start with current notifications (from local)
+    for (var item in _notifications) {
+      mergedMap[item.id] = item;
+    }
+
+    // Add/update with server data, preserving read status
+    for (var serverItem in serverItems) {
+      if (mergedMap.containsKey(serverItem.id)) {
+        // Preserve read status from local
+        serverItem.isRead = mergedMap[serverItem.id]!.isRead;
+      }
+      mergedMap[serverItem.id] = serverItem;
+    }
+
+    // Convert back to list and sort
+    _notifications = mergedMap.values.toList();
+    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    // Limit to 200
+    if (_notifications.length > 200) {
+      _notifications = _notifications.sublist(0, 200);
+    }
+
+    _updateUnreadCount();
+
+    // Save merged list to disk
+    _saveToDisk();
   }
 
   // ============================================
@@ -396,10 +394,6 @@ class NotificationManager extends ChangeNotifier {
   // ============================================
   // PRIVATE METHODS
   // ============================================
-  void _sortAndCount() {
-    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    _updateUnreadCount();
-  }
 
   void _updateUnreadCount() {
     _unreadCount = _notifications.where((n) => !n.isRead).length;
@@ -2755,7 +2749,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعب��ة وخدمات الغاز',
+              'الشركة العامة لتعبئة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
