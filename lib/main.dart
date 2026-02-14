@@ -264,9 +264,14 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
+  // ⚠️ DEPRECATED: Not used in new architecture
+  // FCM listeners no longer add to list
+  // Notification list is now database-driven only
+  // ============================================
   // CRITICAL FIXED: Add Firebase Message
   // Called when notification received while app is open
   // ============================================
+  @Deprecated('Use database-driven notifications instead. FCM is for popups only.')
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
@@ -639,7 +644,8 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
+      // 🔔 FCM = Navigation only
+      // 🗂 List = Database driven (fetchFromMySQL)
       Future.delayed(const Duration(seconds: 1), () {
         _navigateToNotifications();
       });
@@ -651,7 +657,8 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   // Handle when app is in background and notification is tapped
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    await NotificationManager.instance.addFirebaseMessage(message);
+    // 🔔 FCM = Navigation only
+    // 🗂 List = Database driven (fetchFromMySQL)
     _navigateToNotifications();
   });
 
@@ -662,10 +669,11 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    // ALWAYS add to notification manager - THIS IS THE FIX
-    NotificationManager.instance.addFirebaseMessage(message);
-
-    // Show local notification on Android
+    // 🔔 FCM = Popup notification ONLY
+    // 🗂 List = Database driven (fetchFromMySQL)
+    // 🚫 DO NOT add to list here
+    
+    // Show local notification popup on Android
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
     }
