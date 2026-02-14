@@ -544,11 +544,12 @@ class NotificationMethodChannel {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// =========================
-/// APPLIFECYCLE HANDLER - ADDED
+/// APP LIFECYCLE HANDLER (NEW)
 /// =========================
+
 class AppLifecycleHandler extends StatefulWidget {
   final Widget child;
-  const AppLifecycleHandler({required this.child});
+  const AppLifecycleHandler({required this.child, Key? key}) : super(key: key);
 
   @override
   State<AppLifecycleHandler> createState() => _AppLifecycleHandlerState();
@@ -571,7 +572,9 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
       NotificationService.getAllNotifications(limit: 100);
+      NotificationManager.instance.fetchFromMySQL();
     }
   }
 
@@ -593,7 +596,9 @@ void main() async {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
 
-    // ADDED: Enable foreground notification presentation for iOS
+    // ============================================
+    // CRITICAL: Enable foreground notifications for iOS
+    // ============================================
     await FirebaseMessaging.instance
         .setForegroundNotificationPresentationOptions(
       alert: true,
@@ -638,7 +643,6 @@ void main() async {
     debugPrint('�� Init Error: $e');
   }
 
-  // MODIFIED: Wrap with AppLifecycleHandler
   runApp(
     AppLifecycleHandler(
       child: const MyApp(),
@@ -2677,11 +2681,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         child: ElevatedButton(
                           onPressed: () {
                             Navigator.of(context).pop(true);
-                            if (Platform.isAndroid) {
-                              SystemNavigator.pop();
-                            } else if (Platform.isIOS) {
-                              exit(0);
-                            }
+                            SystemNavigator.pop();
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF00BFA5),
@@ -2755,7 +2755,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعبئة وخدمات الغاز',
+              'الشركة العامة لتعب��ة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
