@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:gal/gal.dart';
@@ -138,93 +139,124 @@ class NotificationManager extends ChangeNotifier {
   NotificationManager._();
 
   List<NotificationItem> _notifications = [];
+  int _unreadCount = 0;
   bool _isSyncing = false;
-  StreamSubscription<int>? _unreadSubscription;
+  Timer? _syncTimer;
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
+  int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
   // ============================================
-  // WHATSAPP-STYLE INITIALIZATION
+  // INITIALIZE - Call this when app starts
+  // CRITICAL iOS FIX: Fetch from server FIRST, then load local as fallback
   // ============================================
   Future<void> initialize() async {
-    debugPrint('🚀 [Manager] Initializing WhatsApp-style notifications...');
+    debugPrint('🚀 [Manager] Initializing...');
 
-    // Initialize database
-    await NotificationService.initialize();
+    // CRITICAL iOS FIX: Try to fetch from server FIRST
+    try {
+      debugPrint('🌐 [Manager] Fetching from server on startup...');
+      await fetchFromMySQL();
+      debugPrint(
+          '✅ [Manager] Server fetch complete: ${_notifications.length} notifications');
+    } catch (e) {
+      debugPrint('⚠️ [Manager] Server fetch failed, loading from disk: $e');
+      // Fallback to local if server fails
+      await loadNotifications();
+    }
 
-    // Listen to unread count changes
-    _unreadSubscription = NotificationService.unreadCountStream.listen((count) {
-      notifyListeners(); // Update UI when unread count changes
-    });
-
-    // Load from local database first (fast)
-    await loadNotifications();
-
-    // Then sync with server in background
-    _syncWithServer();
-
-    debugPrint('✅ [Manager] WhatsApp-style initialization complete');
+    // Start periodic sync
+    _startPeriodicSync();
   }
 
   // ============================================
-  // WHATSAPP-STYLE IMMEDIATE SAVING
+  // FORCE LOAD FROM DISK
   // ============================================
-  Future<void> addFirebaseMessage(RemoteMessage message) async {
-    final item = NotificationItem.fromFirebaseMessage(message);
+  Future<void> loadNotifications() async {
+    try {
+      final localList = await NotificationService.getLocalNotifications();
 
-    debugPrint(
-        '📨 [Manager] Received Firebase message: ${item.id} - ${item.title}');
+      _notifications =
+          localList.map((e) => NotificationItem.fromJson(e)).toList();
+      _updateUnreadCount();
 
-    // Remove if exists (prevent duplicates)
-    _notifications.removeWhere((n) => n.id == item.id);
-
-    // Add to top of list
-    _notifications.insert(0, item);
-
-    // Save immediately (WhatsApp-style)
-    await NotificationService.saveNotificationImmediately(item.toJson());
-
-    notifyListeners();
-    debugPrint(
-        '✅ [Manager] Notification saved instantly, total: ${_notifications.length}');
+      debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+      notifyListeners();
+    } catch (e) {
+      debugPrint('❌ [Manager] Load Error: $e');
+    }
   }
 
   // ============================================
-  // WHATSAPP-STYLE BACKGROUND SYNC
+  // CRITICAL FIXED: SYNC FROM SERVER
+  // Called when app opens, resumes, or periodically
+  // iOS FIX: This is now the PRIMARY source of truth
   // ============================================
-  Future<void> _syncWithServer() async {
-    if (_isSyncing) return;
+  Future<void> fetchFromMySQL() async {
+    if (_isSyncing) {
+      debugPrint('⏳ [Manager] Already syncing, skipping...');
+      return;
+    }
 
     _isSyncing = true;
     notifyListeners();
 
     try {
-      debugPrint('🌐 [Manager] Syncing with server...');
+      debugPrint('🌐 [Manager] Fetching from MySQL...');
 
-      // Get latest from server
-      final serverNotifications =
-          await NotificationService.getAllNotificationsFromServer();
+      final serverListRaw =
+          await NotificationService.getAllNotifications(limit: 100);
 
-      // Convert to NotificationItem objects - FIXED: Use fromJson to preserve isRead status
-      final serverItems = serverNotifications
-          .map((m) => NotificationItem.fromJson(m))
-          .toList();
-
-      // Update local list (server is source of truth)
-      _notifications = serverItems;
-
-      // Limit display to 100 for performance
-      if (_notifications.length > 100) {
-        _notifications = _notifications.sublist(0, 100);
+      if (serverListRaw.isEmpty) {
+        debugPrint('⚠️ [Manager] No notifications from server, loading local');
+        // If server is empty, load from local as fallback
+        await loadNotifications();
+        _isSyncing = false;
+        notifyListeners();
+        return;
       }
 
-      notifyListeners();
+      final serverItems =
+          serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
+
+      // CRITICAL iOS FIX: Replace entire list with server data
+      // Don't merge - server is source of truth
+      final Map<String, NotificationItem> serverMap = {};
+
+      // Build map from server items
+      for (var serverItem in serverItems) {
+        serverMap[serverItem.id] = serverItem;
+      }
+
+      // Preserve read status from local notifications
+      for (var localItem in _notifications) {
+        if (serverMap.containsKey(localItem.id) && localItem.isRead) {
+          serverMap[localItem.id]!.isRead = true;
+        }
+      }
+
+      // Replace notifications list with server data
+      _notifications = serverMap.values.toList();
+      _sortAndCount();
+
+      // Limit to 200
+      if (_notifications.length > 200) {
+        _notifications = _notifications.sublist(0, 200);
+      }
+
+      // Save to disk for offline access
+      await _saveToDisk();
+
       debugPrint(
           '✅ [Manager] Synced ${_notifications.length} notifications from server');
-    } catch (e) {
-      debugPrint('❌ [Manager] Server sync failed: $e');
-      // Keep local data if server fails
+    } catch (e, stacktrace) {
+      debugPrint('❌ [Manager] Sync Error: $e');
+      debugPrint('❌ [Manager] Stacktrace: $stacktrace');
+
+      // Fallback to local storage on error
+      debugPrint('📂 [Manager] Loading from local storage as fallback');
+      await loadNotifications();
     } finally {
       _isSyncing = false;
       notifyListeners();
@@ -232,110 +264,120 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
-  // LOAD FROM LOCAL DATABASE
+  // CRITICAL FIXED: Add Firebase Message
+  // Called when notification received while app is open
   // ============================================
-  Future<void> loadNotifications() async {
+  Future<void> addFirebaseMessage(RemoteMessage message) async {
+    final item = NotificationItem.fromFirebaseMessage(message);
+
+    // FIX: Don't ignore any notifications - show them all
+    debugPrint('📨 [Manager] Received Firebase message: ${item.id}');
+    debugPrint('📨 [Manager] Title: ${item.title}, Body: ${item.body}');
+
+    // Remove if exists (deduplicate)
+    _notifications.removeWhere((n) => n.id == item.id);
+
+    // Insert at top
+    _notifications.insert(0, item);
+
+    _updateUnreadCount();
+    await _saveToDisk();
+    notifyListeners();
+
+    debugPrint(
+        '✅ [Manager] Added notification, total: ${_notifications.length}, unread: $_unreadCount');
+  }
+
+  // ============================================
+  // CRITICAL: Add notification from iOS native
+  // ============================================
+  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     try {
-      final localNotifications =
-          await NotificationService.getLocalNotifications(limit: 100);
-      _notifications =
-          localNotifications.map((e) => NotificationItem.fromJson(e)).toList();
+      final item = NotificationItem.fromJson(data);
+
+      debugPrint('📱 [Manager] Received iOS notification: ${item.id}');
+      debugPrint('📱 [Manager] Title: ${item.title}, Body: ${item.body}');
+
+      // Remove if exists (deduplicate)
+      _notifications.removeWhere((n) => n.id == item.id);
+
+      // Insert at top
+      _notifications.insert(0, item);
+
+      _updateUnreadCount();
+      await _saveToDisk();
+
+      // Save to server
+      await NotificationService.saveNotificationToServer(item.toJson());
+
+      notifyListeners();
 
       debugPrint(
-          '📂 [Manager] Loaded ${_notifications.length} from local database');
-      notifyListeners();
+          '✅ [Manager] Added iOS notification, total: ${_notifications.length}');
     } catch (e) {
-      debugPrint('❌ [Manager] Load failed: $e');
+      debugPrint('❌ [Manager] Error adding iOS notification: $e');
     }
   }
 
   // ============================================
-  // WHATSAPP-STYLE REAL-TIME ACTIONS
+  // MARK AS READ
   // ============================================
-
   Future<void> markAsRead(String id) async {
-    // Update local list immediately
     final index = _notifications.indexWhere((n) => n.id == id);
     if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
+      _updateUnreadCount();
+      await _saveToDisk();
       notifyListeners();
 
-      // Update database and server
-      await NotificationService.markAsRead(id);
+      // Update in background
+      NotificationService.markAsRead(id);
     }
   }
 
+  // ============================================
+  // MARK ALL AS READ
+  // ============================================
   Future<void> markAllAsRead() async {
-    bool hasChanges = false;
-    for (var notification in _notifications) {
-      if (!notification.isRead) {
-        notification.isRead = true;
-        hasChanges = true;
-        await NotificationService.markAsRead(notification.id);
+    bool changed = false;
+    for (var n in _notifications) {
+      if (!n.isRead) {
+        n.isRead = true;
+        changed = true;
       }
     }
-    if (hasChanges) {
+    if (changed) {
+      _updateUnreadCount();
+      await _saveToDisk();
       notifyListeners();
     }
   }
 
+  // ============================================
+  // DELETE NOTIFICATION
+  // ============================================
   Future<void> deleteNotification(String id) async {
     _notifications.removeWhere((n) => n.id == id);
-    notifyListeners();
-
+    _updateUnreadCount();
+    await _saveToDisk();
     await NotificationService.deleteNotification(id);
+    notifyListeners();
   }
 
+  // ============================================
+  // CLEAR ALL
+  // ============================================
   Future<void> clearAllNotifications() async {
     _notifications.clear();
-    notifyListeners();
-
+    _updateUnreadCount();
+    await _saveToDisk();
     await NotificationService.clearAllNotifications();
-  }
-
-  Future<void> forceRefresh() async {
-    await _syncWithServer();
-  }
-
-  // ============================================
-  // ADD NOTIFICATION FROM NATIVE (iOS)
-  // ============================================
-  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    final item = NotificationItem(
-      id: data['id']?.toString() ??
-          DateTime.now().millisecondsSinceEpoch.toString(),
-      title: data['title'] ?? 'إشعار جديد',
-      body: data['body'] ?? '',
-      imageUrl: data['imageUrl'],
-      timestamp: DateTime.now(),
-      data: data,
-      isRead: false,
-      type: data['type'] ?? 'general',
-    );
-
-    debugPrint(
-        '📱 [Manager] Received native notification: ${item.id} - ${item.title}');
-
-    // Remove if exists (prevent duplicates)
-    _notifications.removeWhere((n) => n.id == item.id);
-
-    // Add to top of list
-    _notifications.insert(0, item);
-
-    // Save immediately
-    await NotificationService.saveNotificationImmediately(item.toJson());
-
     notifyListeners();
-    debugPrint(
-        '✅ [Manager] Native notification saved instantly, total: ${_notifications.length}');
   }
 
   // ============================================
-  // UTILITY METHODS
+  // SEARCH
   // ============================================
-
-  int get unreadCount => _notifications.where((n) => !n.isRead).length;
-
   List<NotificationItem> searchNotifications(String query) {
     if (query.isEmpty) return _notifications;
     final q = query.toLowerCase();
@@ -346,9 +388,39 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
+  // ============================================
+  // PRIVATE METHODS
+  // ============================================
+  void _sortAndCount() {
+    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    _updateUnreadCount();
+  }
+
+  void _updateUnreadCount() {
+    _unreadCount = _notifications.where((n) => !n.isRead).length;
+  }
+
+  Future<void> _saveToDisk() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr =
+          jsonEncode(_notifications.map((e) => e.toJson()).toList());
+      await prefs.setString(NotificationService.storageKey, jsonStr);
+    } catch (e) {
+      debugPrint('❌ [Manager] Save Error: $e');
+    }
+  }
+
+  void _startPeriodicSync() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      debugPrint('⏰ [Manager] Periodic sync from server');
+      fetchFromMySQL();
+    });
+  }
+
   void dispose() {
-    _unreadSubscription?.cancel();
-    NotificationService.dispose();
+    _syncTimer?.cancel();
     super.dispose();
   }
 }
@@ -425,7 +497,9 @@ void _navigateToNotifications() {
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Initialize database for background saving
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // CRITICAL iOS FIX: Initialize notification service
   await NotificationService.initialize();
 
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
@@ -435,11 +509,34 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final item = NotificationItem.fromFirebaseMessage(message);
 
   try {
-    // WHATSAPP-STYLE: Save immediately to local DB and server
-    await NotificationService.saveNotificationImmediately(item.toJson());
-    debugPrint('✅ [BG] Background notification saved instantly');
+    // CRITICAL iOS FIX: Save to SERVER FIRST with priority
+    debugPrint('🌐 [BG] Saving to server with HIGH PRIORITY...');
+
+    // Save to server first (returns bool)
+    final serverSaved =
+        await NotificationService.saveNotificationToServer(item.toJson());
+    debugPrint('✅ [BG] Server save result: $serverSaved');
+
+    // Then save to local disk (returns void)
+    await NotificationService.saveToLocalDisk(item.toJson());
+    debugPrint('✅ [BG] Local save completed');
+
+    // CRITICAL: Small wait to ensure data is committed
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // Verify the local save
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final verifyStr = prefs.getString(NotificationService.storageKey);
+    if (verifyStr != null) {
+      final list = jsonDecode(verifyStr);
+      final found = list.any((notif) => notif['id'].toString() == item.id);
+      debugPrint('✅ [BG] Local save verified: $found');
+    }
+
+    debugPrint('✅ [BG] Background processing complete');
   } catch (e) {
-    debugPrint('❌ [BG] Background save failed: $e');
+    debugPrint('❌ [BG] Error: $e');
   }
 }
 
@@ -490,7 +587,8 @@ void main() async {
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // WHATSAPP-STYLE: Initialize notification system first
+    // CRITICAL iOS FIX: Initialize notification manager
+    // This will fetch from server first, then fallback to local
     await NotificationManager.instance.initialize();
 
     final messaging = FirebaseMessaging.instance;
@@ -537,30 +635,37 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
-    // Handle app opened from terminated state
+    // Handle when app is terminated and opened via notification
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
-      debugPrint('🚀 [Launch] App opened from terminated via notification');
+      debugPrint('🚀 [Launch] App opened from Terminated via Notification');
       await NotificationManager.instance.addFirebaseMessage(initialMessage);
-      Future.delayed(const Duration(seconds: 1), _navigateToNotifications);
+      Future.delayed(const Duration(seconds: 1), () {
+        _navigateToNotifications();
+      });
     }
   } catch (e) {
     debugPrint('Error getting initial message: $e');
   }
 
-  // Handle background tap
-  FirebaseMessaging.onMessageOpenedApp.listen((message) async {
-    debugPrint('👆 [Background] Notification tapped');
+  // Handle when app is in background and notification is tapped
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+    debugPrint('👆 [Click] App opened from Background via Notification');
     await NotificationManager.instance.addFirebaseMessage(message);
     _navigateToNotifications();
   });
 
-  // WHATSAPP-STYLE: Handle foreground notifications
-  FirebaseMessaging.onMessage.listen((message) async {
-    debugPrint('🌞 [FG] Foreground notification received');
-    await NotificationManager.instance.addFirebaseMessage(message);
+  // CRITICAL FIXED: Handle when app is in foreground
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    debugPrint('🌞 [FG] Notification received while app is FOREGROUND');
+    debugPrint('🌞 [FG] Message ID: ${message.messageId}');
+    debugPrint('🌞 [FG] Title: ${message.notification?.title}');
+    debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    // Show Android local notification
+    // ALWAYS add to notification manager - THIS IS THE FIX
+    NotificationManager.instance.addFirebaseMessage(message);
+
+    // Show local notification on Android
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
     }
@@ -621,8 +726,19 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Lifecycle] App resumed - force sync');
-      NotificationManager.instance.forceRefresh();
+      debugPrint('🔄 [Lifecycle] App Resumed - Syncing from server');
+
+      // CRITICAL iOS FIX: Add small delay to allow background handler to complete
+      Future.delayed(const Duration(milliseconds: 500), () {
+        debugPrint('🔄 [Lifecycle] First fetch attempt');
+        NotificationManager.instance.fetchFromMySQL();
+
+        // CRITICAL: Retry after another delay to catch any late saves
+        Future.delayed(const Duration(seconds: 2), () {
+          debugPrint('🔄 [Lifecycle] Second fetch attempt (retry)');
+          NotificationManager.instance.fetchFromMySQL();
+        });
+      });
     }
   }
 
@@ -761,10 +877,10 @@ class NotificationIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<int>(
-      stream: NotificationService.unreadCountStream,
-      builder: (context, snapshot) {
-        final count = snapshot.data ?? 0;
+    return AnimatedBuilder(
+      animation: NotificationManager.instance,
+      builder: (context, child) {
+        final count = NotificationManager.instance.unreadCount;
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -937,30 +1053,31 @@ class NotificationDetailScreen extends StatelessWidget {
         return ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: CachedNetworkImage(
-              imageUrl: uri.toString(),
-              width: double.infinity,
-              height: 250,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Container(
-                    color: Colors.grey[200],
-                    child: const Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFF00BFA5),
-                      ),
-                    ),
+            imageUrl: uri.toString(),
+            width: double.infinity,
+            height: 250,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00BFA5),
+                ),
+              ),
+            ),
+            errorWidget: (context, url, error) {
+              return Container(
+                color: Colors.grey[100],
+                child: Center(
+                  child: Icon(
+                    Icons.image_not_supported_outlined,
+                    color: Colors.grey[400],
+                    size: 50,
                   ),
-              errorWidget: (context, url, error) {
-                return Container(
-                  color: Colors.grey[100],
-                  child: Center(
-                    child: Icon(
-                      Icons.image_not_supported_outlined,
-                      color: Colors.grey[400],
-                      size: 50,
-                    ),
-                  ),
-                );
-              }),
+                ),
+              );
+            },
+          ),
         );
       }
     } catch (e) {
@@ -1297,7 +1414,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '6. الاحتفاظ بالبيانات',
-                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انته��ء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
+                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
                     ),
                   ],
                 ),
@@ -1392,7 +1509,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _selectedFilter = 'all';
-  StreamSubscription<int>? _unreadSubscription;
+  Timer? _refreshTimer;
 
   @override
   bool get wantKeepAlive => true;
@@ -1402,15 +1519,23 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // WHATSAPP-STYLE: Listen to real-time changes
-    _unreadSubscription = NotificationService.unreadCountStream.listen((count) {
-      if (mounted) setState(() {}); // Update UI instantly
+    // Load immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _forceRefresh();
+    });
+
+    // Start periodic refresh every 3 seconds for real-time updates
+    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (mounted) {
+        _forceRefresh();
+      }
     });
   }
 
   @override
   void dispose() {
-    _unreadSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -1418,13 +1543,36 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Force refresh when app resumes
-      NotificationManager.instance.forceRefresh();
+      debugPrint('🔄 [Notifications] App resumed - Force refresh');
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          _forceRefresh();
+        }
+      });
     }
   }
 
   Future<void> _forceRefresh() async {
-    await NotificationManager.instance.forceRefresh();
+    debugPrint('🔄 [Notifications Screen] Force refresh started');
+
+    // First load from disk
+    await NotificationManager.instance.loadNotifications();
+
+    // Then fetch from server
+    await NotificationManager.instance.fetchFromMySQL();
+
+    // CRITICAL iOS FIX: Retry after delay to catch late notifications
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (mounted) {
+        debugPrint(
+            '🔄 [Notifications Screen] Retry fetch for late notifications');
+        await NotificationManager.instance.fetchFromMySQL();
+      }
+    });
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -1568,31 +1716,28 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               minHeight: 2,
             ),
           Expanded(
-            child: StreamBuilder<int>(
-              stream: NotificationService.unreadCountStream,
-              builder: (context, snapshot) {
-                return AnimatedBuilder(
-                  animation: NotificationManager.instance,
-                  builder: (context, child) {
-                    final filteredNotifications = _getFilteredNotifications();
+            child: AnimatedBuilder(
+              animation: NotificationManager.instance,
+              builder: (context, child) {
+                List<NotificationItem> filteredNotifications =
+                    _getFilteredNotifications();
 
-                    if (filteredNotifications.isEmpty) {
-                      return _buildEmptyState();
-                    }
+                if (filteredNotifications.isEmpty) {
+                  return _buildEmptyState();
+                }
 
-                    return RefreshIndicator(
-                      onRefresh: _forceRefresh,
-                      color: const Color(0xFF00BFA5),
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: filteredNotifications.length,
-                        itemBuilder: (context, index) {
-                          final notification = filteredNotifications[index];
-                          return _buildNotificationCard(notification);
-                        },
-                      ),
-                    );
-                  },
+                return RefreshIndicator(
+                  onRefresh: _forceRefresh,
+                  color: const Color(0xFF00BFA5),
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filteredNotifications.length,
+                    itemBuilder: (context, index) {
+                      NotificationItem notification =
+                          filteredNotifications[index];
+                      return _buildNotificationCard(notification);
+                    },
+                  ),
                 );
               },
             ),
@@ -2324,7 +2469,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g, ''));
+            var cleanUrl = url.replace(/[?&]download=1/g, '');
             window.location.href = cleanUrl;
             return window;
           }
@@ -2602,7 +2747,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعبئة وخدمات الغاز',
+              'الشركة العامة لتعب��ة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
