@@ -206,9 +206,9 @@ class NotificationManager extends ChangeNotifier {
       final serverNotifications =
           await NotificationService.getAllNotificationsFromServer();
 
-      // Convert to NotificationItem objects
+      // Convert to NotificationItem objects - FIXED: Use fromJson to preserve isRead status
       final serverItems = serverNotifications
-          .map((m) => NotificationItem.fromMySQL(m))
+          .map((m) => NotificationItem.fromJson(m))
           .toList();
 
       // Update local list (server is source of truth)
@@ -1297,7 +1297,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '6. الاحتفاظ بالبيانات',
-                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
+                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انته��ء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
                     ),
                   ],
                 ),
@@ -2324,7 +2324,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g, '');
+            var cleanUrl = url.replace(/[?&]download=1/g, ''));
             window.location.href = cleanUrl;
             return window;
           }
