@@ -2593,6 +2593,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   bool _shouldShowButtons() {
+    // Hide buttons on login page
+    if (isOnLoginPage) {
+      return false;
+    }
+
     if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
@@ -2741,17 +2746,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              if (canGoBack && controller != null) {
-                controller!.goBack();
-              } else {
-                final shouldExit = await _showExitDialog();
-                if (shouldExit == true) SystemNavigator.pop();
-              }
-            },
-          ),
+          leading: isOnLoginPage
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () async {
+                    if (canGoBack && controller != null) {
+                      controller!.goBack();
+                    } else {
+                      final shouldExit = await _showExitDialog();
+                      if (shouldExit == true) SystemNavigator.pop();
+                    }
+                  },
+                ),
+          automaticallyImplyLeading: false,
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
