@@ -150,12 +150,9 @@ class NotificationService {
       // Convert back to list and sort by timestamp
       List<Map<String, dynamic>> mergedList = mergedMap.values.toList();
       mergedList.sort((a, b) {
-        final aTime = a['timestamp'] ?? 0;
-        final bTime = b['timestamp'] ?? 0;
-        if (aTime is int && bTime is int) {
-          return bTime.compareTo(aTime);
-        }
-        return 0;
+        final aTime = DateTime.tryParse(a['sent_at'] ?? '') ?? DateTime(1970);
+        final bTime = DateTime.tryParse(b['sent_at'] ?? '') ?? DateTime(1970);
+        return bTime.compareTo(aTime);
       });
 
       // Limit to 200
