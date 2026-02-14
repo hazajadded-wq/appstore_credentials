@@ -161,7 +161,8 @@ class NotificationManager extends ChangeNotifier {
       await fetchFromMySQL();
       debugPrint('✅ [Manager] Server sync complete after local load');
     } catch (e) {
-      debugPrint('⚠️ [Manager] Initial server sync failed, using local data: $e');
+      debugPrint(
+          '⚠️ [Manager] Initial server sync failed, using local data: $e');
     }
 
     // Start periodic sync to keep updated
@@ -203,8 +204,8 @@ class NotificationManager extends ChangeNotifier {
     try {
       debugPrint('🌐 [Manager] Fetching from MySQL...');
 
-      final serverListRaw =
-          await NotificationService.getAllNotifications(limit: 100);
+      final serverListRaw = await NotificationService
+          .getAllNotifications(); // No limit - pull all
 
       if (serverListRaw.isNotEmpty) {
         final serverItems =
@@ -250,9 +251,9 @@ class NotificationManager extends ChangeNotifier {
     _notifications = mergedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-    // Limit to 200
-    if (_notifications.length > 200) {
-      _notifications = _notifications.sublist(0, 200);
+    // Limit to 1000 (adjust as needed)
+    if (_notifications.length > 1000) {
+      _notifications = _notifications.sublist(0, 1000);
     }
 
     _updateUnreadCount();
@@ -269,7 +270,8 @@ class NotificationManager extends ChangeNotifier {
   // CRITICAL FIXED: Add Firebase Message
   // Called when notification received while app is open
   // ============================================
-  @Deprecated('Use database-driven notifications instead. FCM is for popups only.')
+  @Deprecated(
+      'Use database-driven notifications instead. FCM is for popups only.')
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
@@ -666,7 +668,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     // 🔔 FCM = Popup notification ONLY
     // 🗂 List = Database driven (fetchFromMySQL)
     // 🚫 DO NOT add to list here
-    
+
     // Show local notification popup on Android
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
@@ -1138,66 +1140,8 @@ class NotificationDetailScreen extends StatelessWidget {
   }
 }
 
-class SplashScreen extends StatefulWidget {
+class SplashScreen extends StatelessWidget {
   const SplashScreen({Key? key}) : super(key: key);
-
-  @override
-  _SplashScreenState createState() => _SplashScreenState();
-}
-
-class _SplashScreenState extends State<SplashScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-  late Animation<double> _slideAnimation;
-  late Animation<double> _scaleAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    );
-
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: const Interval(0.0, 0.6, curve: Curves.easeIn),
-    );
-
-    _slideAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: const Interval(0.2, 0.8, curve: Curves.easeOutCubic),
-    );
-
-    _scaleAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: const Interval(0.3, 0.9, curve: Curves.easeOutBack),
-    );
-
-    _controller.forward();
-
-    Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const PrivacyPolicyScreen(),
-            transitionsBuilder: (_, animation, __, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-            transitionDuration: const Duration(milliseconds: 600),
-          ),
-        );
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1214,123 +1158,86 @@ class _SplashScreenState extends State<SplashScreen>
             ],
           ),
         ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -100,
-              right: -100,
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: Container(
-                  width: 300,
-                  height: 300,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF00BFA5).withOpacity(0.15),
-                  ),
-                ),
+        child: Center(
+          child: ModernCard(
+            width: MediaQuery.of(context).size.width * 0.85,
+            padding: const EdgeInsets.all(40),
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 30,
+                offset: const Offset(0, 15),
               ),
-            ),
-            Center(
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0, 0.3),
-                  end: Offset.zero,
-                ).animate(_slideAnimation),
-                child: FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: ModernCard(
-                    width: MediaQuery.of(context).size.width * 0.85,
-                    padding: const EdgeInsets.all(40),
-                    margin: const EdgeInsets.symmetric(horizontal: 20),
+            ],
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 140,
+                  height: 140,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00BFA5),
+                    borderRadius: BorderRadius.circular(30),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 30,
-                        offset: const Offset(0, 15),
+                        color: const Color(0xFF00BFA5).withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
                       ),
                     ],
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ScaleTransition(
-                          scale: _scaleAnimation,
-                          child: Container(
-                            width: 140,
-                            height: 140,
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF00BFA5),
-                              borderRadius: BorderRadius.circular(30),
-                              boxShadow: [
-                                BoxShadow(
-                                  color:
-                                      const Color(0xFF00BFA5).withOpacity(0.3),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Image.asset(
-                              'assets/images/logo.png',
-                              fit: BoxFit.contain,
-                              errorBuilder: (context, error, stackTrace) {
-                                return const Icon(
-                                  Icons.business,
-                                  size: 80,
-                                  color: Colors.white,
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 30),
-                        Text(
-                          'الشركة العامة لتعبئة',
-                          style: GoogleFonts.cairo(
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF2D3748),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        Text(
-                          'وخدمات الغاز',
-                          style: GoogleFonts.cairo(
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF2D3748),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 15),
-                        Text(
-                          'بوابة الموظف الرقمية',
-                          style: GoogleFonts.cairo(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                            color: const Color(0xFF00BFA5),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 40),
-                        const SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Color(0xFF00BFA5),
-                            ),
-                            strokeWidth: 3,
-                          ),
-                        ),
-                      ],
-                    ),
+                  ),
+                  child: Image.asset(
+                    'assets/images/logo.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Icon(
+                        Icons.business,
+                        size: 80,
+                        color: Colors.white,
+                      );
+                    },
                   ),
                 ),
-              ),
+                const SizedBox(height: 30),
+                Text(
+                  'الشركة العامة لتعبئة',
+                  style: GoogleFonts.cairo(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF2D3748),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                Text(
+                  'وخدمات الغاز',
+                  style: GoogleFonts.cairo(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF2D3748),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 15),
+                Text(
+                  'بوابة الموظف الرقمية',
+                  style: GoogleFonts.cairo(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF00BFA5),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 40),
+                const CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Color(0xFF00BFA5),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -1416,7 +1323,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '6. الاحتفاظ بالبيانات',
-                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
+                      'سيتم الاحتفاظ ببيانات الموظفين طوال فتر�� عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
                     ),
                   ],
                 ),
@@ -2393,7 +2300,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           
           var meta = document.createElement('meta');
           meta.name = 'viewport';
-          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
+          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes, shrink-to-fit=yes';
           document.getElementsByTagName('head')[0].appendChild(meta);
           
           document.body.style.margin = '0';
@@ -2475,7 +2382,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             window.location.href = cleanUrl;
             return window;
           }
-          return originalOpen.call(window, url, name, specs);
+          return originalOpen.call(url, name, specs);
         };
       })();
     ''';
