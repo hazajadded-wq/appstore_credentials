@@ -148,24 +148,25 @@ class NotificationManager extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
 
   // ============================================
-  // INITIALIZE - FIXED: Load local first, then sync server
+  // INITIALIZE - Call this when app starts
+  // CRITICAL iOS FIX: Fetch from server FIRST, then load local as fallback
   // ============================================
   Future<void> initialize() async {
     debugPrint('🚀 [Manager] Initializing...');
 
-    // CRITICAL FIX: Load from local storage FIRST (contains notifications saved by background handler)
-    await loadNotifications();
-
-    // Then fetch from server to sync and merge any updates
+    // CRITICAL iOS FIX: Try to fetch from server FIRST
     try {
+      debugPrint('🌐 [Manager] Fetching from server on startup...');
       await fetchFromMySQL();
-      debugPrint('✅ [Manager] Server sync complete after local load');
-    } catch (e) {
       debugPrint(
-          '⚠️ [Manager] Initial server sync failed, using local data: $e');
+          '✅ [Manager] Server fetch complete: ${_notifications.length} notifications');
+    } catch (e) {
+      debugPrint('⚠️ [Manager] Server fetch failed, loading from disk: $e');
+      // Fallback to local if server fails
+      await loadNotifications();
     }
 
-    // Start periodic sync to keep updated
+    // Start periodic sync
     _startPeriodicSync();
   }
 
@@ -204,23 +205,58 @@ class NotificationManager extends ChangeNotifier {
     try {
       debugPrint('🌐 [Manager] Fetching from MySQL...');
 
-      final serverListRaw = await NotificationService
-          .getAllNotifications(); // No limit - pull all
+      final serverListRaw =
+          await NotificationService.getAllNotifications(limit: 100);
 
-      if (serverListRaw.isNotEmpty) {
-        final serverItems =
-            serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
-
-        // Merge server data with current notifications (preserving local read status)
-        _mergeServerWithCurrent(serverItems);
-
-        debugPrint('✅ [Manager] Synced ${serverItems.length} from server');
-      } else {
-        debugPrint('⚠️ [Manager] No new data from server');
+      if (serverListRaw.isEmpty) {
+        debugPrint('⚠️ [Manager] No notifications from server, loading local');
+        // If server is empty, load from local as fallback
+        await loadNotifications();
+        _isSyncing = false;
+        notifyListeners();
+        return;
       }
+
+      final serverItems =
+          serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
+
+      // CRITICAL iOS FIX: Replace entire list with server data
+      // Don't merge - server is source of truth
+      final Map<String, NotificationItem> serverMap = {};
+
+      // Build map from server items
+      for (var serverItem in serverItems) {
+        serverMap[serverItem.id] = serverItem;
+      }
+
+      // Preserve read status from local notifications
+      for (var localItem in _notifications) {
+        if (serverMap.containsKey(localItem.id) && localItem.isRead) {
+          serverMap[localItem.id]!.isRead = true;
+        }
+      }
+
+      // Replace notifications list with server data
+      _notifications = serverMap.values.toList();
+      _sortAndCount();
+
+      // Limit to 200
+      if (_notifications.length > 200) {
+        _notifications = _notifications.sublist(0, 200);
+      }
+
+      // Save to disk for offline access
+      await _saveToDisk();
+
+      debugPrint(
+          '✅ [Manager] Synced ${_notifications.length} notifications from server');
     } catch (e, stacktrace) {
       debugPrint('❌ [Manager] Sync Error: $e');
       debugPrint('❌ [Manager] Stacktrace: $stacktrace');
+
+      // Fallback to local storage on error
+      debugPrint('📂 [Manager] Loading from local storage as fallback');
+      await loadNotifications();
     } finally {
       _isSyncing = false;
       notifyListeners();
@@ -228,50 +264,9 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
-  // MERGE SERVER NOTIFICATIONS WITH CURRENT LIST
-  // ============================================
-  void _mergeServerWithCurrent(List<NotificationItem> serverItems) {
-    final Map<String, NotificationItem> mergedMap = {};
-
-    // Start with current notifications (from local)
-    for (var item in _notifications) {
-      mergedMap[item.id] = item;
-    }
-
-    // Add/update with server data, preserving read status
-    for (var serverItem in serverItems) {
-      if (mergedMap.containsKey(serverItem.id)) {
-        // Preserve read status from local
-        serverItem.isRead = mergedMap[serverItem.id]!.isRead;
-      }
-      mergedMap[serverItem.id] = serverItem;
-    }
-
-    // Convert back to list and sort
-    _notifications = mergedMap.values.toList();
-    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
-    // Limit to 1000 (adjust as needed)
-    if (_notifications.length > 1000) {
-      _notifications = _notifications.sublist(0, 1000);
-    }
-
-    _updateUnreadCount();
-
-    // Save merged list to disk
-    _saveToDisk();
-  }
-
-  // ============================================
-  // ⚠️ DEPRECATED: Not used in new architecture
-  // FCM listeners no longer add to list
-  // Notification list is now database-driven only
-  // ============================================
   // CRITICAL FIXED: Add Firebase Message
   // Called when notification received while app is open
   // ============================================
-  @Deprecated(
-      'Use database-driven notifications instead. FCM is for popups only.')
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
@@ -396,6 +391,10 @@ class NotificationManager extends ChangeNotifier {
   // ============================================
   // PRIVATE METHODS
   // ============================================
+  void _sortAndCount() {
+    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    _updateUnreadCount();
+  }
 
   void _updateUnreadCount() {
     _unreadCount = _notifications.where((n) => !n.isRead).length;
@@ -640,8 +639,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      // 🔔 FCM = Navigation only
-      // 🗂 List = Database driven (fetchFromMySQL)
+      await NotificationManager.instance.addFirebaseMessage(initialMessage);
       Future.delayed(const Duration(seconds: 1), () {
         _navigateToNotifications();
       });
@@ -653,8 +651,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   // Handle when app is in background and notification is tapped
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    // 🔔 FCM = Navigation only
-    // 🗂 List = Database driven (fetchFromMySQL)
+    await NotificationManager.instance.addFirebaseMessage(message);
     _navigateToNotifications();
   });
 
@@ -665,11 +662,10 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    // 🔔 FCM = Popup notification ONLY
-    // 🗂 List = Database driven (fetchFromMySQL)
-    // 🚫 DO NOT add to list here
+    // ALWAYS add to notification manager - THIS IS THE FIX
+    NotificationManager.instance.addFirebaseMessage(message);
 
-    // Show local notification popup on Android
+    // Show local notification on Android
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
     }
@@ -1140,8 +1136,66 @@ class NotificationDetailScreen extends StatelessWidget {
   }
 }
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
+
+  @override
+  _SplashScreenState createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+  late Animation<double> _slideAnimation;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    );
+
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.0, 0.6, curve: Curves.easeIn),
+    );
+
+    _slideAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.2, 0.8, curve: Curves.easeOutCubic),
+    );
+
+    _scaleAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.3, 0.9, curve: Curves.easeOutBack),
+    );
+
+    _controller.forward();
+
+    Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => const PrivacyPolicyScreen(),
+            transitionsBuilder: (_, animation, __, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
+            transitionDuration: const Duration(milliseconds: 600),
+          ),
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1158,86 +1212,123 @@ class SplashScreen extends StatelessWidget {
             ],
           ),
         ),
-        child: Center(
-          child: ModernCard(
-            width: MediaQuery.of(context).size.width * 0.85,
-            padding: const EdgeInsets.all(40),
-            margin: const EdgeInsets.symmetric(horizontal: 20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 30,
-                offset: const Offset(0, 15),
-              ),
-            ],
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 140,
-                  height: 140,
-                  padding: const EdgeInsets.all(20),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -100,
+              right: -100,
+              child: FadeTransition(
+                opacity: _fadeAnimation,
+                child: Container(
+                  width: 300,
+                  height: 300,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF00BFA5),
-                    borderRadius: BorderRadius.circular(30),
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF00BFA5).withOpacity(0.15),
+                  ),
+                ),
+              ),
+            ),
+            Center(
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.3),
+                  end: Offset.zero,
+                ).animate(_slideAnimation),
+                child: FadeTransition(
+                  opacity: _fadeAnimation,
+                  child: ModernCard(
+                    width: MediaQuery.of(context).size.width * 0.85,
+                    padding: const EdgeInsets.all(40),
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF00BFA5).withOpacity(0.3),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 30,
+                        offset: const Offset(0, 15),
                       ),
                     ],
-                  ),
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Icon(
-                        Icons.business,
-                        size: 80,
-                        color: Colors.white,
-                      );
-                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ScaleTransition(
+                          scale: _scaleAnimation,
+                          child: Container(
+                            width: 140,
+                            height: 140,
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00BFA5),
+                              borderRadius: BorderRadius.circular(30),
+                              boxShadow: [
+                                BoxShadow(
+                                  color:
+                                      const Color(0xFF00BFA5).withOpacity(0.3),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: Image.asset(
+                              'assets/images/logo.png',
+                              fit: BoxFit.contain,
+                              errorBuilder: (context, error, stackTrace) {
+                                return const Icon(
+                                  Icons.business,
+                                  size: 80,
+                                  color: Colors.white,
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+                        Text(
+                          'الشركة العامة لتعبئة',
+                          style: GoogleFonts.cairo(
+                            fontSize: 26,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF2D3748),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        Text(
+                          'وخدمات الغاز',
+                          style: GoogleFonts.cairo(
+                            fontSize: 26,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF2D3748),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 15),
+                        Text(
+                          'بوابة الموظف الرقمية',
+                          style: GoogleFonts.cairo(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: const Color(0xFF00BFA5),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 40),
+                        const SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xFF00BFA5),
+                            ),
+                            strokeWidth: 3,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 30),
-                Text(
-                  'الشركة العامة لتعبئة',
-                  style: GoogleFonts.cairo(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF2D3748),
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                Text(
-                  'وخدمات الغاز',
-                  style: GoogleFonts.cairo(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF2D3748),
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 15),
-                Text(
-                  'بوابة الموظف الرقمية',
-                  style: GoogleFonts.cairo(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF00BFA5),
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 40),
-                const CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    Color(0xFF00BFA5),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -1323,7 +1414,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '6. الاحتفاظ بالبيانات',
-                      'سيتم الاحتفاظ ببيانات الموظفين طوال فتر�� عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
+                      'سيتم الاحتفاظ ببيانات الموظفين طوال فترة عملهم في الشركة، وبعد انتهاء الخدمة، سيتم حظها وفقًا للمتطلبات القانونية.',
                     ),
                   ],
                 ),
@@ -2300,7 +2391,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           
           var meta = document.createElement('meta');
           meta.name = 'viewport';
-          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes, shrink-to-fit=yes';
+          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes, shrink-to-fit=yes';
           document.getElementsByTagName('head')[0].appendChild(meta);
           
           document.body.style.margin = '0';
@@ -2382,7 +2473,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             window.location.href = cleanUrl;
             return window;
           }
-          return originalOpen.call(url, name, specs);
+          return originalOpen.call(window, url, name, specs);
         };
       })();
     ''';
@@ -2656,7 +2747,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعبئة وخدمات الغاز',
+              'الشركة العامة لتعب��ة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
