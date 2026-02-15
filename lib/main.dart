@@ -5,11 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:ui' as ui;
@@ -431,56 +429,10 @@ class NotificationManager extends ChangeNotifier {
 }
 
 /// =========================
-/// LOCAL NOTIFICATION SERVICE
+/// LOCAL NOTIFICATION SERVICE - REMOVED FOR iOS ONLY
 /// =========================
-class LocalNotificationService {
-  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
 
-  static void initialize() {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-
-    _notificationsPlugin.initialize(
-      settings: initializationSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse details) {
-        debugPrint('🔔 Local Notification Tapped');
-        _navigateToNotifications();
-      },
-    );
-  }
-
-  static void showNotification(RemoteMessage message) async {
-    if (!Platform.isAndroid) return;
-
-    try {
-      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      const AndroidNotificationDetails androidPlatformChannelSpecifics =
-          AndroidNotificationDetails(
-        'high_importance_channel',
-        'High Importance Notifications',
-        importance: Importance.max,
-        priority: Priority.high,
-        showWhen: true,
-      );
-      const NotificationDetails platformChannelSpecifics =
-          NotificationDetails(android: androidPlatformChannelSpecifics);
-
-      await _notificationsPlugin.show(
-        id: id,
-        title: message.notification?.title ?? 'إشعار جديد',
-        body: message.notification?.body ?? '',
-        notificationDetails: platformChannelSpecifics,
-        payload: jsonEncode(message.data),
-      );
-    } catch (e) {
-      debugPrint('❌ Error showing local notification: $e');
-    }
-  }
-}
+// Removed Android-specific local notification service
 
 void _navigateToNotifications() {
   if (navigatorKey.currentState != null) {
@@ -497,14 +449,15 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - PROPER IMPLEMENTATION
-/// Saves notifications to local storage even in background/terminated
-/// Based on best practices from GitHub examples
+/// FCM BACKGROUND HANDLER - UPDATED WITH BINDING
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
+    // 🔥 CRITICAL FIX: Add Flutter binding for SharedPreferences to work in background
+    WidgetsFlutterBinding.ensureInitialized();
+
     // Initialize Firebase
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
@@ -517,21 +470,17 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
     // CRITICAL: Save to local storage immediately
-    // This ensures data persists even if app is killed
     await NotificationService.saveToLocalDisk(item.toJson());
 
     debugPrint('✅ [BG] Saved to local storage: ${item.title}');
 
-    // Also show local notification on iOS
-    if (Platform.isIOS) {
-      await _showLocalNotificationiOS(message);
-    }
+    // Show local notification on iOS
+    await _showLocalNotificationiOS(message);
   } catch (e) {
     debugPrint('❌ [BG] Error: $e');
   }
 }
 
-/// Show local notification on iOS in background
 /// Show local notification on iOS in background
 Future<void> _showLocalNotificationiOS(RemoteMessage message) async {
   try {
@@ -629,7 +578,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - FIXED
+/// MAIN - FIXED FOR iOS ONLY
 /// =========================
 
 void main() async {
@@ -650,7 +599,7 @@ void main() async {
       sound: true,
     );
 
-    LocalNotificationService.initialize();
+    // Removed Android local notification initialization
 
     // CRITICAL: Setup iOS method channel
     NotificationMethodChannel.setupListener();
@@ -678,13 +627,11 @@ void main() async {
     final token = await messaging.getToken();
     debugPrint('🔑 FCM Token: $token');
 
-    if (Platform.isAndroid) {
-      await _requestIgnoreBatteryOptimizations();
-    }
+    // Removed Android battery optimization request
 
     await _setupNotificationNavigation(messaging);
   } catch (e) {
-    debugPrint('�� Init Error: $e');
+    debugPrint('❌ Init Error: $e');
   }
 
   runApp(
@@ -694,16 +641,7 @@ void main() async {
   );
 }
 
-Future<void> _requestIgnoreBatteryOptimizations() async {
-  try {
-    var status = await Permission.ignoreBatteryOptimizations.status;
-    if (!status.isGranted) {
-      await Permission.ignoreBatteryOptimizations.request();
-    }
-  } catch (e) {
-    debugPrint('⚠️ Battery optimization request failed: $e');
-  }
-}
+// Removed Android battery optimization function
 
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
@@ -737,10 +675,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     // ALWAYS add to notification manager - THIS IS THE FIX
     NotificationManager.instance.addFirebaseMessage(message);
 
-    // Show local notification on Android
-    if (Platform.isAndroid && message.notification != null) {
-      LocalNotificationService.showNotification(message);
-    }
+    // Removed Android local notification code
   });
 }
 
@@ -1465,7 +1400,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
-                      'يتم جمع البيانات الأساسية للموظف مثل الاسم، الرقم الوظيفي، القسم، الراتب، والمعلومات الوظيفية الأخرى اللازمة لإدارة الموارد البشرية والرواتب.',
+                      'يتم جمع البيانات الأساسية للموظف مثل الاسم، الرقم الو��يفي، القسم، الراتب، والمعلومات الوظيفية الأخرى اللازمة لإدارة الموارد البشرية والرواتب.',
                     ),
                     _buildPrivacySection(
                       '3. استخدام البيانات',
@@ -2302,10 +2237,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
         );
 
-      if (Platform.isAndroid) {
-        final androidController =
-            controller!.platform as AndroidWebViewController;
-        androidController.setMediaPlaybackRequiresUserGesture(false);
+      if (Platform.isIOS) {
         controller!.enableZoom(true);
       }
 
@@ -2327,9 +2259,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
               });
             }
 
-            if (Platform.isAndroid) {
+            if (Platform.isIOS) {
               Future.delayed(const Duration(milliseconds: 500), () {
-                _injectAndroidFix();
+                _injectIOSFix();
               });
             }
           },
@@ -2366,8 +2298,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
               _autoFitPageToScreen();
             }
 
-            if (Platform.isAndroid) {
-              _injectAndroidFix();
+            if (Platform.isIOS) {
+              _injectIOSFix();
             }
           },
           onWebResourceError: (WebResourceError error) {
@@ -2514,13 +2446,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  Future<void> _injectAndroidFix() async {
+  Future<void> _injectIOSFix() async {
     if (controller == null) return;
 
     const String jsCode = '''
       (function() {
-        if (window.androidFixInjected) { return; }
-        window.androidFixInjected = true;
+        if (window.iosFixInjected) { return; }
+        window.iosFixInjected = true;
         
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
@@ -2542,25 +2474,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    if (Platform.isAndroid) {
-      try {
-        final androidInfo = await DeviceInfoPlugin().androidInfo;
-        final sdkInt = androidInfo.version.sdkInt;
+    try {
+      final status = await Permission.photos.status;
+      if (status.isGranted) return true;
 
-        if (sdkInt >= 29) {
-          return true;
-        }
-
-        final status = await Permission.storage.status;
-        if (status.isGranted) return true;
-
-        final result = await Permission.storage.request();
-        return result.isGranted;
-      } catch (e) {
-        return false;
-      }
+      final result = await Permission.photos.request();
+      return result.isGranted;
+    } catch (e) {
+      return false;
     }
-    return true;
   }
 
   Future<Uint8List> _captureWebView() async {
@@ -2569,11 +2491,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
       return Uint8List.fromList(List<int>.from(bytes));
     }
 
-    RenderRepaintBoundary boundary =
-        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-    ui.Image img = await boundary.toImage(pixelRatio: 6.0);
-    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
+    // This will never be reached since we're iOS only, but keeping for compatibility
+    throw UnsupportedError('Screenshot not supported on this platform');
   }
 
   Future<void> _savePageAsImage() async {
@@ -2807,7 +2726,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعب��ة وخدمات الغاز',
+              'الشركة العامة لتعبئة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
