@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -24,8 +25,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'notification_service.dart';
 import 'firebase_options.dart';
-
-import 'package:http/http.dart' as http;
 
 /// =========================
 /// REMOTE LOGGER - للمستخدمين بدون Xcode
@@ -701,7 +700,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     if (savedFinal != null) {
       final list = jsonDecode(savedFinal);
       await RemoteLogger.log(
-          '✅✅✅ [BG] Step 6: VERIFIED! Total: ${list.length} notifications');
+          '✅✅✅ [BG] Step 6: VERIFIED! ${list.length} notifications in storage ✅✅✅');
       await RemoteLogger.log('   - First ID: ${list[0]['id']}');
       await RemoteLogger.log('   - First Title: ${list[0]['title']}');
     } else {
@@ -722,8 +721,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   } catch (e, stackTrace) {
     await RemoteLogger.log('❌❌❌ [BG] ERROR ❌❌❌');
     await RemoteLogger.log('❌ Error: $e');
-    await RemoteLogger.log('❌ Stack: $stackTrace');
-    await RemoteLogger.log('❌❌❌❌❌❌❌❌❌❌❌❌❌');
+    await RemoteLogger.log('❌ Stack trace: $stackTrace');
+    await RemoteLogger.log('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌');
   }
 }
 
@@ -1669,7 +1668,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '4. حماية البيانات',
-                      'تتخذ الشركة العامة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
+                      'تتخذ الشركة ال��امة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
                     ),
                     _buildPrivacySection(
                       '5. مشاركة البيانات',
@@ -2077,7 +2076,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعارات الجديدة هنا',
+                : 'ستظهر الإشعا��ات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2886,91 +2885,94 @@ class _WebViewScreenState extends State<WebViewScreen> {
             backgroundColor: Colors.white,
             child: Padding(
               padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00BFA5).withOpacity(0.1),
-                      shape: BoxShape.circle,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00BFA5).withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.logout,
+                        size: 48,
+                        color: Color(0xFF00BFA5),
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.logout,
-                      size: 48,
-                      color: Color(0xFF00BFA5),
+                    const SizedBox(height: 20),
+                    Text(
+                      'الخروج من التطبيق',
+                      style: GoogleFonts.cairo(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'الخروج من التطبيق',
-                    style: GoogleFonts.cairo(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                    const SizedBox(height: 12),
+                    Text(
+                      'هل تريد الخروج من التطبيق؟',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        color: Colors.black54,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'هل تريد الخروج من التطبيق؟',
-                    style: GoogleFonts.cairo(
-                      fontSize: 16,
-                      color: Colors.black54,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.of(context).pop(true);
-                            SystemNavigator.pop();
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00BFA5),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(context).pop(true);
+                              SystemNavigator.pop();
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00BFA5),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
                             ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            'نعم',
-                            style: GoogleFonts.cairo(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                            child: Text(
+                              'نعم',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(false),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.black54,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.black54,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              side: BorderSide(
+                                  color: Colors.grey.shade300, width: 1.5),
                             ),
-                            side: BorderSide(
-                                color: Colors.grey.shade300, width: 1.5),
-                          ),
-                          child: Text(
-                            'لا',
-                            style: GoogleFonts.cairo(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
+                            child: Text(
+                              'لا',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -3003,7 +3005,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعب��ة وخدمات الغاز',
+              'الشركة العامة لتعبئة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
