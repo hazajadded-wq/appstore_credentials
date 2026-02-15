@@ -496,17 +496,62 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - SIMPLIFIED
-/// Only for wake-up signal
-/// All data fetched from server when app opens
+/// FCM BACKGROUND HANDLER - PROPER IMPLEMENTATION
+/// Saves notifications to local storage even in background/terminated
+/// Based on best practices from GitHub examples
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Simple logging only
-  // FCM will display the notification automatically
-  // All data will be fetched from MySQL when user opens the app
-  debugPrint('🔔 [Push] Notification received: ${message.notification?.title}');
+  try {
+    // Initialize Firebase
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    
+    debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+    debugPrint('🌙 [BG] Notification: ${message.notification?.title}');
+    debugPrint('🌙 [BG] Data: ${message.data}');
+
+    // Create notification item from message
+    final item = NotificationItem.fromFirebaseMessage(message);
+    
+    // CRITICAL: Save to local storage immediately
+    // This ensures data persists even if app is killed
+    await NotificationService.saveToLocalDisk(item.toJson());
+    
+    debugPrint('✅ [BG] Saved to local storage: ${item.title}');
+    
+    // Also show local notification on iOS
+    if (Platform.isIOS) {
+      await _showLocalNotificationiOS(message);
+    }
+  } catch (e) {
+    debugPrint('❌ [BG] Error: $e');
+  }
+}
+
+/// Show local notification on iOS in background
+Future<void> _showLocalNotificationiOS(RemoteMessage message) async {
+  try {
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+    
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      message.data['title'] ?? message.notification?.title ?? 'إشعار جديد',
+      message.data['body'] ?? message.notification?.body ?? '',
+      const NotificationDetails(iOS: iosDetails),
+      payload: jsonEncode(message.data),
+    );
+    
+    debugPrint('✅ [BG] iOS local notification shown');
+  } catch (e) {
+    debugPrint('❌ [BG] iOS notification error: $e');
+  }
 }
 
 /// =========================
