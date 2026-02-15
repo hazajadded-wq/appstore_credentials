@@ -171,49 +171,104 @@ class NotificationService {
   }
 
   // ============================================
-  // CRITICAL: Save to Local Disk (Safe for Background)
+  // CRITICAL: Save to Local Disk - WITH EXTENSIVE LOGGING
   // Used by background handler to store notifications
   // ============================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
+    print('💾 ========================================');
+    print('💾 [NotificationService] SAVE TO LOCAL DISK');
+    print('💾 ========================================');
 
-      // Get existing list
+    try {
+      print('💾 [Service] Notification to save:');
+      print('   - ID: ${newNotificationJson['id']}');
+      print('   - Title: ${newNotificationJson['title']}');
+      print('   - Body: ${newNotificationJson['body']}');
+      print('   - Type: ${newNotificationJson['type']}');
+
+      print('💾 [Service] Step 1: Getting SharedPreferences...');
+      final prefs = await SharedPreferences.getInstance();
+      print('✅ [Service] Step 1: Got SharedPreferences');
+
+      print('💾 [Service] Step 2: Reloading preferences...');
+      await prefs.reload();
+      print('✅ [Service] Step 2: Reloaded');
+
+      print('💾 [Service] Step 3: Reading existing data...');
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
+      print('✅ [Service] Step 3: Found ${list.length} existing notifications');
 
-      // Add new item to TOP of list
+      print('💾 [Service] Step 4: Processing new notification...');
       final newId = newNotificationJson['id'].toString();
+      print('   - New notification ID: $newId');
 
-      // Remove if exists (deduplicate)
+      print('💾 [Service] Step 5: Removing duplicates...');
+      final beforeCount = list.length;
       list.removeWhere((item) => item['id'].toString() == newId);
-
-      // Insert at top
-      list.insert(0, newNotificationJson);
-
-      // Limit to 200
-      if (list.length > 200) {
-        list = list.sublist(0, 200);
+      final afterCount = list.length;
+      if (beforeCount != afterCount) {
+        print('   - Removed ${beforeCount - afterCount} duplicate(s)');
+      } else {
+        print('   - No duplicates found');
       }
 
-      await prefs.setString(storageKey, jsonEncode(list));
-      debugPrint('💾 [NotificationService] Saved notification $newId to disk');
-      debugPrint('💾 [NotificationService] Total stored: ${list.length}');
+      print('💾 [Service] Step 6: Inserting at top...');
+      list.insert(0, newNotificationJson);
+      print('✅ [Service] Step 6: Inserted. Total now: ${list.length}');
+
+      print('💾 [Service] Step 7: Limiting to 200...');
+      if (list.length > 200) {
+        list = list.sublist(0, 200);
+        print('   - Trimmed to 200');
+      } else {
+        print('   - No trimming needed (${list.length} items)');
+      }
+
+      print('💾 [Service] Step 8: Converting to JSON string...');
+      final jsonToSave = jsonEncode(list);
+      print(
+          '✅ [Service] Step 8: JSON string created (${jsonToSave.length} chars)');
+
+      print('💾 [Service] Step 9: SAVING TO SHAREDPREFERENCES...');
+      final saveResult = await prefs.setString(storageKey, jsonToSave);
+      print('✅✅✅ [Service] Step 9: SAVE RESULT = $saveResult ✅✅✅');
+
+      print('💾 [Service] Step 10: Verifying save...');
+      final verification = prefs.getString(storageKey);
+      if (verification != null) {
+        final verifyList = jsonDecode(verification);
+        print(
+            '✅✅✅ [Service] Step 10: VERIFIED! ${verifyList.length} notifications in storage ✅✅✅');
+        print('   - First notification ID: ${verifyList[0]['id']}');
+        print('   - First notification title: ${verifyList[0]['title']}');
+      } else {
+        print('❌❌❌ [Service] Step 10: VERIFICATION FAILED! ❌❌❌');
+      }
+
+      print('💾 ========================================');
+      print('💾 [Service] SAVE COMPLETED SUCCESSFULLY');
+      print('💾 Total notifications stored: ${list.length}');
+      print('💾 ========================================');
 
       // Try to sync to server if we have connection
       if (await hasInternetConnection()) {
+        print('🌐 [Service] Has internet, syncing to server...');
         saveNotificationToServer(newNotificationJson);
       } else {
+        print('📡 [Service] No internet, adding to pending sync');
         _pendingServerSync.add(newNotificationJson);
         if (_pendingServerSync.length > 50) {
           _pendingServerSync =
               _pendingServerSync.sublist(_pendingServerSync.length - 50);
         }
       }
-    } catch (e) {
-      debugPrint('❌ [NotificationService] Save Failed: $e');
+    } catch (e, stackTrace) {
+      print('❌❌❌ [Service] SAVE FAILED ❌❌❌');
+      print('❌ Error: $e');
+      print('❌ Stack trace: $stackTrace');
+      print('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌');
     }
   }
 
@@ -254,27 +309,64 @@ class NotificationService {
   }
 
   // ============================================
-  // Get local notifications
+  // Get local notifications - WITH EXTENSIVE LOGGING
   // ============================================
   static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
+    print('📂 ========================================');
+    print('📂 [NotificationService] GET LOCAL NOTIFICATIONS');
+    print('📂 ========================================');
 
+    try {
+      print('📂 [Service] Step 1: Getting SharedPreferences instance...');
+      final prefs = await SharedPreferences.getInstance();
+      print('✅ [Service] Step 1: Got SharedPreferences');
+
+      print('📂 [Service] Step 2: Reloading preferences...');
+      await prefs.reload();
+      print('✅ [Service] Step 2: Reloaded');
+
+      print('📂 [Service] Step 3: Reading key "$storageKey"...');
       final jsonStr = prefs.getString(storageKey);
 
       if (jsonStr != null) {
+        print(
+            '✅ [Service] Step 3: Found data! Length: ${jsonStr.length} chars');
+
+        print('📂 [Service] Step 4: Decoding JSON...');
         final List<dynamic> list = jsonDecode(jsonStr);
+        print('✅ [Service] Step 4: Decoded ${list.length} items');
+
+        print('📂 [Service] Step 5: Converting to Map...');
         final notifications =
             list.map((e) => Map<String, dynamic>.from(e)).toList();
-        debugPrint(
-            '📂 [NotificationService] Loaded ${notifications.length} from disk');
+        print(
+            '✅ [Service] Step 5: Converted ${notifications.length} notifications');
+
+        if (notifications.isNotEmpty) {
+          print('📂 [Service] First notification:');
+          print('   - ID: ${notifications[0]['id']}');
+          print('   - Title: ${notifications[0]['title']}');
+          print('   - Type: ${notifications[0]['type']}');
+        }
+
+        print('📂 ========================================');
+        print('📂 [Service] RETURNING ${notifications.length} NOTIFICATIONS');
+        print('📂 ========================================');
+
         return notifications;
+      } else {
+        print('⚠️⚠️⚠️ [Service] NO DATA FOUND IN SHAREDPREFERENCES! ⚠️⚠️⚠️');
+        print('⚠️ Key "$storageKey" is NULL or empty');
+        print('⚠️ This means nothing was saved OR save failed');
       }
-    } catch (e) {
-      debugPrint('❌ [NotificationService] Load failed: $e');
+    } catch (e, stackTrace) {
+      print('❌❌❌ [Service] LOAD FAILED ❌❌❌');
+      print('❌ Error: $e');
+      print('❌ Stack trace: $stackTrace');
+      print('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌');
     }
 
+    print('📂 [Service] Returning empty list');
     return [];
   }
 
