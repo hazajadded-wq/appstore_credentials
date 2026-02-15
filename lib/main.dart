@@ -417,7 +417,8 @@ class NotificationManager extends ChangeNotifier {
 
   void _startPeriodicSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) { // Increased frequency for real-time
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      // Increased frequency for real-time
       debugPrint('⏰ [Manager] Periodic sync');
       fetchFromMySQL();
     });
@@ -505,21 +506,22 @@ void _navigateToNotifications() {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     // Initialize Firebase
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-    
+    await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform);
+
     debugPrint('🌙 [BG] Message Received: ${message.messageId}');
     debugPrint('🌙 [BG] Notification: ${message.notification?.title}');
     debugPrint('🌙 [BG] Data: ${message.data}');
 
     // Create notification item from message
     final item = NotificationItem.fromFirebaseMessage(message);
-    
+
     // CRITICAL: Save to local storage immediately
     // This ensures data persists even if app is killed
     await NotificationService.saveToLocalDisk(item.toJson());
-    
+
     debugPrint('✅ [BG] Saved to local storage: ${item.title}');
-    
+
     // Also show local notification on iOS
     if (Platform.isIOS) {
       await _showLocalNotificationiOS(message);
@@ -530,24 +532,26 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 /// Show local notification on iOS in background
+/// Show local notification on iOS in background
 Future<void> _showLocalNotificationiOS(RemoteMessage message) async {
   try {
     final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-    
+
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
     );
-    
+
     await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      message.data['title'] ?? message.notification?.title ?? 'إشعار جديد',
-      message.data['body'] ?? message.notification?.body ?? '',
-      const NotificationDetails(iOS: iosDetails),
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title:
+          message.data['title'] ?? message.notification?.title ?? 'إشعار جديد',
+      body: message.data['body'] ?? message.notification?.body ?? '',
+      notificationDetails: const NotificationDetails(iOS: iosDetails),
       payload: jsonEncode(message.data),
     );
-    
+
     debugPrint('✅ [BG] iOS local notification shown');
   } catch (e) {
     debugPrint('❌ [BG] iOS notification error: $e');
@@ -597,7 +601,6 @@ class AppLifecycleHandler extends StatefulWidget {
 
 class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
     with WidgetsBindingObserver {
-
   @override
   void initState() {
     super.initState();
@@ -640,7 +643,8 @@ void main() async {
     // ============================================
     // CRITICAL: Enable foreground notifications for iOS
     // ============================================
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
       alert: true,
       badge: true,
       sound: true,
@@ -2637,7 +2641,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     if (isOnLoginPage) {
       return false;
     }
-    
+
     if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
@@ -2786,17 +2790,19 @@ class _WebViewScreenState extends State<WebViewScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          leading: isOnLoginPage ? null : IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              if (canGoBack && controller != null) {
-                controller!.goBack();
-              } else {
-                final shouldExit = await _showExitDialog();
-                if (shouldExit == true) SystemNavigator.pop();
-              }
-            },
-          ),
+          leading: isOnLoginPage
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () async {
+                    if (canGoBack && controller != null) {
+                      controller!.goBack();
+                    } else {
+                      final shouldExit = await _showExitDialog();
+                      if (shouldExit == true) SystemNavigator.pop();
+                    }
+                  },
+                ),
           automaticallyImplyLeading: false,
           title: FittedBox(
             fit: BoxFit.scaleDown,
