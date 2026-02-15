@@ -9,7 +9,7 @@ class NotificationService {
   // ============================================
   // API CONFIGURATION
   // ============================================
-  static const String baseUrl = 'https://lpgaspro.org/scgfs_notifications';
+  static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
   static const String storageKey = 'stored_notifications_final_v2';
 
