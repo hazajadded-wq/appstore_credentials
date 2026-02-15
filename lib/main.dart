@@ -417,8 +417,7 @@ class NotificationManager extends ChangeNotifier {
 
   void _startPeriodicSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      // Increased frequency for real-time
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) { // Increased frequency for real-time
       debugPrint('⏰ [Manager] Periodic sync');
       fetchFromMySQL();
     });
@@ -497,26 +496,17 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - FIXED
+/// FCM BACKGROUND HANDLER - SIMPLIFIED
+/// Only for wake-up signal
+/// All data fetched from server when app opens
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-  debugPrint('🌙 [BG] Notification: ${message.notification?.title}');
-  debugPrint('🌙 [BG] Data Title: ${message.data['title']}');
-  debugPrint('🌙 [BG] Data Body: ${message.data['body']}');
-
-  final item = NotificationItem.fromFirebaseMessage(message);
-
-  // Save to disk
-  await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.id}');
-
-  // NOTE: FCM automatically displays notification from the "notification" payload
-  // No need to manually show notification if PHP sends correct payload
-  // Check scgfs_ultra_modern.php to ensure it sends "notification" block
+  // Simple logging only
+  // FCM will display the notification automatically
+  // All data will be fetched from MySQL when user opens the app
+  debugPrint('🔔 [Push] Notification received: ${message.notification?.title}');
 }
 
 /// =========================
@@ -562,6 +552,7 @@ class AppLifecycleHandler extends StatefulWidget {
 
 class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
     with WidgetsBindingObserver {
+
   @override
   void initState() {
     super.initState();
@@ -604,8 +595,7 @@ void main() async {
     // ============================================
     // CRITICAL: Enable foreground notifications for iOS
     // ============================================
-    await FirebaseMessaging.instance
-        .setForegroundNotificationPresentationOptions(
+    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
       alert: true,
       badge: true,
       sound: true,
@@ -2602,7 +2592,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     if (isOnLoginPage) {
       return false;
     }
-
+    
     if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
@@ -2751,19 +2741,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          leading: isOnLoginPage
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () async {
-                    if (canGoBack && controller != null) {
-                      controller!.goBack();
-                    } else {
-                      final shouldExit = await _showExitDialog();
-                      if (shouldExit == true) SystemNavigator.pop();
-                    }
-                  },
-                ),
+          leading: isOnLoginPage ? null : IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              if (canGoBack && controller != null) {
+                controller!.goBack();
+              } else {
+                final shouldExit = await _showExitDialog();
+                if (shouldExit == true) SystemNavigator.pop();
+              }
+            },
+          ),
           automaticallyImplyLeading: false,
           title: FittedBox(
             fit: BoxFit.scaleDown,
