@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -25,40 +24,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'notification_service.dart';
 import 'firebase_options.dart';
-
-/// =========================
-/// REMOTE LOGGER - للمستخدمين بدون Xcode
-/// يرسل logs مباشرة للسيرفر
-/// =========================
-class RemoteLogger {
-  static const String logUrl =
-      'https://lpgaspro.org/scgfs_notifications/debug_logger.php';
-  static bool enabled = true; // يمكن تعطيله في production
-
-  static Future<void> log(String message) async {
-    if (!enabled) return;
-
-    // Print locally
-    print(message);
-
-    // Send to server
-    try {
-      await http
-          .post(
-            Uri.parse(logUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'message': message,
-              'device': Platform.isIOS ? 'iOS' : 'Android',
-            }),
-          )
-          .timeout(Duration(seconds: 2));
-    } catch (e) {
-      // Silent fail - don't break app if logging fails
-      print('⚠️ Failed to send log to server: $e');
-    }
-  }
-}
 
 /// =========================
 /// DATA MODEL
@@ -193,112 +158,46 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
   bool _isSyncing = false;
-  Timer? _syncTimer;
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
-  // ============================================
-  // INITIALIZE - SERVER-FIRST APPROACH
-  // MySQL is the single source of truth
-  // Local storage is just a cache
-  // ============================================
-  Future<void> initialize() async {
-    await RemoteLogger.log('🚀 ========================================');
-    await RemoteLogger.log('🚀 [Manager] INITIALIZING (Server-First)');
-    await RemoteLogger.log('🚀 ========================================');
+  static const String _storageKey = 'stored_notifications_final';
 
-    // Step 1: Load from local cache (fast, but may be outdated)
-    await RemoteLogger.log('📂 [Manager] Step 1: Loading from local cache...');
-    await loadNotifications();
-    await RemoteLogger.log(
-        '✅ [Manager] Step 1: Loaded ${_notifications.length} from cache');
-
-    // Step 2: Fetch from MySQL (authoritative source)
-    await RemoteLogger.log(
-        '🌐 [Manager] Step 2: Fetching from MySQL (authoritative)...');
-    await fetchFromMySQL();
-    await RemoteLogger.log('✅ [Manager] Step 2: MySQL fetch completed');
-
-    // Step 3: Start periodic sync
-    await RemoteLogger.log('⏰ [Manager] Step 3: Starting periodic sync...');
-    _startPeriodicSync();
-    await RemoteLogger.log('✅ [Manager] Step 3: Periodic sync started');
-
-    await RemoteLogger.log('🚀 ========================================');
-    await RemoteLogger.log('🚀 [Manager] INITIALIZATION COMPLETE');
-    await RemoteLogger.log('🚀 Total notifications: ${_notifications.length}');
-    await RemoteLogger.log('🚀 ========================================');
-  }
-
-  // ============================================
-  // FORCE LOAD FROM DISK - WITH REMOTE LOGGING
-  // ============================================
+  /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
-    await RemoteLogger.log('📂 ========================================');
-    await RemoteLogger.log('📂 [Manager] LOADING FROM DISK');
-    await RemoteLogger.log('📂 ========================================');
-
     try {
-      await RemoteLogger.log(
-          '📂 [Manager] Step 1: Getting local notifications...');
-      final localList = await NotificationService.getLocalNotifications();
-      await RemoteLogger.log(
-          '✅ [Manager] Step 1: Got ${localList.length} notifications');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
-      if (localList.isNotEmpty) {
-        await RemoteLogger.log('📂 [Manager] First notification:');
-        await RemoteLogger.log('   - ID: ${localList[0]['id']}');
-        await RemoteLogger.log('   - Title: ${localList[0]['title']}');
-      } else {
-        await RemoteLogger.log('⚠️ [Manager] Local storage is EMPTY!');
+      final jsonStr = prefs.getString(_storageKey);
+
+      if (jsonStr != null) {
+        final list = jsonDecode(jsonStr) as List;
+        _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
+        _sortAndCount();
+        notifyListeners();
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       }
-
-      await RemoteLogger.log('📂 [Manager] Step 2: Converting to objects...');
-      _notifications =
-          localList.map((e) => NotificationItem.fromJson(e)).toList();
-      await RemoteLogger.log(
-          '✅ [Manager] Step 2: Converted ${_notifications.length} objects');
-
-      _updateUnreadCount();
-      await RemoteLogger.log('✅ [Manager] Unread count: $_unreadCount');
-
-      notifyListeners();
-      await RemoteLogger.log('✅ [Manager] Listeners notified');
-
-      await RemoteLogger.log('📂 ========================================');
-      await RemoteLogger.log(
-          '📂 [Manager] LOAD COMPLETE: ${_notifications.length} notifications');
-      await RemoteLogger.log('📂 ========================================');
-    } catch (e, stackTrace) {
-      await RemoteLogger.log('❌❌❌ [Manager] LOAD ERROR ❌❌❌');
-      await RemoteLogger.log('❌ Error: $e');
-      await RemoteLogger.log('❌ Stack: $stackTrace');
+    } catch (e) {
+      debugPrint('❌ [Manager] Load Error: $e');
     }
   }
 
-  // ============================================
-  // CRITICAL FIXED: SYNC FROM SERVER
-  // Called when app opens, resumes, or periodically
-  // ============================================
+  /// SYNC FROM SERVER AND DISK
   Future<void> fetchFromMySQL() async {
-    if (_isSyncing) {
-      debugPrint('⏳ [Manager] Already syncing, skipping...');
-      return;
-    }
-
+    if (_isSyncing) return;
     _isSyncing = true;
-    notifyListeners();
+    Future.microtask(() => notifyListeners());
 
     try {
-      debugPrint('🌐 [Manager] Fetching from MySQL...');
-
       final serverListRaw =
           await NotificationService.getAllNotifications(limit: 100);
 
+      await loadNotifications();
+
       if (serverListRaw.isEmpty) {
-        debugPrint('⚠️ [Manager] No notifications from server');
         _isSyncing = false;
         notifyListeners();
         return;
@@ -307,28 +206,16 @@ class NotificationManager extends ChangeNotifier {
       final serverItems =
           serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
-      // Merge with existing notifications
-      final Map<String, NotificationItem> mergedMap = {};
+      final Map<String, NotificationItem> localMap = {
+        for (var item in _notifications) item.id: item
+      };
 
-      // Add existing notifications first
-      for (var item in _notifications) {
-        mergedMap[item.id] = item;
-      }
-
-      // Add/update with server notifications
       bool hasChanges = false;
-      for (var serverItem in serverItems) {
-        final existing = mergedMap[serverItem.id];
 
-        if (existing == null) {
-          // New notification from server
-          mergedMap[serverItem.id] = serverItem;
-          hasChanges = true;
-          debugPrint(
-              '➕ [Manager] New notification from server: ${serverItem.id}');
-        } else {
-          // Update existing but PRESERVE read status
-          mergedMap[serverItem.id] = NotificationItem(
+      for (var serverItem in serverItems) {
+        if (localMap.containsKey(serverItem.id)) {
+          final localItem = localMap[serverItem.id]!;
+          localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
             body: serverItem.body,
@@ -336,149 +223,83 @@ class NotificationManager extends ChangeNotifier {
             timestamp: serverItem.timestamp,
             data: serverItem.data,
             type: serverItem.type,
-            isRead: existing.isRead, // CRITICAL: Keep read status
+            isRead: localItem.isRead,
           );
+        } else {
+          localMap[serverItem.id] = serverItem;
+          hasChanges = true;
         }
       }
 
-      // Convert back to list and sort
-      _notifications = mergedMap.values.toList();
+      _notifications = localMap.values.toList();
       _sortAndCount();
 
-      // Limit to 200
       if (_notifications.length > 200) {
-        _notifications = _notifications.sublist(0, 200);
+        _notifications = _notifications.take(200).toList();
       }
 
       if (hasChanges) {
         await _saveToDisk();
-        debugPrint(
-            '✅ [Manager] Updated with server data, total: ${_notifications.length}');
       }
-    } catch (e, stacktrace) {
+    } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
-      debugPrint('❌ [Manager] Stacktrace: $stacktrace');
     } finally {
       _isSyncing = false;
       notifyListeners();
     }
   }
 
-  // ============================================
-  // CRITICAL FIXED: Add Firebase Message
-  // Called when notification received while app is open
-  // ============================================
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
-
-    // FIX: Don't ignore any notifications - show them all
-    debugPrint('📨 [Manager] Received Firebase message: ${item.id}');
-    debugPrint('📨 [Manager] Title: ${item.title}, Body: ${item.body}');
-
-    // Remove if exists (deduplicate)
     _notifications.removeWhere((n) => n.id == item.id);
-
-    // Insert at top
     _notifications.insert(0, item);
-
-    _updateUnreadCount();
+    _sortAndCount();
     await _saveToDisk();
     notifyListeners();
-
-    debugPrint(
-        '✅ [Manager] Added notification, total: ${_notifications.length}, unread: $_unreadCount');
   }
 
-  // ============================================
-  // CRITICAL: Add notification from iOS native
-  // ============================================
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    try {
-      final item = NotificationItem.fromJson(data);
-
-      debugPrint('📱 [Manager] Received iOS notification: ${item.id}');
-      debugPrint('📱 [Manager] Title: ${item.title}, Body: ${item.body}');
-
-      // Remove if exists (deduplicate)
-      _notifications.removeWhere((n) => n.id == item.id);
-
-      // Insert at top
-      _notifications.insert(0, item);
-
-      _updateUnreadCount();
-      await _saveToDisk();
-
-      // Save to server
-      await NotificationService.saveNotificationToServer(item.toJson());
-
-      notifyListeners();
-
-      debugPrint(
-          '✅ [Manager] Added iOS notification, total: ${_notifications.length}');
-    } catch (e) {
-      debugPrint('❌ [Manager] Error adding iOS notification: $e');
-    }
+    final item = NotificationItem.fromJson(data);
+    _notifications.removeWhere((n) => n.id == item.id);
+    _notifications.insert(0, item);
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
   }
 
-  // ============================================
-  // MARK AS READ
-  // ============================================
   Future<void> markAsRead(String id) async {
     final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1 && !_notifications[index].isRead) {
+    if (index != -1) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
       await _saveToDisk();
       notifyListeners();
-
-      // Update in background
-      NotificationService.markAsRead(id);
     }
   }
 
-  // ============================================
-  // MARK ALL AS READ
-  // ============================================
   Future<void> markAllAsRead() async {
-    bool changed = false;
-    for (var n in _notifications) {
-      if (!n.isRead) {
-        n.isRead = true;
-        changed = true;
-      }
+    for (var notification in _notifications) {
+      notification.isRead = true;
     }
-    if (changed) {
-      _updateUnreadCount();
-      await _saveToDisk();
-      notifyListeners();
-    }
+    _updateUnreadCount();
+    await _saveToDisk();
+    notifyListeners();
   }
 
-  // ============================================
-  // DELETE NOTIFICATION
-  // ============================================
   Future<void> deleteNotification(String id) async {
     _notifications.removeWhere((n) => n.id == id);
     _updateUnreadCount();
     await _saveToDisk();
-    await NotificationService.deleteNotification(id);
     notifyListeners();
   }
 
-  // ============================================
-  // CLEAR ALL
-  // ============================================
   Future<void> clearAllNotifications() async {
     _notifications.clear();
     _updateUnreadCount();
     await _saveToDisk();
-    await NotificationService.clearAllNotifications();
     notifyListeners();
   }
 
-  // ============================================
-  // SEARCH
-  // ============================================
   List<NotificationItem> searchNotifications(String query) {
     if (query.isEmpty) return _notifications;
     final q = query.toLowerCase();
@@ -489,9 +310,6 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
-  // ============================================
-  // PRIVATE METHODS
-  // ============================================
   void _sortAndCount() {
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
@@ -504,26 +322,13 @@ class NotificationManager extends ChangeNotifier {
   Future<void> _saveToDisk() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
-      await prefs.setString(NotificationService.storageKey, jsonStr);
+      await prefs.setString(_storageKey, jsonStr);
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
-  }
-
-  void _startPeriodicSync() {
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      // Increased frequency for real-time
-      debugPrint('⏰ [Manager] Periodic sync');
-      fetchFromMySQL();
-    });
-  }
-
-  void dispose() {
-    _syncTimer?.cancel();
-    super.dispose();
   }
 }
 
@@ -599,159 +404,35 @@ void _navigateToNotifications() {
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await RemoteLogger.log('🌙 ========================================');
-  await RemoteLogger.log('🌙 [BG HANDLER] STARTED');
-  await RemoteLogger.log('🌙 ========================================');
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
 
-  try {
-    // Initialize Firebase
-    await RemoteLogger.log('🌙 [BG] Step 1: Initializing Firebase...');
-    await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform);
-    await RemoteLogger.log('✅ [BG] Step 1: Firebase initialized');
+  // VALIDATION: Only save valid notifications with actual content
+  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.title ?? '').isNotEmpty;
+  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.body ?? '').isNotEmpty;
 
-    await RemoteLogger.log('🌙 [BG] Step 2: Message data:');
-    await RemoteLogger.log('   - Message ID: ${message.messageId}');
-    await RemoteLogger.log('   - Notification: ${message.notification?.title}');
-    await RemoteLogger.log('   - Data: ${message.data}');
-    await RemoteLogger.log(
-        '   - Platform: ${Platform.isIOS ? "iOS" : "Android"}');
-
-    // ============================================
-    // DUPLICATE FILTERING
-    // Android: Ignore duplicate messages
-    // iOS: Accept duplicates as backup
-    // ============================================
-    final isDuplicate = message.data['is_duplicate'] == 'true' ||
-        message.data['is_duplicate'] == true;
-
-    if (isDuplicate) {
-      await RemoteLogger.log('🔄 [BG] This is a DUPLICATE message');
-
-      if (Platform.isAndroid) {
-        // Android: IGNORE duplicates (we already received the first message)
-        await RemoteLogger.log(
-            '🤖 [BG] Platform: Android - IGNORING duplicate message');
-        await RemoteLogger.log('✅ [BG] Duplicate ignored on Android');
-        await RemoteLogger.log(
-            '🌙 [BG HANDLER] COMPLETED (Android duplicate ignored)');
-        return; // Exit early
-      } else {
-        // iOS: ACCEPT duplicates as backup (in case first message failed)
-        await RemoteLogger.log(
-            '🍎 [BG] Platform: iOS - Checking if original was saved...');
-
-        final prefs = await SharedPreferences.getInstance();
-        final saved = prefs.getString('stored_notifications_final_v2');
-
-        if (saved != null) {
-          final list = jsonDecode(saved);
-          final originalId = message.data['original_id']?.toString() ?? '';
-
-          // Check if original exists
-          bool originalExists = false;
-          for (var item in list) {
-            if (item['id']?.toString() == originalId) {
-              originalExists = true;
-              break;
-            }
-          }
-
-          if (originalExists) {
-            await RemoteLogger.log(
-                '✅ [BG] Original notification already saved - skipping duplicate');
-            await RemoteLogger.log(
-                '🌙 [BG HANDLER] COMPLETED (iOS duplicate not needed)');
-            return; // Original exists, don't need duplicate
-          } else {
-            await RemoteLogger.log(
-                '⚠️ [BG] Original NOT found - saving duplicate as backup!');
-            await RemoteLogger.log(
-                '🍎 [BG] This duplicate will save iOS reliability!');
-          }
-        } else {
-          await RemoteLogger.log(
-              '⚠️ [BG] Storage empty - saving duplicate as backup');
-        }
-      }
-    }
-
-    // Create notification item
-    await RemoteLogger.log('🌙 [BG] Step 3: Creating NotificationItem...');
-    final item = NotificationItem.fromFirebaseMessage(message);
-    await RemoteLogger.log('✅ [BG] Step 3: Created:');
-    await RemoteLogger.log('   - ID: ${item.id}');
-    await RemoteLogger.log('   - Title: ${item.title}');
-
-    // Convert to JSON
-    await RemoteLogger.log('🌙 [BG] Step 4: Converting to JSON...');
-    final jsonData = item.toJson();
-    await RemoteLogger.log('✅ [BG] Step 4: JSON ready');
-
-    // Save to SharedPreferences
-    await RemoteLogger.log('🌙 [BG] Step 5: Saving to SharedPreferences...');
-    await NotificationService.saveToLocalDisk(jsonData);
-    await RemoteLogger.log('✅ [BG] Step 5: Save function called');
-
-    // Verify save
-    await RemoteLogger.log('🌙 [BG] Step 6: Verifying save...');
-    final prefs = await SharedPreferences.getInstance();
-    final savedFinal = prefs.getString('stored_notifications_final_v2');
-    if (savedFinal != null) {
-      final list = jsonDecode(savedFinal);
-      await RemoteLogger.log(
-          '✅✅✅ [BG] Step 6: VERIFIED! ${list.length} notifications in storage ✅✅✅');
-      await RemoteLogger.log('   - First ID: ${list[0]['id']}');
-      await RemoteLogger.log('   - First Title: ${list[0]['title']}');
-    } else {
-      await RemoteLogger.log(
-          '❌❌❌ [BG] Step 6: VERIFICATION FAILED - Nothing saved!');
-    }
-
-    // Show local notification on iOS (only for non-duplicates)
-    if (Platform.isIOS && !isDuplicate) {
-      await RemoteLogger.log('🌙 [BG] Step 7: Showing iOS notification...');
-      await _showLocalNotificationiOS(message);
-      await RemoteLogger.log('✅ [BG] Step 7: iOS notification shown');
-    }
-
-    await RemoteLogger.log('🌙 ========================================');
-    await RemoteLogger.log('🌙 [BG HANDLER] COMPLETED SUCCESSFULLY');
-    await RemoteLogger.log('🌙 ========================================');
-  } catch (e, stackTrace) {
-    await RemoteLogger.log('❌❌❌ [BG] ERROR ❌❌❌');
-    await RemoteLogger.log('❌ Error: $e');
-    await RemoteLogger.log('❌ Stack trace: $stackTrace');
-    await RemoteLogger.log('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌');
+  // If notification has no real content, skip saving it
+  if (!hasTitle && !hasBody) {
+    debugPrint('🌙 [BG] Skipping empty notification - no title or body');
+    return;
   }
+
+  final item = NotificationItem.fromFirebaseMessage(message);
+
+  // Double check: Don't save if title is still the default or empty
+  if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    debugPrint('🌙 [BG] Skipping notification with default/empty title');
+    return;
+  }
+
+  await NotificationService.saveToLocalDisk(item.toJson());
+  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title}');
 }
 
 /// Show local notification on iOS in background
 /// Show local notification on iOS in background
-Future<void> _showLocalNotificationiOS(RemoteMessage message) async {
-  try {
-    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-
-    const iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    await flutterLocalNotificationsPlugin.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title:
-          message.data['title'] ?? message.notification?.title ?? 'إشعار جديد',
-      body: message.data['body'] ?? message.notification?.body ?? '',
-      notificationDetails: const NotificationDetails(iOS: iosDetails),
-      payload: jsonEncode(message.data),
-    );
-
-    debugPrint('✅ [BG] iOS local notification shown');
-  } catch (e) {
-    debugPrint('❌ [BG] iOS notification error: $e');
-  }
-}
 
 /// =========================
 /// METHOD CHANNEL FOR iOS NOTIFICATIONS
@@ -851,8 +532,8 @@ void main() async {
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // Initialize notification manager
-    await NotificationManager.instance.initialize();
+    // Load notifications from disk
+    await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
 
