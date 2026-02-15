@@ -158,12 +158,14 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
   bool _isSyncing = false;
+  Set<String> _deletedIds = {};
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
   static const String _storageKey = 'stored_notifications_final';
+  static const String _deletedIdsKey = 'deleted_notification_ids';
 
   /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
@@ -172,6 +174,7 @@ class NotificationManager extends ChangeNotifier {
       await prefs.reload();
 
       final jsonStr = prefs.getString(_storageKey);
+      final deletedJson = prefs.getString(_deletedIdsKey);
 
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
@@ -179,6 +182,10 @@ class NotificationManager extends ChangeNotifier {
         _sortAndCount();
         notifyListeners();
         debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+      }
+
+      if (deletedJson != null) {
+        _deletedIds = Set<String>.from(jsonDecode(deletedJson));
       }
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
@@ -213,6 +220,8 @@ class NotificationManager extends ChangeNotifier {
       bool hasChanges = false;
 
       for (var serverItem in serverItems) {
+        if (_deletedIds.contains(serverItem.id)) continue; // Skip deleted
+
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
           localMap[serverItem.id] = NotificationItem(
@@ -259,22 +268,41 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
+      return;
+    }
+
     await loadNotifications();
 
-    if (!_notifications.any((n) => n.id == item.id)) {
-      _notifications.insert(0, item);
-      _sortAndCount();
-      await _saveToDisk();
-      notifyListeners();
-      debugPrint('✅ [Manager] Added notification: ${item.title}');
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
+    if (existingIndex != -1) {
+      // Update existing with new data, keep isRead
+      _notifications[existingIndex] = NotificationItem(
+        id: item.id,
+        title: item.title,
+        body: item.body,
+        imageUrl: item.imageUrl,
+        timestamp: item.timestamp, // Update to latest timestamp
+        data: item.data,
+        isRead: _notifications[existingIndex].isRead,
+        type: item.type,
+      );
+      debugPrint('✅ [Manager] Updated existing notification: ${item.title}');
     } else {
-      debugPrint('⚠️ [Manager] Duplicate notification skipped: ${item.id}');
+      // Add new
+      _notifications.insert(0, item);
+      debugPrint('✅ [Manager] Added new notification: ${item.title}');
     }
+
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
   }
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     final item = NotificationItem.fromJson(data);
-    
+
     // VALIDATION
     if (item.title.isEmpty ||
         (item.title == 'إشعار جديد' && item.body.isEmpty)) {
@@ -282,17 +310,34 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
+      return;
+    }
+
     await loadNotifications();
 
-    if (!_notifications.any((n) => n.id == item.id)) {
-      _notifications.insert(0, item);
-      _sortAndCount();
-      await _saveToDisk();
-      notifyListeners();
-      debugPrint('✅ [Manager] Added native notification: ${item.title}');
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
+    if (existingIndex != -1) {
+      // Update existing
+      _notifications[existingIndex] = NotificationItem(
+        id: item.id,
+        title: item.title,
+        body: item.body,
+        imageUrl: item.imageUrl,
+        timestamp: item.timestamp,
+        data: item.data,
+        isRead: _notifications[existingIndex].isRead,
+        type: item.type,
+      );
     } else {
-      debugPrint('⚠️ [Manager] Duplicate native notification skipped: ${item.id}');
+      _notifications.insert(0, item);
     }
+
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
+    debugPrint('✅ [Manager] Added/Updated native notification: ${item.title}');
   }
 
   Future<void> markAsRead(String id) async {
@@ -322,6 +367,7 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> deleteNotification(String id) async {
     _notifications.removeWhere((n) => n.id == id);
+    _deletedIds.add(id); // Mark as deleted
     _updateUnreadCount();
     await _saveToDisk();
     notifyListeners();
@@ -329,6 +375,7 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> clearAllNotifications() async {
     _notifications.clear();
+    _deletedIds.addAll(_notifications.map((n) => n.id)); // Mark all as deleted
     _updateUnreadCount();
     await _saveToDisk();
     notifyListeners();
@@ -360,6 +407,7 @@ class NotificationManager extends ChangeNotifier {
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
+      await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -2446,7 +2494,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g, '');
+            var cleanUrl = url.replace(/[?&]download=1/g, '';
             window.location.href = cleanUrl;
             return window;
           }
