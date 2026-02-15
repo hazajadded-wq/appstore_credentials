@@ -1290,13 +1290,26 @@ class NotificationDetailScreen extends StatelessWidget {
               notification.body,
               textAlign: TextAlign.justify,
               style: GoogleFonts.cairo(
-                fontSize: 16,
-                fontWeight: FontWeight.normal,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
                 height: 1.6,
                 color: const Color(0xFF4A5568),
               ),
             ),
             const SizedBox(height: 32),
+            // Company name section - always show only company name
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'الشركة العامة لتعبئة وخدمات الغاز',
+                  style: GoogleFonts.cairo(
+                    fontSize: 10,
+                    color: const Color(0xFF2D3748),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -1390,10 +1403,23 @@ class NotificationDetailScreen extends StatelessWidget {
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      final dateFormat = DateFormat('yyyy-MM-dd HH:mm', 'ar_IQ');
-      return dateFormat.format(timestamp);
+      DateTime now = DateTime.now();
+      Duration difference = now.difference(timestamp);
+
+      if (difference.inMinutes < 1) {
+        return 'الآن';
+      } else if (difference.inHours < 1) {
+        return 'منذ ${difference.inMinutes} دقيقة';
+      } else if (difference.inDays < 1) {
+        return 'منذ ${difference.inHours} ساعة';
+      } else if (difference.inDays < 7) {
+        return 'منذ ${difference.inDays} يوم';
+      } else {
+        final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
+        return dateFormat.format(timestamp);
+      }
     } catch (e) {
-      return '${timestamp.year}-${timestamp.month}-${timestamp.day} ${timestamp.hour}:${timestamp.minute}';
+      return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
     }
   }
 }
@@ -2927,7 +2953,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           child: ElevatedButton(
                             onPressed: () {
                               Navigator.of(context).pop(true);
-                              SystemNavigator.pop();
+                              if (Platform.isAndroid) {
+                                SystemNavigator.pop();
+                              } else if (Platform.isIOS) {
+                                exit(0);
+                              }
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF00BFA5),
