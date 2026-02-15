@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:ui' as ui;
@@ -22,6 +24,42 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'notification_service.dart';
 import 'firebase_options.dart';
+
+import 'package:http/http.dart' as http;
+
+/// =========================
+/// REMOTE LOGGER - للمستخدمين بدون Xcode
+/// يرسل logs مباشرة للسيرفر
+/// =========================
+class RemoteLogger {
+  static const String logUrl =
+      'https://lpgaspro.org/scgfs_notifications/debug_logger.php';
+  static bool enabled = true; // يمكن تعطيله في production
+
+  static Future<void> log(String message) async {
+    if (!enabled) return;
+
+    // Print locally
+    print(message);
+
+    // Send to server
+    try {
+      await http
+          .post(
+            Uri.parse(logUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'message': message,
+              'device': Platform.isIOS ? 'iOS' : 'Android',
+            }),
+          )
+          .timeout(Duration(seconds: 2));
+    } catch (e) {
+      // Silent fail - don't break app if logging fails
+      print('⚠️ Failed to send log to server: $e');
+    }
+  }
+}
 
 /// =========================
 /// DATA MODEL
@@ -162,20 +200,48 @@ class NotificationManager extends ChangeNotifier {
   }
 
   // ============================================
-  // FORCE LOAD FROM DISK
+  // FORCE LOAD FROM DISK - WITH REMOTE LOGGING
   // ============================================
   Future<void> loadNotifications() async {
-    try {
-      final localList = await NotificationService.getLocalNotifications();
+    await RemoteLogger.log('📂 ========================================');
+    await RemoteLogger.log('📂 [Manager] LOADING FROM DISK');
+    await RemoteLogger.log('📂 ========================================');
 
+    try {
+      await RemoteLogger.log(
+          '📂 [Manager] Step 1: Getting local notifications...');
+      final localList = await NotificationService.getLocalNotifications();
+      await RemoteLogger.log(
+          '✅ [Manager] Step 1: Got ${localList.length} notifications');
+
+      if (localList.isNotEmpty) {
+        await RemoteLogger.log('📂 [Manager] First notification:');
+        await RemoteLogger.log('   - ID: ${localList[0]['id']}');
+        await RemoteLogger.log('   - Title: ${localList[0]['title']}');
+      } else {
+        await RemoteLogger.log('⚠️ [Manager] Local storage is EMPTY!');
+      }
+
+      await RemoteLogger.log('📂 [Manager] Step 2: Converting to objects...');
       _notifications =
           localList.map((e) => NotificationItem.fromJson(e)).toList();
-      _updateUnreadCount();
+      await RemoteLogger.log(
+          '✅ [Manager] Step 2: Converted ${_notifications.length} objects');
 
-      debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+      _updateUnreadCount();
+      await RemoteLogger.log('✅ [Manager] Unread count: $_unreadCount');
+
       notifyListeners();
-    } catch (e) {
-      debugPrint('❌ [Manager] Load Error: $e');
+      await RemoteLogger.log('✅ [Manager] Listeners notified');
+
+      await RemoteLogger.log('📂 ========================================');
+      await RemoteLogger.log(
+          '📂 [Manager] LOAD COMPLETE: ${_notifications.length} notifications');
+      await RemoteLogger.log('📂 ========================================');
+    } catch (e, stackTrace) {
+      await RemoteLogger.log('❌❌❌ [Manager] LOAD ERROR ❌❌❌');
+      await RemoteLogger.log('❌ Error: $e');
+      await RemoteLogger.log('❌ Stack: $stackTrace');
     }
   }
 
@@ -429,10 +495,56 @@ class NotificationManager extends ChangeNotifier {
 }
 
 /// =========================
-/// LOCAL NOTIFICATION SERVICE - REMOVED FOR iOS ONLY
+/// LOCAL NOTIFICATION SERVICE
 /// =========================
+class LocalNotificationService {
+  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
 
-// Removed Android-specific local notification service
+  static void initialize() {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+    _notificationsPlugin.initialize(
+      settings: initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse details) {
+        debugPrint('🔔 Local Notification Tapped');
+        _navigateToNotifications();
+      },
+    );
+  }
+
+  static void showNotification(RemoteMessage message) async {
+    if (!Platform.isAndroid) return;
+
+    try {
+      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+          AndroidNotificationDetails(
+        'high_importance_channel',
+        'High Importance Notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+        showWhen: true,
+      );
+      const NotificationDetails platformChannelSpecifics =
+          NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      await _notificationsPlugin.show(
+        id: id,
+        title: message.notification?.title ?? 'إشعار جديد',
+        body: message.notification?.body ?? '',
+        notificationDetails: platformChannelSpecifics,
+        payload: jsonEncode(message.data),
+      );
+    } catch (e) {
+      debugPrint('❌ Error showing local notification: $e');
+    }
+  }
+}
 
 void _navigateToNotifications() {
   if (navigatorKey.currentState != null) {
@@ -449,38 +561,78 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - UPDATED WITH BINDING
+/// FCM BACKGROUND HANDLER - WITH REMOTE LOGGING
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  try {
-    // 🔥 CRITICAL FIX: Add Flutter binding for SharedPreferences to work in background
-    WidgetsFlutterBinding.ensureInitialized();
+  await RemoteLogger.log('🌙 ========================================');
+  await RemoteLogger.log('🌙 [BG HANDLER] STARTED');
+  await RemoteLogger.log('🌙 ========================================');
 
+  try {
     // Initialize Firebase
+    await RemoteLogger.log('🌙 [BG] Step 1: Initializing Firebase...');
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
+    await RemoteLogger.log('✅ [BG] Step 1: Firebase initialized');
 
-    debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-    debugPrint('🌙 [BG] Notification: ${message.notification?.title}');
-    debugPrint('🌙 [BG] Data: ${message.data}');
+    await RemoteLogger.log('🌙 [BG] Step 2: Message data:');
+    await RemoteLogger.log('   - Message ID: ${message.messageId}');
+    await RemoteLogger.log('   - Notification: ${message.notification?.title}');
+    await RemoteLogger.log('   - Data: ${message.data}');
 
-    // Create notification item from message
+    // Create notification item
+    await RemoteLogger.log('🌙 [BG] Step 3: Creating NotificationItem...');
     final item = NotificationItem.fromFirebaseMessage(message);
+    await RemoteLogger.log('✅ [BG] Step 3: Created:');
+    await RemoteLogger.log('   - ID: ${item.id}');
+    await RemoteLogger.log('   - Title: ${item.title}');
 
-    // CRITICAL: Save to local storage immediately
-    await NotificationService.saveToLocalDisk(item.toJson());
+    // Convert to JSON
+    await RemoteLogger.log('🌙 [BG] Step 4: Converting to JSON...');
+    final jsonData = item.toJson();
+    await RemoteLogger.log('✅ [BG] Step 4: JSON ready');
 
-    debugPrint('✅ [BG] Saved to local storage: ${item.title}');
+    // Save to SharedPreferences
+    await RemoteLogger.log('🌙 [BG] Step 5: Saving to SharedPreferences...');
+    await NotificationService.saveToLocalDisk(jsonData);
+    await RemoteLogger.log('✅ [BG] Step 5: Save function called');
+
+    // Verify save
+    await RemoteLogger.log('🌙 [BG] Step 6: Verifying save...');
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('stored_notifications_final_v2');
+    if (saved != null) {
+      final list = jsonDecode(saved);
+      await RemoteLogger.log(
+          '✅✅✅ [BG] Step 6: VERIFIED! Total: ${list.length} notifications');
+      await RemoteLogger.log('   - First ID: ${list[0]['id']}');
+      await RemoteLogger.log('   - First Title: ${list[0]['title']}');
+    } else {
+      await RemoteLogger.log(
+          '❌❌❌ [BG] Step 6: VERIFICATION FAILED - Nothing saved!');
+    }
 
     // Show local notification on iOS
-    await _showLocalNotificationiOS(message);
-  } catch (e) {
-    debugPrint('❌ [BG] Error: $e');
+    if (Platform.isIOS) {
+      await RemoteLogger.log('🌙 [BG] Step 7: Showing iOS notification...');
+      await _showLocalNotificationiOS(message);
+      await RemoteLogger.log('✅ [BG] Step 7: iOS notification shown');
+    }
+
+    await RemoteLogger.log('🌙 ========================================');
+    await RemoteLogger.log('🌙 [BG HANDLER] COMPLETED SUCCESSFULLY');
+    await RemoteLogger.log('🌙 ========================================');
+  } catch (e, stackTrace) {
+    await RemoteLogger.log('❌❌❌ [BG] ERROR ❌❌❌');
+    await RemoteLogger.log('❌ Error: $e');
+    await RemoteLogger.log('❌ Stack: $stackTrace');
+    await RemoteLogger.log('❌❌❌❌❌❌❌❌❌❌❌❌❌');
   }
 }
 
+/// Show local notification on iOS in background
 /// Show local notification on iOS in background
 Future<void> _showLocalNotificationiOS(RemoteMessage message) async {
   try {
@@ -578,7 +730,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - FIXED FOR iOS ONLY
+/// MAIN - FIXED
 /// =========================
 
 void main() async {
@@ -599,7 +751,7 @@ void main() async {
       sound: true,
     );
 
-    // Removed Android local notification initialization
+    LocalNotificationService.initialize();
 
     // CRITICAL: Setup iOS method channel
     NotificationMethodChannel.setupListener();
@@ -627,11 +779,13 @@ void main() async {
     final token = await messaging.getToken();
     debugPrint('🔑 FCM Token: $token');
 
-    // Removed Android battery optimization request
+    if (Platform.isAndroid) {
+      await _requestIgnoreBatteryOptimizations();
+    }
 
     await _setupNotificationNavigation(messaging);
   } catch (e) {
-    debugPrint('❌ Init Error: $e');
+    debugPrint('�� Init Error: $e');
   }
 
   runApp(
@@ -641,7 +795,16 @@ void main() async {
   );
 }
 
-// Removed Android battery optimization function
+Future<void> _requestIgnoreBatteryOptimizations() async {
+  try {
+    var status = await Permission.ignoreBatteryOptimizations.status;
+    if (!status.isGranted) {
+      await Permission.ignoreBatteryOptimizations.request();
+    }
+  } catch (e) {
+    debugPrint('⚠️ Battery optimization request failed: $e');
+  }
+}
 
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
@@ -675,7 +838,10 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     // ALWAYS add to notification manager - THIS IS THE FIX
     NotificationManager.instance.addFirebaseMessage(message);
 
-    // Removed Android local notification code
+    // Show local notification on Android
+    if (Platform.isAndroid && message.notification != null) {
+      LocalNotificationService.showNotification(message);
+    }
   });
 }
 
@@ -1400,7 +1566,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
-                      'يتم جمع البيانات الأساسية للموظف مثل الاسم، الرقم الو��يفي، القسم، الراتب، والمعلومات الوظيفية الأخرى اللازمة لإدارة الموارد البشرية والرواتب.',
+                      'يتم جمع البيانات الأساسية للموظف مثل الاسم، الرقم الوظيفي، القسم، الراتب، والمعلومات الوظيفية الأخرى اللازمة لإدارة الموارد البشرية والرواتب.',
                     ),
                     _buildPrivacySection(
                       '3. استخدام البيانات',
@@ -2237,7 +2403,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
         );
 
-      if (Platform.isIOS) {
+      if (Platform.isAndroid) {
+        final androidController =
+            controller!.platform as AndroidWebViewController;
+        androidController.setMediaPlaybackRequiresUserGesture(false);
         controller!.enableZoom(true);
       }
 
@@ -2259,9 +2428,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
               });
             }
 
-            if (Platform.isIOS) {
+            if (Platform.isAndroid) {
               Future.delayed(const Duration(milliseconds: 500), () {
-                _injectIOSFix();
+                _injectAndroidFix();
               });
             }
           },
@@ -2298,8 +2467,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
               _autoFitPageToScreen();
             }
 
-            if (Platform.isIOS) {
-              _injectIOSFix();
+            if (Platform.isAndroid) {
+              _injectAndroidFix();
             }
           },
           onWebResourceError: (WebResourceError error) {
@@ -2446,13 +2615,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  Future<void> _injectIOSFix() async {
+  Future<void> _injectAndroidFix() async {
     if (controller == null) return;
 
     const String jsCode = '''
       (function() {
-        if (window.iosFixInjected) { return; }
-        window.iosFixInjected = true;
+        if (window.androidFixInjected) { return; }
+        window.androidFixInjected = true;
         
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
@@ -2474,15 +2643,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<bool> _requestPermissions() async {
-    try {
-      final status = await Permission.photos.status;
-      if (status.isGranted) return true;
+    if (Platform.isAndroid) {
+      try {
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        final sdkInt = androidInfo.version.sdkInt;
 
-      final result = await Permission.photos.request();
-      return result.isGranted;
-    } catch (e) {
-      return false;
+        if (sdkInt >= 29) {
+          return true;
+        }
+
+        final status = await Permission.storage.status;
+        if (status.isGranted) return true;
+
+        final result = await Permission.storage.request();
+        return result.isGranted;
+      } catch (e) {
+        return false;
+      }
     }
+    return true;
   }
 
   Future<Uint8List> _captureWebView() async {
@@ -2491,8 +2670,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
       return Uint8List.fromList(List<int>.from(bytes));
     }
 
-    // This will never be reached since we're iOS only, but keeping for compatibility
-    throw UnsupportedError('Screenshot not supported on this platform');
+    RenderRepaintBoundary boundary =
+        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    ui.Image img = await boundary.toImage(pixelRatio: 6.0);
+    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 
   Future<void> _savePageAsImage() async {
@@ -2726,7 +2908,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعبئة وخدمات الغاز',
+              'الشركة العامة لتعب��ة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
