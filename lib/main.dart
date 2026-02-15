@@ -251,25 +251,53 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
-    _notifications.removeWhere((n) => n.id == item.id);
-    _notifications.insert(0, item);
-    _sortAndCount();
-    await _saveToDisk();
-    notifyListeners();
+
+    // VALIDATION: Don't add notifications with no real content
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification');
+      return;
+    }
+
+    await loadNotifications();
+
+    if (!_notifications.any((n) => n.id == item.id)) {
+      _notifications.insert(0, item);
+      _sortAndCount();
+      await _saveToDisk();
+      notifyListeners();
+      debugPrint('✅ [Manager] Added notification: ${item.title}');
+    } else {
+      debugPrint('⚠️ [Manager] Duplicate notification skipped: ${item.id}');
+    }
   }
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     final item = NotificationItem.fromJson(data);
-    _notifications.removeWhere((n) => n.id == item.id);
-    _notifications.insert(0, item);
-    _sortAndCount();
-    await _saveToDisk();
-    notifyListeners();
+    
+    // VALIDATION
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification from native');
+      return;
+    }
+
+    await loadNotifications();
+
+    if (!_notifications.any((n) => n.id == item.id)) {
+      _notifications.insert(0, item);
+      _sortAndCount();
+      await _saveToDisk();
+      notifyListeners();
+      debugPrint('✅ [Manager] Added native notification: ${item.title}');
+    } else {
+      debugPrint('⚠️ [Manager] Duplicate native notification skipped: ${item.id}');
+    }
   }
 
   Future<void> markAsRead(String id) async {
     final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1) {
+    if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
       await _saveToDisk();
@@ -278,12 +306,18 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> markAllAsRead() async {
-    for (var notification in _notifications) {
-      notification.isRead = true;
+    bool changed = false;
+    for (var n in _notifications) {
+      if (!n.isRead) {
+        n.isRead = true;
+        changed = true;
+      }
     }
-    _updateUnreadCount();
-    await _saveToDisk();
-    notifyListeners();
+    if (changed) {
+      _updateUnreadCount();
+      await _saveToDisk();
+      notifyListeners();
+    }
   }
 
   Future<void> deleteNotification(String id) async {
@@ -332,8 +366,6 @@ class NotificationManager extends ChangeNotifier {
   }
 }
 
-/// =========================
-/// LOCAL NOTIFICATION SERVICE
 /// =========================
 class LocalNotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
