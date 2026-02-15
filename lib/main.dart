@@ -123,14 +123,31 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
+    // ✅ Use ID from data payload (from PHP)
+    String id = message.data['id'] ??
+        message.messageId ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    // ✅ Parse sent_at from data
+    DateTime timestamp;
+    try {
+      if (message.data['sent_at'] != null) {
+        timestamp = DateTime.parse(message.data['sent_at']);
+      } else {
+        timestamp = DateTime.now();
+      }
+    } catch (e) {
+      timestamp = DateTime.now();
+    }
+
     return NotificationItem(
-      id: message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: id,
       title: title,
       body: body,
       imageUrl: imageUrl,
-      timestamp: DateTime.now(),
+      timestamp: timestamp,
       data: message.data,
-      isRead: false,
+      isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
       type: message.data['type'] ?? 'general',
     );
   }
@@ -184,19 +201,36 @@ class NotificationManager extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
 
   // ============================================
-  // INITIALIZE - Call this when app starts
+  // INITIALIZE - SERVER-FIRST APPROACH
+  // MySQL is the single source of truth
+  // Local storage is just a cache
   // ============================================
   Future<void> initialize() async {
-    debugPrint('🚀 [Manager] Initializing...');
+    await RemoteLogger.log('🚀 ========================================');
+    await RemoteLogger.log('🚀 [Manager] INITIALIZING (Server-First)');
+    await RemoteLogger.log('🚀 ========================================');
 
-    // Load from disk first
+    // Step 1: Load from local cache (fast, but may be outdated)
+    await RemoteLogger.log('📂 [Manager] Step 1: Loading from local cache...');
     await loadNotifications();
+    await RemoteLogger.log(
+        '✅ [Manager] Step 1: Loaded ${_notifications.length} from cache');
 
-    // Start periodic sync
+    // Step 2: Fetch from MySQL (authoritative source)
+    await RemoteLogger.log(
+        '🌐 [Manager] Step 2: Fetching from MySQL (authoritative)...');
+    await fetchFromMySQL();
+    await RemoteLogger.log('✅ [Manager] Step 2: MySQL fetch completed');
+
+    // Step 3: Start periodic sync
+    await RemoteLogger.log('⏰ [Manager] Step 3: Starting periodic sync...');
     _startPeriodicSync();
+    await RemoteLogger.log('✅ [Manager] Step 3: Periodic sync started');
 
-    // Fetch from server immediately
-    fetchFromMySQL();
+    await RemoteLogger.log('🚀 ========================================');
+    await RemoteLogger.log('🚀 [Manager] INITIALIZATION COMPLETE');
+    await RemoteLogger.log('🚀 Total notifications: ${_notifications.length}');
+    await RemoteLogger.log('🚀 ========================================');
   }
 
   // ============================================
@@ -561,7 +595,7 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - WITH REMOTE LOGGING
+/// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
 /// =========================
 
 @pragma('vm:entry-point')
@@ -581,6 +615,67 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await RemoteLogger.log('   - Message ID: ${message.messageId}');
     await RemoteLogger.log('   - Notification: ${message.notification?.title}');
     await RemoteLogger.log('   - Data: ${message.data}');
+    await RemoteLogger.log(
+        '   - Platform: ${Platform.isIOS ? "iOS" : "Android"}');
+
+    // ============================================
+    // DUPLICATE FILTERING
+    // Android: Ignore duplicate messages
+    // iOS: Accept duplicates as backup
+    // ============================================
+    final isDuplicate = message.data['is_duplicate'] == 'true' ||
+        message.data['is_duplicate'] == true;
+
+    if (isDuplicate) {
+      await RemoteLogger.log('🔄 [BG] This is a DUPLICATE message');
+
+      if (Platform.isAndroid) {
+        // Android: IGNORE duplicates (we already received the first message)
+        await RemoteLogger.log(
+            '🤖 [BG] Platform: Android - IGNORING duplicate message');
+        await RemoteLogger.log('✅ [BG] Duplicate ignored on Android');
+        await RemoteLogger.log(
+            '🌙 [BG HANDLER] COMPLETED (Android duplicate ignored)');
+        return; // Exit early
+      } else {
+        // iOS: ACCEPT duplicates as backup (in case first message failed)
+        await RemoteLogger.log(
+            '🍎 [BG] Platform: iOS - Checking if original was saved...');
+
+        final prefs = await SharedPreferences.getInstance();
+        final saved = prefs.getString('stored_notifications_final_v2');
+
+        if (saved != null) {
+          final list = jsonDecode(saved);
+          final originalId = message.data['original_id']?.toString() ?? '';
+
+          // Check if original exists
+          bool originalExists = false;
+          for (var item in list) {
+            if (item['id']?.toString() == originalId) {
+              originalExists = true;
+              break;
+            }
+          }
+
+          if (originalExists) {
+            await RemoteLogger.log(
+                '✅ [BG] Original notification already saved - skipping duplicate');
+            await RemoteLogger.log(
+                '🌙 [BG HANDLER] COMPLETED (iOS duplicate not needed)');
+            return; // Original exists, don't need duplicate
+          } else {
+            await RemoteLogger.log(
+                '⚠️ [BG] Original NOT found - saving duplicate as backup!');
+            await RemoteLogger.log(
+                '🍎 [BG] This duplicate will save iOS reliability!');
+          }
+        } else {
+          await RemoteLogger.log(
+              '⚠️ [BG] Storage empty - saving duplicate as backup');
+        }
+      }
+    }
 
     // Create notification item
     await RemoteLogger.log('🌙 [BG] Step 3: Creating NotificationItem...');
@@ -602,9 +697,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // Verify save
     await RemoteLogger.log('🌙 [BG] Step 6: Verifying save...');
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('stored_notifications_final_v2');
-    if (saved != null) {
-      final list = jsonDecode(saved);
+    final savedFinal = prefs.getString('stored_notifications_final_v2');
+    if (savedFinal != null) {
+      final list = jsonDecode(savedFinal);
       await RemoteLogger.log(
           '✅✅✅ [BG] Step 6: VERIFIED! Total: ${list.length} notifications');
       await RemoteLogger.log('   - First ID: ${list[0]['id']}');
@@ -614,8 +709,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
           '❌❌❌ [BG] Step 6: VERIFICATION FAILED - Nothing saved!');
     }
 
-    // Show local notification on iOS
-    if (Platform.isIOS) {
+    // Show local notification on iOS (only for non-duplicates)
+    if (Platform.isIOS && !isDuplicate) {
       await RemoteLogger.log('🌙 [BG] Step 7: Showing iOS notification...');
       await _showLocalNotificationiOS(message);
       await RemoteLogger.log('✅ [BG] Step 7: iOS notification shown');
