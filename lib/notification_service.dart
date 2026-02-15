@@ -244,7 +244,7 @@ class NotificationService {
         print('   - First notification ID: ${verifyList[0]['id']}');
         print('   - First notification title: ${verifyList[0]['title']}');
       } else {
-        print('❌❌❌ [Service] Step 10: VERIFICATION FAILED! ❌❌❌');
+        print('❌❌❌ [Service] Step 10: VERIFICATION FAILED - Nothing saved!');
       }
 
       print('💾 ========================================');
