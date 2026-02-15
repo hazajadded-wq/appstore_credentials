@@ -1878,22 +1878,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     await NotificationManager.instance.clearAllNotifications();
                   }
                   break;
-                case 'refresh':
-                  await _forceRefresh();
-                  break;
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'refresh',
-                child: Row(
-                  children: [
-                    const Icon(Icons.refresh, color: Color(0xFF00BFA5)),
-                    const SizedBox(width: 8),
-                    Text('تحديث', style: GoogleFonts.cairo()),
-                  ],
-                ),
-              ),
               PopupMenuItem(
                 value: 'mark_all_read',
                 child: Row(
@@ -3018,20 +3005,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          leading: isOnLoginPage
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () async {
-                    if (canGoBack && controller != null) {
-                      controller!.goBack();
-                    } else {
-                      final shouldExit = await _showExitDialog();
-                      if (shouldExit == true) SystemNavigator.pop();
-                    }
-                  },
-                ),
-          automaticallyImplyLeading: false,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              if (canGoBack && controller != null) {
+                controller!.goBack();
+              } else {
+                final shouldExit = await _showExitDialog();
+                if (shouldExit == true) SystemNavigator.pop();
+              }
+            },
+          ),
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
