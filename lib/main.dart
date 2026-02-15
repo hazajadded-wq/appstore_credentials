@@ -277,18 +277,27 @@ class NotificationManager extends ChangeNotifier {
 
     final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
     if (existingIndex != -1) {
-      // Update existing with new data, keep isRead
-      _notifications[existingIndex] = NotificationItem(
-        id: item.id,
-        title: item.title,
-        body: item.body,
-        imageUrl: item.imageUrl,
-        timestamp: item.timestamp, // Update to latest timestamp
-        data: item.data,
-        isRead: _notifications[existingIndex].isRead,
-        type: item.type,
-      );
-      debugPrint('✅ [Manager] Updated existing notification: ${item.title}');
+      // Update existing with new data, but only if new timestamp is newer or equal
+      final existing = _notifications[existingIndex];
+      if (item.timestamp.isAfter(existing.timestamp) ||
+          item.timestamp.isAtSameMomentAs(existing.timestamp)) {
+        _notifications[existingIndex] = NotificationItem(
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          imageUrl: item.imageUrl,
+          timestamp: item.timestamp, // Update to new timestamp
+          data: item.data,
+          isRead: existing.isRead, // Keep read status
+          type: item.type,
+        );
+        debugPrint(
+            '✅ [Manager] Updated existing notification: ${item.title} with newer timestamp');
+      } else {
+        debugPrint(
+            '⚠️ [Manager] Skipping update with older timestamp for ${item.id}');
+        return; // Don't add or update if older
+      }
     } else {
       // Add new
       _notifications.insert(0, item);
@@ -320,16 +329,24 @@ class NotificationManager extends ChangeNotifier {
     final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
     if (existingIndex != -1) {
       // Update existing
-      _notifications[existingIndex] = NotificationItem(
-        id: item.id,
-        title: item.title,
-        body: item.body,
-        imageUrl: item.imageUrl,
-        timestamp: item.timestamp,
-        data: item.data,
-        isRead: _notifications[existingIndex].isRead,
-        type: item.type,
-      );
+      final existing = _notifications[existingIndex];
+      if (item.timestamp.isAfter(existing.timestamp) ||
+          item.timestamp.isAtSameMomentAs(existing.timestamp)) {
+        _notifications[existingIndex] = NotificationItem(
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          imageUrl: item.imageUrl,
+          timestamp: item.timestamp,
+          data: item.data,
+          isRead: existing.isRead,
+          type: item.type,
+        );
+      } else {
+        debugPrint(
+            '⚠️ [Manager] Skipping native update with older timestamp for ${item.id}');
+        return;
+      }
     } else {
       _notifications.insert(0, item);
     }
@@ -2661,95 +2678,100 @@ class _WebViewScreenState extends State<WebViewScreen> {
               padding: const EdgeInsets.all(24.0),
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00BFA5).withOpacity(0.1),
-                        shape: BoxShape.circle,
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00BFA5).withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.logout,
+                          size: 48,
+                          color: Color(0xFF00BFA5),
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.logout,
-                        size: 48,
-                        color: Color(0xFF00BFA5),
+                      const SizedBox(height: 20),
+                      Text(
+                        'الخروج من التطبيق',
+                        style: GoogleFonts.cairo(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'الخروج من التطبيق',
-                      style: GoogleFonts.cairo(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                      const SizedBox(height: 12),
+                      Text(
+                        'هل تريد الخروج من التطبيق؟',
+                        style: GoogleFonts.cairo(
+                          fontSize: 16,
+                          color: Colors.black54,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'هل تريد الخروج من التطبيق؟',
-                      style: GoogleFonts.cairo(
-                        fontSize: 16,
-                        color: Colors.black54,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () {
-                              Navigator.of(context).pop(true);
-                              if (Platform.isAndroid) {
-                                SystemNavigator.pop();
-                              } else if (Platform.isIOS) {
-                                exit(0);
-                              }
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF00BFA5),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.of(context).pop(true);
+                                if (Platform.isAndroid) {
+                                  SystemNavigator.pop();
+                                } else if (Platform.isIOS) {
+                                  exit(0);
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF00BFA5),
+                                foregroundColor: Colors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 0,
                               ),
-                              elevation: 0,
-                            ),
-                            child: Text(
-                              'نعم',
-                              style: GoogleFonts.cairo(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                              child: Text(
+                                'نعم',
+                                style: GoogleFonts.cairo(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.black54,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.black54,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                side: BorderSide(
+                                    color: Colors.grey.shade300, width: 1.5),
                               ),
-                              side: BorderSide(
-                                  color: Colors.grey.shade300, width: 1.5),
-                            ),
-                            child: Text(
-                              'لا',
-                              style: GoogleFonts.cairo(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                              child: Text(
+                                'لا',
+                                style: GoogleFonts.cairo(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
