@@ -501,10 +501,17 @@ void _navigateToNotifications() {
 /// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
 /// =========================
 
+// 🔥 STEP 1 — Add Global Processed Set
+final Set<String> _processedMessageIds = {};
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+
+  // 🔥 STEP 2 — Protect Background Handler
+  if (_processedMessageIds.contains(message.messageId)) return;
+  _processedMessageIds.add(message.messageId ?? '');
 
   // VALIDATION: Only save valid notifications with actual content
   final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
@@ -685,6 +692,10 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     // Handle when app is terminated and opened via notification
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
+      // 🔥 STEP 4 — Protect getInitialMessage()
+      if (_processedMessageIds.contains(initialMessage.messageId)) return;
+      _processedMessageIds.add(initialMessage.messageId ?? '');
+
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
       await NotificationManager.instance.addFirebaseMessage(initialMessage);
       Future.delayed(const Duration(seconds: 1), () {
@@ -708,6 +719,10 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Message ID: ${message.messageId}');
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
+
+    // 🔥 STEP 3 — Protect onMessage
+    if (_processedMessageIds.contains(message.messageId)) return;
+    _processedMessageIds.add(message.messageId ?? '');
 
     // ALWAYS add to notification manager - THIS IS THE FIX
     NotificationManager.instance.addFirebaseMessage(message);
@@ -1869,7 +1884,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعا��ات الجديدة هنا',
+                : 'ستظهر الإشا��ات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2758,7 +2773,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                   color: Colors.grey.shade300, width: 1.5),
                             ),
                             child: Text(
-                              '��ا',
+                              'لا',
                               style: GoogleFonts.cairo(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
