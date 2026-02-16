@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// NotificationService - Client for PHP/MySQL notifications API.
+/// FIXED: No duplicates, proper UTC time handling
 class NotificationService {
   static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
@@ -12,6 +13,8 @@ class NotificationService {
   // CRITICAL: Shared lock to prevent concurrent SharedPreferences access
   static bool _isWriting = false;
   static int _lockWaitCount = 0;
+  static final Map<String, int> _lastSavedTimestamps =
+      {}; // Track last save time per ID
 
   // =========================================================
   // Get all notifications from MySQL
@@ -40,14 +43,53 @@ class NotificationService {
 
   // =========================================================
   // CRITICAL: Save to Local Disk (Safe for Background)
-  // WITH PROPER LOCKING
+  // WITH PROPER LOCKING AND DEDUPLICATION
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
+    // VALIDATION: Skip empty notifications
+    final title = newNotificationJson['title']?.toString() ?? '';
+    final body = newNotificationJson['body']?.toString() ?? '';
+    if (title.isEmpty || (title == 'إشعار جديد' && body.isEmpty)) {
+      debugPrint('⚠️ [BG-Service] Skipping empty notification');
+      return;
+    }
+
+    // CRITICAL: Get ID and timestamp
+    final String newId = newNotificationJson['id']?.toString() ??
+        newNotificationJson['message_id']?.toString() ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    // Parse timestamp properly
+    DateTime newTimestamp;
+    try {
+      if (newNotificationJson['timestamp'] != null) {
+        newTimestamp = DateTime.parse(newNotificationJson['timestamp']).toUtc();
+      } else if (newNotificationJson['sent_at'] != null) {
+        newTimestamp = DateTime.parse(newNotificationJson['sent_at']).toUtc();
+      } else {
+        newTimestamp = DateTime.now().toUtc();
+      }
+    } catch (e) {
+      newTimestamp = DateTime.now().toUtc();
+    }
+
+    // CRITICAL: Check if we've saved this ID recently with same timestamp
+    final lastTimestamp = _lastSavedTimestamps[newId];
+    if (lastTimestamp != null) {
+      final lastTime =
+          DateTime.fromMillisecondsSinceEpoch(lastTimestamp).toUtc();
+      // If difference is less than 1 second, it's a duplicate
+      if (newTimestamp.difference(lastTime).abs().inSeconds < 1) {
+        debugPrint(
+            '⚠️ [BG-Service] Duplicate detected for ID $newId, skipping');
+        return;
+      }
+    }
+
     // CRITICAL FIX: Wait if another operation is writing
     int waitCount = 0;
     while (_isWriting && waitCount < 100) {
-      // Max 10 second wait
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
@@ -60,56 +102,104 @@ class NotificationService {
     // Acquire lock
     _isWriting = true;
     _lockWaitCount++;
-    
+
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // FORCE RELOAD: Ensure we are seeing the latest data on disk
       await prefs.reload();
 
       // Get existing list
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // Add new item to TOP of list
-      final newId = newNotificationJson['id'].toString();
+      // CRITICAL FIX: Remove ALL occurrences of this ID (aggressive deduplication)
+      int removedCount = 0;
+      list.removeWhere((item) {
+        final itemId = item['id']?.toString();
+        if (itemId == newId) {
+          removedCount++;
+          return true;
+        }
+        return false;
+      });
 
-      // CRITICAL FIX: More aggressive deduplication
-      // Remove ALL occurrences of this ID (in case of corruption)
-      list.removeWhere((item) => item['id']?.toString() == newId);
+      // Prepare final notification with proper timestamp
+      final Map<String, dynamic> finalNotification =
+          Map.from(newNotificationJson);
+      finalNotification['id'] = newId;
+      finalNotification['timestamp'] = newTimestamp.toIso8601String();
 
       // Insert at top
-      list.insert(0, newNotificationJson);
+      list.insert(0, finalNotification);
 
       // Limit to 200
       if (list.length > 200) {
         list = list.sublist(0, 200);
       }
 
-      // CRITICAL FIX: Final deduplication pass before saving
+      // FINAL DEDUPLICATION PASS: Ensure no duplicates by ID
       final Map<String, dynamic> deduplicatedMap = {};
       for (var item in list) {
         final id = item['id']?.toString();
-        if (id != null && !deduplicatedMap.containsKey(id)) {
-          deduplicatedMap[id] = item;
+        if (id != null) {
+          // If duplicate exists, keep the one with latest timestamp
+          if (!deduplicatedMap.containsKey(id)) {
+            deduplicatedMap[id] = item;
+          } else {
+            // Compare timestamps
+            final existing = deduplicatedMap[id];
+            final DateTime existingTime = _parseTimestamp(existing);
+            final DateTime newTime = _parseTimestamp(item);
+            if (newTime.isAfter(existingTime)) {
+              deduplicatedMap[id] = item;
+            }
+          }
         }
       }
       list = deduplicatedMap.values.toList();
 
+      // Sort by timestamp (newest first)
+      list.sort((a, b) {
+        final DateTime aTime = _parseTimestamp(a);
+        final DateTime bTime = _parseTimestamp(b);
+        return bTime.compareTo(aTime);
+      });
+
       await prefs.setString(storageKey, jsonEncode(list));
+
+      // Update last saved timestamp
+      _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
+
       debugPrint(
-          '💾 [BG-Service] Saved notification $newId to disk (waited $waitCount cycles, total locks: $_lockWaitCount)');
+          '💾 [BG-Service] Saved notification $newId (removed $removedCount duplicates)');
     } catch (e) {
       debugPrint('❌ [BG-Service] Save Failed: $e');
     } finally {
-      // CRITICAL: Always release lock
       _isWriting = false;
     }
   }
 
+  // Helper to parse timestamp from map
+  static DateTime _parseTimestamp(Map<String, dynamic> item) {
+    try {
+      if (item['timestamp'] != null) {
+        return DateTime.parse(item['timestamp']).toUtc();
+      } else if (item['sent_at'] != null) {
+        return DateTime.parse(item['sent_at']).toUtc();
+      }
+    } catch (e) {
+      // ignore
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
   // =========================================================
-  // Utility method to check lock status (for debugging)
+  // Utility methods
   // =========================================================
   static bool get isWriting => _isWriting;
   static int get lockWaitCount => _lockWaitCount;
+
+  // Clear timestamp cache (useful for testing)
+  static void clearTimestampCache() {
+    _lastSavedTimestamps.clear();
+  }
 }
