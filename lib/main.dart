@@ -96,12 +96,12 @@ class NotificationItem {
     DateTime timestamp;
     try {
       if (message.data['sent_at'] != null) {
-        timestamp = DateTime.parse(message.data['sent_at']);
+        timestamp = DateTime.parse(message.data['sent_at']).toUtc();
       } else {
-        timestamp = DateTime.now();
+        timestamp = DateTime.now().toUtc();
       }
     } catch (e) {
-      timestamp = DateTime.now();
+      timestamp = DateTime.now().toUtc();
     }
 
     return NotificationItem(
@@ -136,7 +136,9 @@ class NotificationItem {
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       imageUrl: map['image_url'],
-      timestamp: DateTime.tryParse(map['sent_at'] ?? '') ?? DateTime.now(),
+      timestamp: map['sent_at'] != null
+          ? DateTime.parse(map['sent_at']).toUtc()
+          : DateTime.now().toUtc(),
       data: payload,
       isRead: false,
       type: map['type'] ?? 'general',
@@ -1080,7 +1082,7 @@ class NotificationDetailScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'الشركة العامة لتعبئة وخدمات الغاز',
+                  'الشركة العامة لتع��ئة وخدمات الغاز',
                   style: GoogleFonts.cairo(
                     fontSize: 10,
                     color: const Color(0xFF2D3748),
@@ -1181,8 +1183,8 @@ class NotificationDetailScreen extends StatelessWidget {
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now();
-      Duration difference = now.difference(timestamp);
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp.toUtc());
 
       if (difference.inMinutes < 1) {
         return 'الآن';
@@ -1460,7 +1462,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -2218,8 +2220,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now();
-      Duration difference = now.difference(timestamp);
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp.toUtc());
 
       if (difference.inMinutes < 1) {
         return 'الآن';
@@ -2511,7 +2513,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g, '';
+            var cleanUrl = url.replace(/[?&]download=1/g', '';
             window.location.href = cleanUrl;
             return window;
           }
@@ -2678,100 +2680,95 @@ class _WebViewScreenState extends State<WebViewScreen> {
               padding: const EdgeInsets.all(24.0),
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
-                child: Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00BFA5).withOpacity(0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.logout,
-                          size: 48,
-                          color: Color(0xFF00BFA5),
-                        ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00BFA5).withOpacity(0.1),
+                        shape: BoxShape.circle,
                       ),
-                      const SizedBox(height: 20),
-                      Text(
-                        'الخروج من التطبيق',
-                        style: GoogleFonts.cairo(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
+                      child: const Icon(
+                        Icons.logout,
+                        size: 48,
+                        color: Color(0xFF00BFA5),
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'هل تريد الخروج من التطبيق؟',
-                        style: GoogleFonts.cairo(
-                          fontSize: 16,
-                          color: Colors.black54,
-                        ),
-                        textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      'الخروج من التطبيق',
+                      style: GoogleFonts.cairo(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
                       ),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () {
-                                Navigator.of(context).pop(true);
-                                if (Platform.isAndroid) {
-                                  SystemNavigator.pop();
-                                } else if (Platform.isIOS) {
-                                  exit(0);
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF00BFA5),
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                elevation: 0,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'هل تريد الخروج من التطبيق؟',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        color: Colors.black54,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(context).pop(true);
+                              if (Platform.isAndroid) {
+                                SystemNavigator.pop();
+                              } else if (Platform.isIOS) {
+                                exit(0);
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00BFA5),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Text(
-                                'نعم',
-                                style: GoogleFonts.cairo(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                              elevation: 0,
+                            ),
+                            child: Text(
+                              'نعم',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.black54,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                side: BorderSide(
-                                    color: Colors.grey.shade300, width: 1.5),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.black54,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Text(
-                                'لا',
-                                style: GoogleFonts.cairo(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              side: BorderSide(
+                                  color: Colors.grey.shade300, width: 1.5),
+                            ),
+                            child: Text(
+                              '��ا',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
