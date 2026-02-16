@@ -88,15 +88,19 @@ class NotificationItem {
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
     // ✅ Use ID from data payload (from PHP)
-    String id = message.data['id'] ??
+    String id = message.data['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // ✅ Parse sent_at from data
+    // ✅ Parse sent_at from data with proper UTC handling
     DateTime timestamp;
     try {
       if (message.data['sent_at'] != null) {
         timestamp = DateTime.parse(message.data['sent_at']).toUtc();
+      } else if (message.data['timestamp'] != null) {
+        timestamp = DateTime.parse(message.data['timestamp']).toUtc();
+      } else if (message.sentTime != null) {
+        timestamp = DateTime.fromMillisecondsSinceEpoch(message.sentTime!.millisecondsSinceEpoch).toUtc();
       } else {
         timestamp = DateTime.now().toUtc();
       }
@@ -188,7 +192,7 @@ class NotificationManager extends ChangeNotifier {
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
-        _sortAndCount(); // This now includes deduplication
+        _sortAndCount();
         notifyListeners();
         debugPrint(
             '📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
@@ -234,6 +238,7 @@ class NotificationManager extends ChangeNotifier {
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
+          // Keep local read status, but update other fields
           localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
@@ -250,12 +255,11 @@ class NotificationManager extends ChangeNotifier {
         }
       }
 
-      // أضف هذا السطر:
-      localMap.removeWhere(
-          (id, _) => _deletedIds.contains(id)); // الحجب النهائي للمحذوفين
+      // Remove deleted
+      localMap.removeWhere((id, _) => _deletedIds.contains(id));
 
       _notifications = localMap.values.toList();
-      _sortAndCount(); // This now includes deduplication
+      _sortAndCount();
 
       if (_notifications.length > 200) {
         _notifications = _notifications.take(200).toList();
@@ -276,10 +280,9 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    // CRITICAL FIX: Wait if already syncing to avoid race conditions
+    // CRITICAL FIX: Wait if already syncing
     int waitCount = 0;
     while (_isSyncing && waitCount < 50) {
-      // Max wait 5 seconds
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
@@ -300,7 +303,34 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    // CRITICAL FIX: Remove ALL existing notifications with same ID to prevent duplicates
+    // CRITICAL FIX: Check if we already have this notification with same timestamp
+    final existing = _notifications.firstWhere(
+      (n) => n.id == item.id,
+      orElse: () => NotificationItem(
+        id: '',
+        title: '',
+        body: '',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+        data: {},
+      ),
+    );
+
+    if (existing.id.isNotEmpty) {
+      // If timestamps are very close (within 1 second), it's a duplicate
+      final diff = item.timestamp.difference(existing.timestamp).abs();
+      if (diff.inSeconds < 1) {
+        debugPrint('❌ [Manager] Duplicate detected (same timestamp), skipping');
+        return;
+      }
+      
+      // If new timestamp is older, keep existing
+      if (item.timestamp.isBefore(existing.timestamp)) {
+        debugPrint('❌ [Manager] New notification is older, keeping existing');
+        return;
+      }
+    }
+
+    // Remove existing with same ID
     _notifications.removeWhere((n) => n.id == item.id);
 
     // Add new notification at the beginning
@@ -337,7 +367,31 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    // CRITICAL FIX: Remove ALL existing notifications with same ID
+    // Check for duplicate with timestamp
+    final existing = _notifications.firstWhere(
+      (n) => n.id == item.id,
+      orElse: () => NotificationItem(
+        id: '',
+        title: '',
+        body: '',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+        data: {},
+      ),
+    );
+
+    if (existing.id.isNotEmpty) {
+      final diff = item.timestamp.difference(existing.timestamp).abs();
+      if (diff.inSeconds < 1) {
+        debugPrint('❌ [Manager] Duplicate native notification, skipping');
+        return;
+      }
+      if (item.timestamp.isBefore(existing.timestamp)) {
+        debugPrint('❌ [Manager] New native notification is older, keeping existing');
+        return;
+      }
+    }
+
+    // Remove existing with same ID
     _notifications.removeWhere((n) => n.id == item.id);
 
     // Add new notification
@@ -402,15 +456,16 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _sortAndCount() {
-    // CRITICAL FIX: Remove duplicates by ID as final safety check
+    // CRITICAL FIX: Remove duplicates by ID with timestamp comparison
     final Map<String, NotificationItem> deduplicatedMap = {};
+    
     for (var notification in _notifications) {
       if (!deduplicatedMap.containsKey(notification.id)) {
         deduplicatedMap[notification.id] = notification;
       } else {
         // If duplicate found, keep the one with the most recent timestamp
-        if (notification.timestamp
-            .isAfter(deduplicatedMap[notification.id]!.timestamp)) {
+        final existing = deduplicatedMap[notification.id]!;
+        if (notification.timestamp.isAfter(existing.timestamp)) {
           deduplicatedMap[notification.id] = notification;
         }
       }
@@ -445,10 +500,20 @@ class NotificationManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Final deduplication before saving
-      final Map<String, NotificationItem> deduplicatedMap = {
-        for (var item in _notifications) item.id: item
-      };
+      // Final deduplication before saving with timestamp comparison
+      final Map<String, NotificationItem> deduplicatedMap = {};
+      for (var item in _notifications) {
+        if (!deduplicatedMap.containsKey(item.id)) {
+          deduplicatedMap[item.id] = item;
+        } else {
+          // Keep the one with latest timestamp
+          final existing = deduplicatedMap[item.id]!;
+          if (item.timestamp.isAfter(existing.timestamp)) {
+            deduplicatedMap[item.id] = item;
+          }
+        }
+      }
+      
       _notifications = deduplicatedMap.values.toList();
       _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
@@ -457,9 +522,7 @@ class NotificationManager extends ChangeNotifier {
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
 
-      if (waitCount > 0) {
-        debugPrint('💾 [Manager] Saved to disk (waited $waitCount cycles)');
-      }
+      debugPrint('💾 [Manager] Saved ${_notifications.length} notifications to disk');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -559,12 +622,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
+  // Small delay to prevent race conditions
+  await Future.delayed(const Duration(milliseconds: 200));
   await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title}');
+  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title} (ID: ${item.id})');
 }
-
-/// Show local notification on iOS in background
-/// Show local notification on iOS in background
 
 /// =========================
 /// METHOD CHANNEL FOR iOS NOTIFICATIONS
@@ -579,15 +641,17 @@ class NotificationMethodChannel {
         final Map<String, dynamic> data =
             Map<String, dynamic>.from(call.arguments);
 
-        // Add to notification manager
+        // Add small delay to prevent race conditions
+        await Future.delayed(const Duration(milliseconds: 200));
         await NotificationManager.instance.addNotificationFromNative(data);
       } else if (call.method == 'navigateToNotifications') {
         debugPrint('📱 [iOS Channel] Navigation command received');
-        // Navigate to notifications screen
-        navigatorKey.currentState?.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-          (route) => false,
-        );
+        Future.delayed(const Duration(milliseconds: 300), () {
+          navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+            (route) => false,
+          );
+        });
       }
     });
   }
@@ -648,6 +712,9 @@ void main() async {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
 
+    // Clear timestamp cache on app start
+    NotificationService.clearTimestampCache();
+
     // ============================================
     // CRITICAL: Enable foreground notifications for iOS
     // ============================================
@@ -692,7 +759,7 @@ void main() async {
 
     await _setupNotificationNavigation(messaging);
   } catch (e) {
-    debugPrint('�� Init Error: $e');
+    debugPrint('❌ Init Error: $e');
   }
 
   runApp(
@@ -719,8 +786,9 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
-      Future.delayed(const Duration(seconds: 1), () {
+      // Small delay to ensure manager is ready
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        await NotificationManager.instance.addFirebaseMessage(initialMessage);
         _navigateToNotifications();
       });
     }
@@ -742,8 +810,10 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    // ALWAYS add to notification manager - THIS IS THE FIX
-    NotificationManager.instance.addFirebaseMessage(message);
+    // Add small delay to prevent race conditions
+    Future.delayed(const Duration(milliseconds: 100), () {
+      NotificationManager.instance.addFirebaseMessage(message);
+    });
 
     // Show local notification on Android
     if (Platform.isAndroid && message.notification != null) {
@@ -1110,12 +1180,11 @@ class NotificationDetailScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 32),
-            // Company name section - always show only company name
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'الشركة العامة لتع��ئة وخدمات الغاز',
+                  'الشركة العامة لتعبئة وخدمات الغاز',
                   style: GoogleFonts.cairo(
                     fontSize: 10,
                     color: const Color(0xFF2D3748),
@@ -1495,7 +1564,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -1507,7 +1576,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '4. حماية البيانات',
-                      'تتخذ الشركة ال��امة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
+                      'تتخذ الشركة العامة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
                     ),
                     _buildPrivacySection(
                       '5. مشاركة البيانات',
@@ -1902,7 +1971,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعا��ات الجديدة هنا',
+                : 'ستظهر الإشعارات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2546,7 +2615,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g', '';
+            var cleanUrl = url.replace(/[?&]download=1/g', '');
             window.location.href = cleanUrl;
             return window;
           }
@@ -2711,98 +2780,95 @@ class _WebViewScreenState extends State<WebViewScreen> {
             backgroundColor: Colors.white,
             child: Padding(
               padding: const EdgeInsets.all(24.0),
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00BFA5).withOpacity(0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.logout,
-                        size: 48,
-                        color: Color(0xFF00BFA5),
-                      ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00BFA5).withOpacity(0.1),
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'الخروج من التطبيق',
-                      style: GoogleFonts.cairo(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+                    child: const Icon(
+                      Icons.logout,
+                      size: 48,
+                      color: Color(0xFF00BFA5),
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'هل تريد الخروج من التطبيق؟',
-                      style: GoogleFonts.cairo(
-                        fontSize: 16,
-                        color: Colors.black54,
-                      ),
-                      textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'الخروج من التطبيق',
+                    style: GoogleFonts.cairo(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
                     ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () {
-                              Navigator.of(context).pop(true);
-                              if (Platform.isAndroid) {
-                                SystemNavigator.pop();
-                              } else if (Platform.isIOS) {
-                                exit(0);
-                              }
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF00BFA5),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              elevation: 0,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'هل تريد الخروج من التطبيق؟',
+                    style: GoogleFonts.cairo(
+                      fontSize: 16,
+                      color: Colors.black54,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.of(context).pop(true);
+                            if (Platform.isAndroid) {
+                              SystemNavigator.pop();
+                            } else if (Platform.isIOS) {
+                              exit(0);
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00BFA5),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Text(
-                              'نعم',
-                              style: GoogleFonts.cairo(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            'نعم',
+                            style: GoogleFonts.cairo(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.black54,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              side: BorderSide(
-                                  color: Colors.grey.shade300, width: 1.5),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.black54,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Text(
-                              '��ا',
-                              style: GoogleFonts.cairo(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            side: BorderSide(
+                                color: Colors.grey.shade300, width: 1.5),
+                          ),
+                          child: Text(
+                            'لا',
+                            style: GoogleFonts.cairo(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
