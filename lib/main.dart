@@ -92,7 +92,7 @@ class NotificationItem {
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // ✅ Parse sent_at from data
+    // ✅ Parse sent_at from data (FIXED: Now matches PHP 'sent_at')
     DateTime timestamp;
     try {
       if (message.data['sent_at'] != null) {
@@ -489,7 +489,9 @@ void _navigateToNotifications() {
   } else {
     Future.delayed(const Duration(milliseconds: 500), () {
       navigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+        MaterialPageRoute(
+          builder: (context) => const NotificationsScreen(),
+        ),
       );
     });
   }
@@ -696,7 +698,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   // Handle when app is in background and notification is tapped
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    await NotificationManager.instance.addFirebaseMessage(message);
+    // FIXED: Removed addFirebaseMessage to prevent duplicates - it's already saved in background
     _navigateToNotifications();
   });
 
@@ -1080,7 +1082,7 @@ class NotificationDetailScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'الشركة العامة لتع��ئة وخدمات الغاز',
+                  'الشركة العامة لتعبئة وخدمات الغاز',
                   style: GoogleFonts.cairo(
                     fontSize: 10,
                     color: const Color(0xFF2D3748),
@@ -1460,7 +1462,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم ال��ركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -1867,7 +1869,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعا��ات الجديدة هنا',
+                : 'ستظهر الإشعارات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2159,7 +2161,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ),
             ),
             child: Text(
-              'حذف',
+              '��ذف',
               style: GoogleFonts.cairo(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -2756,7 +2758,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                   color: Colors.grey.shade300, width: 1.5),
                             ),
                             child: Text(
-                              '��ا',
+                              'لا',
                               style: GoogleFonts.cairo(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
