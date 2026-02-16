@@ -2,60 +2,197 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 /// NotificationService - Client for PHP/MySQL notifications API.
 class NotificationService {
-  static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
+  // ============================================
+  // API CONFIGURATION
+  // ============================================
+  static const String baseUrl = 'https://lpgaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
-  static const String storageKey = 'stored_notifications_final';
+  static const String storageKey = 'stored_notifications_final_v2';
 
-  // =========================================================
-  // Get all notifications from MySQL
-  // =========================================================
+  static bool _isInitialized = false;
+  static List<Map<String, dynamic>> _pendingServerSync = [];
+
+  // ============================================
+  // Initialize service
+  // ============================================
+  static Future<void> initialize() async {
+    if (_isInitialized) return;
+    _isInitialized = true;
+    debugPrint('🚀 [NotificationService] Initialized');
+  }
+
+  // ============================================
+  // Check internet connectivity
+  // ============================================
+  static Future<bool> hasInternetConnection() async {
+    try {
+      final connectivityResult = await Connectivity().checkConnectivity();
+      return connectivityResult != ConnectivityResult.none;
+    } catch (e) {
+      debugPrint('⚠️ [NotificationService] Connectivity check failed: $e');
+      return false;
+    }
+  }
+
+  // ============================================
+  // CRITICAL FIXED: Get all notifications from MySQL
+  // Using GET request with proper parameters
+  // ============================================
   static Future<List<Map<String, dynamic>>> getAllNotifications({
     int limit = 100,
   }) async {
-    final uri = Uri.parse('$apiEndpoint?action=get_all&limit=$limit');
-
     try {
-      final response = await http.get(uri, headers: {
-        'Content-Type': 'application/json'
-      }).timeout(const Duration(seconds: 10));
+      if (!await hasInternetConnection()) {
+        debugPrint('📡 [NotificationService] No internet connection');
+        return [];
+      }
+
+      debugPrint(
+          '📡 [NotificationService] Fetching from: $apiEndpoint?action=get_all&limit=$limit');
+
+      final response = await http.get(
+        Uri.parse('$apiEndpoint?action=get_all&limit=$limit'),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      debugPrint(
+          '📥 [NotificationService] Response status: ${response.statusCode}');
+      debugPrint(
+          '📥 [NotificationService] Response body: ${response.body.substring(0, min(200, response.body.length))}...');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+
         if (data['success'] == true && data['notifications'] != null) {
-          return List<Map<String, dynamic>>.from(data['notifications']);
+          final notifications =
+              List<Map<String, dynamic>>.from(data['notifications']);
+          debugPrint(
+              '✅ [NotificationService] Received ${notifications.length} notifications');
+
+          // Save to local disk
+          await _mergeWithLocal(notifications);
+
+          return notifications;
+        } else {
+          debugPrint(
+              '⚠️ [NotificationService] Server response: success=${data['success']}');
         }
+      } else {
+        debugPrint(
+            '❌ [NotificationService] HTTP Error: ${response.statusCode}');
       }
-    } catch (e) {
+    } catch (e, stacktrace) {
       debugPrint('❌ [NotificationService] Network Error: $e');
+      debugPrint('❌ [NotificationService] Stacktrace: $stacktrace');
     }
 
     return [];
   }
 
-  // =========================================================
-  // CRITICAL: Save to Local Disk (Safe for Background) - FIXED
-  // =========================================================
-  static Future<void> saveToLocalDisk(
-    Map<String, dynamic> newNotificationJson,
-  ) async {
+  // ============================================
+  // CRITICAL: Merge server notifications with local
+  // Preserve read status from local storage
+  // ============================================
+  static Future<void> _mergeWithLocal(
+      List<Map<String, dynamic>> serverNotifications) async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
-      // FORCE RELOAD: Ensure we are seeing the latest data on disk
+      final jsonStr = prefs.getString(storageKey);
+      List<Map<String, dynamic>> localList = [];
+
+      if (jsonStr != null) {
+        final List<dynamic> decoded = jsonDecode(jsonStr);
+        localList = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+
+      // Create map of local notifications with their read status
+      final Map<String, Map<String, dynamic>> localMap = {};
+      for (var item in localList) {
+        final id = item['id'].toString();
+        localMap[id] = item;
+      }
+
+      // Merge server notifications with local read status
+      final Map<String, Map<String, dynamic>> mergedMap = {};
+
+      // Add all server notifications
+      for (var serverItem in serverNotifications) {
+        final id = serverItem['id'].toString();
+        final localItem = localMap[id];
+
+        if (localItem != null) {
+          // Preserve read status from local
+          serverItem['isRead'] = localItem['isRead'] ?? false;
+        } else {
+          serverItem['isRead'] = false;
+        }
+
+        mergedMap[id] = serverItem;
+      }
+
+      // Add local notifications that might not be in server yet
+      for (var localItem in localList) {
+        final id = localItem['id'].toString();
+        if (!mergedMap.containsKey(id)) {
+          mergedMap[id] = localItem;
+        }
+      }
+
+      // Convert back to list and sort by timestamp
+      List<Map<String, dynamic>> mergedList = mergedMap.values.toList();
+      mergedList.sort((a, b) {
+        final aTime = a['timestamp'] ?? 0;
+        final bTime = b['timestamp'] ?? 0;
+        if (aTime is int && bTime is int) {
+          return bTime.compareTo(aTime);
+        }
+        return 0;
+      });
+
+      // Limit to 200
+      if (mergedList.length > 200) {
+        mergedList = mergedList.sublist(0, 200);
+      }
+
+      // Save back to disk
+      await prefs.setString(storageKey, jsonEncode(mergedList));
+      debugPrint(
+          '💾 [NotificationService] Merged ${mergedList.length} notifications');
+    } catch (e) {
+      debugPrint('❌ [NotificationService] Merge failed: $e');
+    }
+  }
+
+  // ============================================
+  // CRITICAL: Save to Local Disk (Safe for Background)
+  // Used by background handler to store notifications
+  // ============================================
+  static Future<void> saveToLocalDisk(
+      Map<String, dynamic> newNotificationJson) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
       // Get existing list
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // CRITICAL FIX: Remove existing notifications with the same ID to prevent duplicates
+      // Add new item to TOP of list
       final newId = newNotificationJson['id'].toString();
+
+      // Remove if exists (deduplicate)
       list.removeWhere((item) => item['id'].toString() == newId);
 
-      // Add new item to TOP of list
+      // Insert at top
       list.insert(0, newNotificationJson);
 
       // Limit to 200
@@ -64,28 +201,48 @@ class NotificationService {
       }
 
       await prefs.setString(storageKey, jsonEncode(list));
-      debugPrint('💾 [BG-Service] Saved notification $newId to disk.');
+      debugPrint('💾 [NotificationService] Saved notification $newId to disk');
+      debugPrint('💾 [NotificationService] Total stored: ${list.length}');
+
+      // Try to sync to server if we have connection
+      if (await hasInternetConnection()) {
+        saveNotificationToServer(newNotificationJson);
+      } else {
+        _pendingServerSync.add(newNotificationJson);
+        if (_pendingServerSync.length > 50) {
+          _pendingServerSync =
+              _pendingServerSync.sublist(_pendingServerSync.length - 50);
+        }
+      }
     } catch (e) {
-      debugPrint('❌ [BG-Service] Save Failed: $e');
+      debugPrint('❌ [NotificationService] Save Failed: $e');
     }
   }
 
-  // =========================================================
+  // ============================================
   // Save notification to server
-  // =========================================================
+  // ============================================
   static Future<bool> saveNotificationToServer(
-    Map<String, dynamic> notification,
-  ) async {
+      Map<String, dynamic> notification) async {
     try {
-      final uri = Uri.parse('$apiEndpoint?action=save_notification');
+      if (!await hasInternetConnection()) {
+        return false;
+      }
 
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(notification),
-          )
-          .timeout(const Duration(seconds: 10));
+      final response = await http.post(
+        Uri.parse(apiEndpoint),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'action': 'save_notification',
+          'id': notification['id']?.toString() ?? '',
+          'title': notification['title'] ?? '',
+          'body': notification['body'] ?? '',
+          'image_url':
+              notification['imageUrl'] ?? notification['image_url'] ?? '',
+          'type': notification['type'] ?? 'general',
+          'data_payload': jsonEncode(notification['data'] ?? {}),
+        },
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -93,55 +250,167 @@ class NotificationService {
       }
       return false;
     } catch (e) {
+      debugPrint('❌ [NotificationService] Save error: $e');
       return false;
     }
   }
 
-  // =========================================================
-  // Mark as read
-  // =========================================================
-  static Future<bool> markAsRead(String id) async {
+  // ============================================
+  // Get local notifications
+  // ============================================
+  static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
     try {
-      final uri = Uri.parse('$apiEndpoint?action=mark_as_read');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['success'] == true;
+      final jsonStr = prefs.getString(storageKey);
+
+      if (jsonStr != null) {
+        final List<dynamic> list = jsonDecode(jsonStr);
+        final notifications =
+            list.map((e) => Map<String, dynamic>.from(e)).toList();
+        debugPrint(
+            '📂 [NotificationService] Loaded ${notifications.length} from disk');
+        return notifications;
       }
-      return false;
     } catch (e) {
-      return false;
+      debugPrint('❌ [NotificationService] Load failed: $e');
+    }
+
+    return [];
+  }
+
+  // ============================================
+  // Mark notification as read
+  // ============================================
+  static Future<void> markAsRead(String id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+
+      final jsonStr = prefs.getString(storageKey);
+
+      if (jsonStr != null) {
+        List<dynamic> list = jsonDecode(jsonStr);
+        bool updated = false;
+
+        for (var item in list) {
+          if (item['id'].toString() == id) {
+            if (item['isRead'] != true) {
+              item['isRead'] = true;
+              updated = true;
+            }
+            break;
+          }
+        }
+
+        if (updated) {
+          await prefs.setString(storageKey, jsonEncode(list));
+          debugPrint('✅ [NotificationService] Marked $id as read');
+        }
+      }
+
+      // Try to sync to server in background
+      if (await hasInternetConnection()) {
+        _markAsReadOnServer(id);
+      }
+    } catch (e) {
+      debugPrint('❌ [NotificationService] Mark as read error: $e');
     }
   }
 
-  // =========================================================
+  static Future<void> _markAsReadOnServer(String id) async {
+    try {
+      await http.post(
+        Uri.parse(apiEndpoint),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'action': 'mark_as_read',
+          'id': id,
+        },
+      );
+    } catch (e) {
+      // Silently fail
+    }
+  }
+
+  // ============================================
   // Delete notification
-  // =========================================================
-  static Future<bool> deleteNotification(String id) async {
+  // ============================================
+  static Future<void> deleteNotification(String id) async {
     try {
-      final uri = Uri.parse('$apiEndpoint?action=delete_notification');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['success'] == true;
+      final jsonStr = prefs.getString(storageKey);
+
+      if (jsonStr != null) {
+        List<dynamic> list = jsonDecode(jsonStr);
+        list.removeWhere((item) => item['id'].toString() == id);
+        await prefs.setString(storageKey, jsonEncode(list));
+        debugPrint('🗑️ [NotificationService] Deleted $id');
       }
-      return false;
     } catch (e) {
-      return false;
+      debugPrint('❌ [NotificationService] Delete error: $e');
     }
+  }
+
+  // ============================================
+  // Clear all notifications
+  // ============================================
+  static Future<void> clearAllNotifications() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(storageKey);
+      debugPrint('✅ [NotificationService] Cleared all notifications');
+    } catch (e) {
+      debugPrint('❌ [NotificationService] Clear failed: $e');
+    }
+  }
+
+  // ============================================
+  // Get unread count
+  // ============================================
+  static Future<int> getUnreadCount() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+
+      final jsonStr = prefs.getString(storageKey);
+
+      if (jsonStr != null) {
+        final List<dynamic> list = jsonDecode(jsonStr);
+        final unreadCount = list.where((item) => item['isRead'] != true).length;
+        return unreadCount;
+      }
+    } catch (e) {
+      debugPrint('❌ [NotificationService] Unread count error: $e');
+    }
+
+    return 0;
+  }
+
+  // ============================================
+  // Sync pending to server
+  // ============================================
+  static Future<void> syncPendingToServer() async {
+    if (_pendingServerSync.isEmpty) return;
+    if (!await hasInternetConnection()) return;
+
+    final List<Map<String, dynamic>> synced = [];
+    for (var notification in _pendingServerSync) {
+      final success = await saveNotificationToServer(notification);
+      if (success) {
+        synced.add(notification);
+      }
+    }
+
+    for (var notification in synced) {
+      _pendingServerSync.remove(notification);
+    }
+
+    debugPrint('✅ [NotificationService] Synced ${synced.length} notifications');
   }
 }
+
+int min(int a, int b) => a < b ? a : b;
