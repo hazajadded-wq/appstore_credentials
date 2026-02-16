@@ -92,7 +92,7 @@ class NotificationItem {
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // ✅ Parse sent_at from data (FIXED: Now matches PHP 'sent_at')
+    // ✅ Parse sent_at from data
     DateTime timestamp;
     try {
       if (message.data['sent_at'] != null) {
@@ -226,13 +226,18 @@ class NotificationManager extends ChangeNotifier {
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
-          // Always use server data but preserve read status
+          // FIXED: Use the more recent timestamp between server and local
+          final moreRecentTimestamp =
+              serverItem.timestamp.isAfter(localItem.timestamp)
+                  ? serverItem.timestamp
+                  : localItem.timestamp;
+
           localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
             body: serverItem.body,
             imageUrl: serverItem.imageUrl,
-            timestamp: serverItem.timestamp, // Use server timestamp
+            timestamp: moreRecentTimestamp, // Use more recent timestamp
             data: serverItem.data,
             type: serverItem.type,
             isRead: localItem.isRead,
@@ -489,9 +494,7 @@ void _navigateToNotifications() {
   } else {
     Future.delayed(const Duration(milliseconds: 500), () {
       navigatorKey.currentState?.push(
-        MaterialPageRoute(
-          builder: (context) => const NotificationsScreen(),
-        ),
+        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
     });
   }
@@ -698,7 +701,7 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   // Handle when app is in background and notification is tapped
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    // FIXED: Removed addFirebaseMessage to prevent duplicates - it's already saved in background
+    await NotificationManager.instance.addFirebaseMessage(message);
     _navigateToNotifications();
   });
 
@@ -1462,7 +1465,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم ال��ركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -1869,7 +1872,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعارات الجديدة هنا',
+                : 'ستظهر الإشعا��ات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2161,7 +2164,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ),
             ),
             child: Text(
-              '��ذف',
+              'حذف',
               style: GoogleFonts.cairo(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -2601,7 +2604,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         });
       } catch (e) {
         if (mounted) setState(() => isLoading = false);
-        _showMessage('فشل حفظ الصورة في المعرض');
+        _showMessage('فشل حفظ الصورة في المعر��');
       }
     } catch (e) {
       if (mounted) setState(() => isLoading = false);
@@ -2758,7 +2761,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                   color: Colors.grey.shade300, width: 1.5),
                             ),
                             child: Text(
-                              'لا',
+                              '��ا',
                               style: GoogleFonts.cairo(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
