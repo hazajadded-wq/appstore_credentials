@@ -190,7 +190,8 @@ class NotificationManager extends ChangeNotifier {
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
         _sortAndCount(); // This now includes deduplication
         notifyListeners();
-        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
+        debugPrint(
+            '📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
       }
 
       if (deletedJson != null) {
@@ -233,13 +234,12 @@ class NotificationManager extends ChangeNotifier {
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
-          // Always use server data but preserve read status
           localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
             body: serverItem.body,
             imageUrl: serverItem.imageUrl,
-            timestamp: serverItem.timestamp, // Use server timestamp
+            timestamp: serverItem.timestamp,
             data: serverItem.data,
             type: serverItem.type,
             isRead: localItem.isRead,
@@ -249,6 +249,10 @@ class NotificationManager extends ChangeNotifier {
           hasChanges = true;
         }
       }
+
+      // أضف هذا السطر:
+      localMap.removeWhere(
+          (id, _) => _deletedIds.contains(id)); // الحجب النهائي للمحذوفين
 
       _notifications = localMap.values.toList();
       _sortAndCount(); // This now includes deduplication
@@ -260,8 +264,9 @@ class NotificationManager extends ChangeNotifier {
       if (hasChanges) {
         await _saveToDisk();
       }
-      
-      debugPrint('✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
+
+      debugPrint(
+          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -273,7 +278,8 @@ class NotificationManager extends ChangeNotifier {
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     // CRITICAL FIX: Wait if already syncing to avoid race conditions
     int waitCount = 0;
-    while (_isSyncing && waitCount < 50) { // Max wait 5 seconds
+    while (_isSyncing && waitCount < 50) {
+      // Max wait 5 seconds
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
@@ -299,7 +305,8 @@ class NotificationManager extends ChangeNotifier {
 
     // Add new notification at the beginning
     _notifications.insert(0, item);
-    debugPrint('✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
+    debugPrint(
+        '✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
 
     _sortAndCount();
     await _saveToDisk();
@@ -335,7 +342,8 @@ class NotificationManager extends ChangeNotifier {
 
     // Add new notification
     _notifications.insert(0, item);
-    debugPrint('✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
+    debugPrint(
+        '✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
 
     _sortAndCount();
     await _saveToDisk();
@@ -376,8 +384,8 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> clearAllNotifications() async {
-    _notifications.clear();
     _deletedIds.addAll(_notifications.map((n) => n.id)); // Mark all as deleted
+    _notifications.clear();
     _updateUnreadCount();
     await _saveToDisk();
     notifyListeners();
@@ -401,17 +409,19 @@ class NotificationManager extends ChangeNotifier {
         deduplicatedMap[notification.id] = notification;
       } else {
         // If duplicate found, keep the one with the most recent timestamp
-        if (notification.timestamp.isAfter(deduplicatedMap[notification.id]!.timestamp)) {
+        if (notification.timestamp
+            .isAfter(deduplicatedMap[notification.id]!.timestamp)) {
           deduplicatedMap[notification.id] = notification;
         }
       }
     }
-    
+
     _notifications = deduplicatedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
-    
-    debugPrint('📊 [Manager] After dedup: ${_notifications.length} notifications');
+
+    debugPrint(
+        '📊 [Manager] After dedup: ${_notifications.length} notifications');
   }
 
   void _updateUnreadCount() {
@@ -434,19 +444,19 @@ class NotificationManager extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
-      
+
       // Final deduplication before saving
       final Map<String, NotificationItem> deduplicatedMap = {
         for (var item in _notifications) item.id: item
       };
       _notifications = deduplicatedMap.values.toList();
       _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-      
+
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
-      
+
       if (waitCount > 0) {
         debugPrint('💾 [Manager] Saved to disk (waited $waitCount cycles)');
       }
@@ -1206,14 +1216,14 @@ class NotificationDetailScreen extends StatelessWidget {
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now().toUtc();
-      Duration difference = now.difference(timestamp.toUtc());
+      DateTime now = DateTime.now();
+      Duration difference = now.difference(timestamp);
 
       if (difference.inMinutes < 1) {
         return 'الآن';
-      } else if (difference.inHours < 1) {
+      } else if (difference.inMinutes < 60) {
         return 'منذ ${difference.inMinutes} دقيقة';
-      } else if (difference.inDays < 1) {
+      } else if (difference.inHours < 24) {
         return 'منذ ${difference.inHours} ساعة';
       } else if (difference.inDays < 7) {
         return 'منذ ${difference.inDays} يوم';
@@ -2243,12 +2253,12 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now().toUtc();
-      Duration difference = now.difference(timestamp.toUtc());
+      DateTime now = DateTime.now();
+      Duration difference = now.difference(timestamp);
 
       if (difference.inMinutes < 1) {
         return 'الآن';
-      } else if (difference.inHours < 1) {
+      } else if (difference.inMinutes < 60) {
         return 'منذ ${difference.inMinutes} دقيقة';
       } else if (difference.inHours < 24) {
         return 'منذ ${difference.inHours} ساعة';
