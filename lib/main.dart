@@ -130,9 +130,7 @@ class NotificationItem {
           map['data_payload'].toString().isNotEmpty) {
         try {
           payload = jsonDecode(map['data_payload']);
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       } else if (map['data_payload'] is Map) {
         payload = Map<String, dynamic>.from(map['data_payload']);
       }
@@ -215,6 +213,37 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
+  /// التحقق من الإشعارات المعلقة
+  Future<void> checkForPendingNotifications() async {
+    try {
+      final hasInternet = await NotificationService.hasInternetConnection();
+      if (!hasInternet) return;
+
+      final pending = await NotificationService.loadPendingNotifications();
+      if (pending.isNotEmpty) {
+        debugPrint(
+            '📋 [Manager] Found ${pending.length} pending notifications');
+
+        for (var pendingNotif in pending) {
+          final item = NotificationItem.fromJson(pendingNotif);
+
+          // تحقق من عدم وجوده مسبقاً
+          final exists = _notifications.any((n) => n.id == item.id);
+          if (!exists) {
+            _notifications.insert(0, item);
+            debugPrint('✅ [Manager] Added pending notification: ${item.title}');
+          }
+        }
+
+        _sortAndCount();
+        await _saveToDisk();
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('❌ [Manager] Error checking pending: $e');
+    }
+  }
+
   /// SYNC FROM SERVER AND DISK - FIXED to prevent duplicates
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
@@ -226,6 +255,9 @@ class NotificationManager extends ChangeNotifier {
           await NotificationService.getAllNotifications(limit: 100);
 
       await loadNotifications();
+
+      // التحقق من الإشعارات المعلقة
+      await checkForPendingNotifications();
 
       if (serverListRaw.isEmpty) {
         _isSyncing = false;
@@ -642,41 +674,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  // Check for duplicates in SharedPreferences
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(NotificationService.storageKey);
-    if (jsonStr != null) {
-      final list = jsonDecode(jsonStr) as List;
-      for (var existing in list) {
-        final existingId = existing['id']?.toString();
-        final existingTitle = existing['title']?.toString() ?? '';
-        final existingBody = existing['body']?.toString() ?? '';
-
-        if (existingId == item.id) {
-          debugPrint('🌙 [BG] Duplicate ID found, skipping');
-          return;
-        }
-
-        if (existingTitle == item.title && existingBody == item.body) {
-          final DateTime existingTime =
-              DateTime.tryParse(existing['timestamp'] ?? '') ??
-                  DateTime.now().toUtc();
-          final timeDiff = item.timestamp.difference(existingTime).abs();
-          if (timeDiff.inSeconds < 10) {
-            debugPrint('🌙 [BG] Content duplicate found, skipping');
-            return;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    debugPrint('🌙 [BG] Error checking duplicates: $e');
-  }
-
-  await Future.delayed(const Duration(milliseconds: 500));
+  // حفظ في التخزين المحلي (الوظيفة المعدلة تتعامل مع عدم وجود إنترنت)
   await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved: ${item.title} (ID: ${item.id})');
+  debugPrint('🌙 [BG] Notification processed: ${item.title} (ID: ${item.id})');
 }
 
 /// =========================
@@ -753,6 +753,36 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
+/// إعداد دعم عدم الاتصال
+/// =========================
+Future<void> _initializeOfflineSupport() async {
+  // بدء مراقبة الاتصال
+  NotificationService.startConnectivityMonitoring();
+
+  // التحقق من وجود إشعارات معلقة عند بدء التشغيل
+  final hasInternet = await NotificationService.hasInternetConnection();
+  if (hasInternet) {
+    // تأخير لمدة ثانيتين للتأكد من اكتمال تهيئة التطبيق
+    Future.delayed(const Duration(seconds: 2), () {
+      NotificationService.retryPendingNotifications();
+    });
+  }
+
+  // الاستماع لتغيرات حالة التطبيق
+  SystemChannels.lifecycle.setMessageHandler((message) async {
+    if (message == AppLifecycleState.resumed.toString()) {
+      // عند عودة التطبيق إلى المقدمة، تحقق من وجود إنترنت
+      final hasInternet = await NotificationService.hasInternetConnection();
+      if (hasInternet) {
+        NotificationService.retryPendingNotifications();
+        NotificationManager.instance.fetchFromMySQL();
+      }
+    }
+    return null;
+  });
+}
+
+/// =========================
 /// MAIN - FIXED
 /// =========================
 
@@ -777,6 +807,9 @@ void main() async {
 
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // إعداد دعم عدم الاتصال
+    await _initializeOfflineSupport();
 
     await NotificationManager.instance.loadNotifications();
 
@@ -1714,6 +1747,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   String _searchQuery = '';
   String _selectedFilter = 'all';
   Timer? _refreshTimer;
+  bool _hasInternet = true;
+  int _pendingCount = 0;
 
   @override
   bool get wantKeepAlive => true;
@@ -1724,14 +1759,17 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _forceRefresh();
+      await _checkInternetAndLoad();
     });
 
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted) {
-        _forceRefresh();
+        _checkInternetAndLoad();
       }
     });
+
+    // بدء مراقبة الإشعارات المعلقة
+    _startPendingMonitoring();
   }
 
   @override
@@ -1748,20 +1786,62 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       debugPrint('🔄 [Notifications] App resumed - Force refresh');
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {
-          _forceRefresh();
+          _checkInternetAndLoad();
         }
       });
     }
   }
 
-  Future<void> _forceRefresh() async {
+  Future<void> _checkInternetAndLoad() async {
+    _hasInternet = await NotificationService.hasInternetConnection();
+    _pendingCount =
+        (await NotificationService.loadPendingNotifications()).length;
+
     await NotificationManager.instance.loadNotifications();
-    await NotificationManager.instance.fetchFromMySQL();
+    if (_hasInternet) {
+      await NotificationManager.instance.fetchFromMySQL();
+    }
 
     if (mounted) {
       setState(() {});
     }
   }
+
+  void _startPendingMonitoring() {
+    Timer.periodic(const Duration(seconds: 10), (timer) async {
+      if (mounted) {
+        final count =
+            (await NotificationService.loadPendingNotifications()).length;
+        if (count != _pendingCount) {
+          setState(() {
+            _pendingCount = count;
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> _forceRefresh() async {
+    await _checkInternetAndLoad();
+  }
+
+  Future<void> _retryPendingNow() async {
+    if (!_hasInternet) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا يوجد اتصال بالإنترنت')),
+      );
+      return;
+    }
+
+    setState(() => _isSyncing = true);
+    await NotificationService.retryPendingNotifications();
+    await NotificationManager.instance.fetchFromMySQL();
+    _pendingCount =
+        (await NotificationService.loadPendingNotifications()).length;
+    setState(() => _isSyncing = false);
+  }
+
+  bool _isSyncing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -1789,6 +1869,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     await NotificationManager.instance.clearAllNotifications();
                   }
                   break;
+                case 'retry_pending':
+                  await _retryPendingNow();
+                  break;
               }
             },
             itemBuilder: (context) => [
@@ -1812,6 +1895,18 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   ],
                 ),
               ),
+              if (_pendingCount > 0)
+                PopupMenuItem(
+                  value: 'retry_pending',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sync, color: Colors.orange),
+                      const SizedBox(width: 8),
+                      Text('إرسال $_pendingCount إشعار معلق',
+                          style: GoogleFonts.cairo()),
+                    ],
+                  ),
+                ),
             ],
           ),
         ],
@@ -1832,6 +1927,60 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             ),
             child: Column(
               children: [
+                // مؤشر حالة الإنترنت والإشعارات المعلقة
+                if (!_hasInternet || _pendingCount > 0)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: !_hasInternet
+                          ? Colors.red.shade50
+                          : Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: !_hasInternet
+                            ? Colors.red.shade200
+                            : Colors.orange.shade200,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          !_hasInternet
+                              ? Icons.wifi_off
+                              : Icons.hourglass_empty,
+                          color: !_hasInternet ? Colors.red : Colors.orange,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            !_hasInternet
+                                ? 'لا يوجد اتصال بالإنترنت. سيتم حفظ الإشعارات محلياً.'
+                                : 'لديك $_pendingCount إشعار معلق في انتظار الإرسال.',
+                            style: GoogleFonts.cairo(
+                              fontSize: 12,
+                              color: !_hasInternet ? Colors.red : Colors.orange,
+                            ),
+                          ),
+                        ),
+                        if (_pendingCount > 0 && _hasInternet)
+                          TextButton(
+                            onPressed: _retryPendingNow,
+                            child: Text(
+                              'إرسال الآن',
+                              style: GoogleFonts.cairo(
+                                fontSize: 12,
+                                color: const Color(0xFF00BFA5),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+
                 TextField(
                   controller: _searchController,
                   onChanged: (value) {
@@ -1885,7 +2034,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ],
             ),
           ),
-          if (NotificationManager.instance.isSyncing)
+          if (NotificationManager.instance.isSyncing || _isSyncing)
             const LinearProgressIndicator(
               color: Color(0xFF00BFA5),
               minHeight: 2,
@@ -1981,15 +2130,22 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               color: const Color(0xFF00BFA5).withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: const Icon(
-              Icons.notifications_off_outlined,
+            child: Icon(
+              _pendingCount > 0
+                  ? Icons.hourglass_empty
+                  : Icons.notifications_off_outlined,
               size: 60,
-              color: Color(0xFF00BFA5),
+              color:
+                  _pendingCount > 0 ? Colors.orange : const Color(0xFF00BFA5),
             ),
           ),
           const SizedBox(height: 24),
           Text(
-            _searchQuery.isNotEmpty ? 'لا توجد نتائج للبحث' : 'لا توجد إشعارات',
+            _searchQuery.isNotEmpty
+                ? 'لا توجد نتائج للبحث'
+                : (_pendingCount > 0
+                    ? 'إشعارات معلقة في انتظار الاتصال'
+                    : 'لا توجد إشعارات'),
             style: GoogleFonts.cairo(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -2000,13 +2156,30 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعارات الجديدة هنا',
+                : (_pendingCount > 0
+                    ? 'سيتم إرسال $_pendingCount إشعار تلقائياً عند عودة الإنترنت'
+                    : 'ستظهر الإشعارات الجديدة هنا'),
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
             ),
             textAlign: TextAlign.center,
           ),
+          if (_pendingCount > 0 && _hasInternet)
+            Padding(
+              padding: const EdgeInsets.only(top: 20),
+              child: ModernButton(
+                onPressed: _retryPendingNow,
+                child: Text(
+                  'إرسال الإشعارات المعلقة',
+                  style: GoogleFonts.cairo(
+                    fontSize: 16,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -2973,6 +3146,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       },
                       child: Text('إعادة المحاولة',
                           style: GoogleFonts.cairo(color: Colors.white)),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final hasInternet =
+                            await NotificationService.hasInternetConnection();
+                        if (hasInternet) {
+                          await NotificationService.retryPendingNotifications();
+                          await NotificationManager.instance.fetchFromMySQL();
+                          _showMessage('تم تحديث الإشعارات');
+                        } else {
+                          _showMessage('لا يوجد اتصال بالإنترنت');
+                        }
+                      },
+                      child: Text('تحديث الإشعارات',
+                          style: GoogleFonts.cairo(
+                              color: const Color(0xFF00BFA5))),
                     ),
                   ],
                 ),
