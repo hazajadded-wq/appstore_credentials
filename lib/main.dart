@@ -175,6 +175,7 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
+  Set<String> _processedMessageIds = {}; // Track processed message IDs
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
@@ -182,6 +183,7 @@ class NotificationManager extends ChangeNotifier {
 
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
+  static const String _processedIdsKey = 'processed_message_ids';
 
   /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
@@ -197,6 +199,7 @@ class NotificationManager extends ChangeNotifier {
 
       final jsonStr = prefs.getString(_storageKey);
       final deletedJson = prefs.getString(_deletedIdsKey);
+      final processedJson = prefs.getString(_processedIdsKey);
 
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
@@ -209,6 +212,14 @@ class NotificationManager extends ChangeNotifier {
 
       if (deletedJson != null) {
         _deletedIds = Set<String>.from(jsonDecode(deletedJson));
+      }
+
+      if (processedJson != null) {
+        _processedMessageIds = Set<String>.from(jsonDecode(processedJson));
+        // Keep only last 200 to prevent memory issues
+        if (_processedMessageIds.length > 200) {
+          _processedMessageIds = _processedMessageIds.skip(100).toSet();
+        }
       }
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
@@ -316,11 +327,23 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
+  /// ADD FIREBASE MESSAGE - FIXED to prevent duplicates from background
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     int waitCount = 0;
     while (_isSyncing && waitCount < 50) {
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
+    }
+
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    // CRITICAL FIX: Check if we've already processed this message ID
+    if (_processedMessageIds.contains(messageId)) {
+      debugPrint(
+          '❌ [Manager] Message already processed (ID: $messageId), skipping');
+      return;
     }
 
     final item = NotificationItem.fromFirebaseMessage(message);
@@ -338,6 +361,7 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
+    // CRITICAL FIX: Check if notification already exists in local storage
     final existing = _notifications.firstWhere(
       (n) => n.id == item.id,
       orElse: () => NotificationItem(
@@ -351,24 +375,59 @@ class NotificationManager extends ChangeNotifier {
 
     if (existing.id.isNotEmpty) {
       final diff = item.timestamp.difference(existing.timestamp).abs();
-      if (diff.inSeconds < 1) {
-        debugPrint('❌ [Manager] Duplicate detected (same timestamp), skipping');
+      if (diff.inSeconds < 5) {
+        debugPrint(
+            '❌ [Manager] Notification already exists (ID: ${item.id}), skipping');
+
+        // Mark as processed even if we skip
+        _processedMessageIds.add(messageId);
+        await _saveProcessedIds();
+
         return;
       }
 
       if (item.timestamp.isBefore(existing.timestamp)) {
         debugPrint('❌ [Manager] New notification is older, keeping existing');
+
+        // Mark as processed even if we skip
+        _processedMessageIds.add(messageId);
+        await _saveProcessedIds();
+
         return;
       }
     }
 
+    // Check content-based duplicates (for cases where IDs might differ)
+    bool contentDuplicate = false;
+    for (var notif in _notifications) {
+      if (notif.title == item.title &&
+          notif.body == item.body &&
+          notif.timestamp.difference(item.timestamp).abs().inSeconds < 10) {
+        contentDuplicate = true;
+        debugPrint('❌ [Manager] Content duplicate found, skipping');
+        break;
+      }
+    }
+
+    if (contentDuplicate) {
+      _processedMessageIds.add(messageId);
+      await _saveProcessedIds();
+      return;
+    }
+
+    // Add new notification
     _notifications.removeWhere((n) => n.id == item.id);
     _notifications.insert(0, item);
+
+    // Mark as processed
+    _processedMessageIds.add(messageId);
+
     debugPrint(
         '✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
 
     _sortAndCount();
     await _saveToDisk();
+    await _saveProcessedIds();
     notifyListeners();
   }
 
@@ -540,11 +599,23 @@ class NotificationManager extends ChangeNotifier {
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+      await prefs.setString(
+          _processedIdsKey, jsonEncode(_processedMessageIds.toList()));
 
       debugPrint(
           '💾 [Manager] Saved ${_notifications.length} notifications to disk');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
+    }
+  }
+
+  Future<void> _saveProcessedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          _processedIdsKey, jsonEncode(_processedMessageIds.toList()));
+    } catch (e) {
+      debugPrint('❌ [Manager] Save Processed IDs Error: $e');
     }
   }
 }
@@ -617,7 +688,7 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
+/// FCM BACKGROUND HANDLER - FIXED
 /// =========================
 
 @pragma('vm:entry-point')
@@ -642,9 +713,20 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  // Check for duplicates in SharedPreferences
+  // Check if this message was already processed
   try {
     final prefs = await SharedPreferences.getInstance();
+    final processedJson = prefs.getString('processed_message_ids');
+    if (processedJson != null) {
+      final processedIds = Set<String>.from(jsonDecode(processedJson));
+      if (processedIds.contains(message.messageId) ||
+          processedIds.contains(item.id)) {
+        debugPrint('🌙 [BG] Message already processed, skipping');
+        return;
+      }
+    }
+
+    // Check for duplicates in SharedPreferences
     final jsonStr = prefs.getString(NotificationService.storageKey);
     if (jsonStr != null) {
       final list = jsonDecode(jsonStr) as List;
