@@ -2,19 +2,25 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 /// NotificationService - Client for PHP/MySQL notifications API.
-/// FIXED: No duplicates, proper UTC time handling
+/// FIXED: With offline support and retry mechanism
 class NotificationService {
   static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
   static const String storageKey = 'stored_notifications_final';
+  static const String pendingStorageKey =
+      'pending_notifications'; // للإشعارات المعلقة
 
-  // CRITICAL: Shared lock to prevent concurrent SharedPreferences access
   static bool _isWriting = false;
   static int _lockWaitCount = 0;
-  static final Map<String, int> _lastSavedTimestamps =
-      {}; // Track last save time per ID
+  static final Map<String, int> _lastSavedTimestamps = {};
+
+  // قائمة الإشعارات المعلقة (لم ترسل بعد لعدم وجود إنترنت)
+  static bool _isRetrying = false;
+  static Timer? _retryTimer;
 
   // =========================================================
   // Get all notifications from MySQL
@@ -42,12 +48,189 @@ class NotificationService {
   }
 
   // =========================================================
+  // التحقق من اتصال الإنترنت
+  // =========================================================
+  static Future<bool> hasInternetConnection() async {
+    try {
+      var connectivityResult = await Connectivity().checkConnectivity();
+      if (connectivityResult == ConnectivityResult.none) {
+        return false;
+      }
+
+      // تحقق إضافي: محاولة الاتصال بالخادم
+      final response = await http
+          .get(
+        Uri.parse('$apiEndpoint?action=test'),
+      )
+          .timeout(const Duration(seconds: 3), onTimeout: () {
+        throw TimeoutException('Connection timeout');
+      });
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('⚠️ [Internet Check] No connection: $e');
+      return false;
+    }
+  }
+
+  // =========================================================
+  // حفظ الإشعارات المعلقة (للحالات بدون إنترنت)
+  // =========================================================
+  static Future<void> savePendingNotification(
+      Map<String, dynamic> notification) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(pendingStorageKey);
+      List<dynamic> pending = jsonStr != null ? jsonDecode(jsonStr) : [];
+
+      // تجنب التكرار في القائمة المعلقة
+      final newId = notification['id']?.toString();
+      pending.removeWhere((item) => item['id']?.toString() == newId);
+
+      pending.insert(0, notification);
+
+      // حد أقصى 50 إشعار معلق
+      if (pending.length > 50) {
+        pending = pending.sublist(0, 50);
+      }
+
+      await prefs.setString(pendingStorageKey, jsonEncode(pending));
+      debugPrint('📦 [Pending] Saved pending notification: $newId');
+    } catch (e) {
+      debugPrint('❌ [Pending] Error saving pending: $e');
+    }
+  }
+
+  // =========================================================
+  // تحميل الإشعارات المعلقة
+  // =========================================================
+  static Future<List<Map<String, dynamic>>> loadPendingNotifications() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(pendingStorageKey);
+      if (jsonStr != null) {
+        return List<Map<String, dynamic>>.from(jsonDecode(jsonStr));
+      }
+    } catch (e) {
+      debugPrint('❌ [Pending] Error loading pending: $e');
+    }
+    return [];
+  }
+
+  // =========================================================
+  // مسح الإشعارات المعلقة بعد إرسالها
+  // =========================================================
+  static Future<void> clearPendingNotifications() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(pendingStorageKey);
+      debugPrint('📦 [Pending] Cleared all pending notifications');
+    } catch (e) {
+      debugPrint('❌ [Pending] Error clearing pending: $e');
+    }
+  }
+
+  // =========================================================
+  // إعادة محاولة إرسال الإشعارات المعلقة
+  // =========================================================
+  static Future<void> retryPendingNotifications() async {
+    if (_isRetrying) return;
+
+    _isRetrying = true;
+
+    try {
+      final hasInternet = await hasInternetConnection();
+      if (!hasInternet) {
+        _isRetrying = false;
+        return;
+      }
+
+      final pending = await loadPendingNotifications();
+      if (pending.isEmpty) {
+        _isRetrying = false;
+        return;
+      }
+
+      debugPrint(
+          '🔄 [Retry] Attempting to send ${pending.length} pending notifications');
+
+      List<Map<String, dynamic>> failedToSend = [];
+
+      for (var notification in pending) {
+        try {
+          // محاولة حفظ الإشعار في قاعدة البيانات
+          await saveToMySQL(notification);
+          debugPrint(
+              '✅ [Retry] Successfully sent notification: ${notification['id']}');
+        } catch (e) {
+          debugPrint('❌ [Retry] Failed to send: ${notification['id']}');
+          failedToSend.add(notification);
+        }
+
+        // تأخير صغير بين المحاولات
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+
+      if (failedToSend.isEmpty) {
+        await clearPendingNotifications();
+      } else {
+        // حفظ الإشعارات التي فشلت مرة أخرى
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(pendingStorageKey, jsonEncode(failedToSend));
+      }
+    } catch (e) {
+      debugPrint('❌ [Retry] Error in retry process: $e');
+    } finally {
+      _isRetrying = false;
+    }
+  }
+
+  // =========================================================
+  // بدء مراقبة اتصال الإنترنت
+  // =========================================================
+  static void startConnectivityMonitoring() {
+    Connectivity().onConnectivityChanged.listen((ConnectivityResult result) {
+          if (result != ConnectivityResult.none) {
+            debugPrint(
+                '📡 [Connectivity] Internet connected - retrying pending notifications');
+            // تأخير لمدة ثانيتين للتأكد من استقرار الاتصال
+            _retryTimer?.cancel();
+            _retryTimer = Timer(const Duration(seconds: 2), () {
+              retryPendingNotifications();
+            });
+          }
+        } as void Function(List<ConnectivityResult> event)?);
+  }
+
+  // =========================================================
+  // حفظ الإشعار في MySQL (مع دعم عدم الاتصال)
+  // =========================================================
+  static Future<bool> saveToMySQL(Map<String, dynamic> notification) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$apiEndpoint?action=save_notification'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(notification),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true;
+      }
+    } catch (e) {
+      debugPrint('❌ [MySQL] Error saving to MySQL: $e');
+    }
+    return false;
+  }
+
+  // =========================================================
   // CRITICAL: Save to Local Disk (Safe for Background)
   // WITH PROPER LOCKING AND DEDUPLICATION
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
-    // VALIDATION: Skip empty notifications
     final title = newNotificationJson['title']?.toString() ?? '';
     final body = newNotificationJson['body']?.toString() ?? '';
     if (title.isEmpty || (title == 'إشعار جديد' && body.isEmpty)) {
@@ -55,12 +238,10 @@ class NotificationService {
       return;
     }
 
-    // CRITICAL: Get ID and timestamp
     final String newId = newNotificationJson['id']?.toString() ??
         newNotificationJson['message_id']?.toString() ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // Parse timestamp properly
     DateTime newTimestamp;
     try {
       if (newNotificationJson['timestamp'] != null) {
@@ -74,20 +255,29 @@ class NotificationService {
       newTimestamp = DateTime.now().toUtc();
     }
 
-    // CRITICAL: Check if we've saved this ID recently with same timestamp
+    await Future.delayed(const Duration(milliseconds: 100));
+
     final lastTimestamp = _lastSavedTimestamps[newId];
     if (lastTimestamp != null) {
       final lastTime =
           DateTime.fromMillisecondsSinceEpoch(lastTimestamp).toUtc();
-      // If difference is less than 1 second, it's a duplicate
-      if (newTimestamp.difference(lastTime).abs().inSeconds < 1) {
+      if (newTimestamp.difference(lastTime).abs().inSeconds < 3) {
         debugPrint(
             '⚠️ [BG-Service] Duplicate detected for ID $newId, skipping');
         return;
       }
     }
 
-    // CRITICAL FIX: Wait if another operation is writing
+    // التحقق من وجود إنترنت
+    final hasInternet = await hasInternetConnection();
+
+    if (!hasInternet) {
+      // لا يوجد إنترنت - حفظ في القائمة المعلقة
+      debugPrint('📦 [BG-Service] No internet - saving to pending: $newId');
+      await savePendingNotification(newNotificationJson);
+      return;
+    }
+
     int waitCount = 0;
     while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -99,7 +289,6 @@ class NotificationService {
       return;
     }
 
-    // Acquire lock
     _isWriting = true;
     _lockWaitCount++;
 
@@ -107,11 +296,29 @@ class NotificationService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Get existing list
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // CRITICAL FIX: Remove ALL occurrences of this ID (aggressive deduplication)
+      bool contentDuplicate = false;
+      for (var item in list) {
+        final itemTitle = item['title']?.toString() ?? '';
+        final itemBody = item['body']?.toString() ?? '';
+        final DateTime itemTime = _parseTimestamp(item);
+
+        if (itemTitle == title && itemBody == body) {
+          final timeDiff = newTimestamp.difference(itemTime).abs();
+          if (timeDiff.inSeconds < 10) {
+            contentDuplicate = true;
+            debugPrint('⚠️ [BG-Service] Content duplicate detected, skipping');
+            break;
+          }
+        }
+      }
+
+      if (contentDuplicate) {
+        return;
+      }
+
       int removedCount = 0;
       list.removeWhere((item) {
         final itemId = item['id']?.toString();
@@ -122,30 +329,24 @@ class NotificationService {
         return false;
       });
 
-      // Prepare final notification with proper timestamp
       final Map<String, dynamic> finalNotification =
           Map.from(newNotificationJson);
       finalNotification['id'] = newId;
       finalNotification['timestamp'] = newTimestamp.toIso8601String();
 
-      // Insert at top
       list.insert(0, finalNotification);
 
-      // Limit to 200
       if (list.length > 200) {
         list = list.sublist(0, 200);
       }
 
-      // FINAL DEDUPLICATION PASS: Ensure no duplicates by ID
       final Map<String, dynamic> deduplicatedMap = {};
       for (var item in list) {
         final id = item['id']?.toString();
         if (id != null) {
-          // If duplicate exists, keep the one with latest timestamp
           if (!deduplicatedMap.containsKey(id)) {
             deduplicatedMap[id] = item;
           } else {
-            // Compare timestamps
             final existing = deduplicatedMap[id];
             final DateTime existingTime = _parseTimestamp(existing);
             final DateTime newTime = _parseTimestamp(item);
@@ -157,7 +358,6 @@ class NotificationService {
       }
       list = deduplicatedMap.values.toList();
 
-      // Sort by timestamp (newest first)
       list.sort((a, b) {
         final DateTime aTime = _parseTimestamp(a);
         final DateTime bTime = _parseTimestamp(b);
@@ -166,7 +366,11 @@ class NotificationService {
 
       await prefs.setString(storageKey, jsonEncode(list));
 
-      // Update last saved timestamp
+      // محاولة حفظ في MySQL إذا كان هناك إنترنت
+      if (hasInternet) {
+        unawaited(saveToMySQL(newNotificationJson));
+      }
+
       _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
 
       debugPrint(
@@ -186,9 +390,7 @@ class NotificationService {
       } else if (item['sent_at'] != null) {
         return DateTime.parse(item['sent_at']).toUtc();
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -198,7 +400,6 @@ class NotificationService {
   static bool get isWriting => _isWriting;
   static int get lockWaitCount => _lockWaitCount;
 
-  // Clear timestamp cache (useful for testing)
   static void clearTimestampCache() {
     _lastSavedTimestamps.clear();
   }
