@@ -171,13 +171,6 @@ class NotificationManager extends ChangeNotifier {
 
   /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
-    // CRITICAL FIX: Wait briefly if NotificationService is writing
-    int waitCount = 0;
-    while (NotificationService.isWriting && waitCount < 50) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
-    }
-
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
@@ -188,10 +181,9 @@ class NotificationManager extends ChangeNotifier {
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
-        _sortAndCount(); // This now includes deduplication
+        _sortAndCount();
         notifyListeners();
-        debugPrint(
-            '📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       }
 
       if (deletedJson != null) {
@@ -426,37 +418,13 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> _saveToDisk() async {
-    // CRITICAL FIX: Wait if NotificationService is writing
-    int waitCount = 0;
-    while (NotificationService.isWriting && waitCount < 100) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
-    }
-
-    if (waitCount >= 100) {
-      debugPrint('⚠️ [Manager] Lock timeout - skipping save');
-      return;
-    }
-
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
-
-      // Final deduplication before saving
-      final Map<String, NotificationItem> deduplicatedMap = {
-        for (var item in _notifications) item.id: item
-      };
-      _notifications = deduplicatedMap.values.toList();
-      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
-
-      if (waitCount > 0) {
-        debugPrint('💾 [Manager] Saved to disk (waited $waitCount cycles)');
-      }
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
