@@ -87,14 +87,31 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
+    // ✅ Use ID from data payload (from PHP)
+    String id = message.data['id'] ??
+        message.messageId ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    // ✅ Parse sent_at from data
+    DateTime timestamp;
+    try {
+      if (message.data['sent_at'] != null) {
+        timestamp = DateTime.parse(message.data['sent_at']).toUtc();
+      } else {
+        timestamp = DateTime.now().toUtc();
+      }
+    } catch (e) {
+      timestamp = DateTime.now().toUtc();
+    }
+
     return NotificationItem(
-      id: message.messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: id,
       title: title,
       body: body,
       imageUrl: imageUrl,
-      timestamp: DateTime.now(),
+      timestamp: timestamp,
       data: message.data,
-      isRead: false,
+      isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
       type: message.data['type'] ?? 'general',
     );
   }
@@ -119,7 +136,9 @@ class NotificationItem {
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       imageUrl: map['image_url'],
-      timestamp: DateTime.tryParse(map['sent_at'] ?? '') ?? DateTime.now(),
+      timestamp: map['sent_at'] != null
+          ? DateTime.parse(map['sent_at']).toUtc()
+          : DateTime.now().toUtc(),
       data: payload,
       isRead: false,
       type: map['type'] ?? 'general',
@@ -141,67 +160,60 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
   bool _isSyncing = false;
-  Timer? _syncTimer;
+  Set<String> _deletedIds = {};
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
-  // ============================================
-  // INITIALIZE - Call this when app starts
-  // ============================================
-  Future<void> initialize() async {
-    debugPrint('🚀 [Manager] Initializing...');
+  static const String _storageKey = 'stored_notifications_final';
+  static const String _deletedIdsKey = 'deleted_notification_ids';
 
-    // Load from disk first
-    await loadNotifications();
-
-    // Start periodic sync
-    _startPeriodicSync();
-
-    // Fetch from server immediately
-    fetchFromMySQL();
-  }
-
-  // ============================================
-  // FORCE LOAD FROM DISK
-  // ============================================
+  /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
+    // CRITICAL FIX: Wait briefly if NotificationService is writing
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     try {
-      final localList = await NotificationService.getLocalNotifications();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
-      _notifications =
-          localList.map((e) => NotificationItem.fromJson(e)).toList();
-      _updateUnreadCount();
+      final jsonStr = prefs.getString(_storageKey);
+      final deletedJson = prefs.getString(_deletedIdsKey);
 
-      debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
-      notifyListeners();
+      if (jsonStr != null) {
+        final list = jsonDecode(jsonStr) as List;
+        _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
+        _sortAndCount(); // This now includes deduplication
+        notifyListeners();
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
+      }
+
+      if (deletedJson != null) {
+        _deletedIds = Set<String>.from(jsonDecode(deletedJson));
+      }
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
     }
   }
 
-  // ============================================
-  // CRITICAL FIXED: SYNC FROM SERVER
-  // Called when app opens, resumes, or periodically
-  // ============================================
+  /// SYNC FROM SERVER AND DISK
   Future<void> fetchFromMySQL() async {
-    if (_isSyncing) {
-      debugPrint('⏳ [Manager] Already syncing, skipping...');
-      return;
-    }
-
+    if (_isSyncing) return;
     _isSyncing = true;
-    notifyListeners();
+    Future.microtask(() => notifyListeners());
 
     try {
-      debugPrint('🌐 [Manager] Fetching from MySQL...');
-
       final serverListRaw =
           await NotificationService.getAllNotifications(limit: 100);
 
+      await loadNotifications();
+
       if (serverListRaw.isEmpty) {
-        debugPrint('⚠️ [Manager] No notifications from server');
         _isSyncing = false;
         notifyListeners();
         return;
@@ -210,122 +222,126 @@ class NotificationManager extends ChangeNotifier {
       final serverItems =
           serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
-      // Merge with existing notifications
-      final Map<String, NotificationItem> mergedMap = {};
+      final Map<String, NotificationItem> localMap = {
+        for (var item in _notifications) item.id: item
+      };
 
-      // Add existing notifications first
-      for (var item in _notifications) {
-        mergedMap[item.id] = item;
-      }
-
-      // Add/update with server notifications
       bool hasChanges = false;
-      for (var serverItem in serverItems) {
-        final existing = mergedMap[serverItem.id];
 
-        if (existing == null) {
-          // New notification from server
-          mergedMap[serverItem.id] = serverItem;
-          hasChanges = true;
-          debugPrint(
-              '➕ [Manager] New notification from server: ${serverItem.id}');
-        } else {
-          // Update existing but PRESERVE read status
-          mergedMap[serverItem.id] = NotificationItem(
+      for (var serverItem in serverItems) {
+        if (_deletedIds.contains(serverItem.id)) continue; // Skip deleted
+
+        if (localMap.containsKey(serverItem.id)) {
+          final localItem = localMap[serverItem.id]!;
+          // Always use server data but preserve read status
+          localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
             body: serverItem.body,
             imageUrl: serverItem.imageUrl,
-            timestamp: serverItem.timestamp,
+            timestamp: serverItem.timestamp, // Use server timestamp
             data: serverItem.data,
             type: serverItem.type,
-            isRead: existing.isRead, // CRITICAL: Keep read status
+            isRead: localItem.isRead,
           );
+        } else {
+          localMap[serverItem.id] = serverItem;
+          hasChanges = true;
         }
       }
 
-      // Convert back to list and sort
-      _notifications = mergedMap.values.toList();
-      _sortAndCount();
+      _notifications = localMap.values.toList();
+      _sortAndCount(); // This now includes deduplication
 
-      // Limit to 200
       if (_notifications.length > 200) {
-        _notifications = _notifications.sublist(0, 200);
+        _notifications = _notifications.take(200).toList();
       }
 
       if (hasChanges) {
         await _saveToDisk();
-        debugPrint(
-            '✅ [Manager] Updated with server data, total: ${_notifications.length}');
       }
-    } catch (e, stacktrace) {
+      
+      debugPrint('✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
+    } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
-      debugPrint('❌ [Manager] Stacktrace: $stacktrace');
     } finally {
       _isSyncing = false;
       notifyListeners();
     }
   }
 
-  // ============================================
-  // CRITICAL FIXED: Add Firebase Message
-  // Called when notification received while app is open
-  // ============================================
   Future<void> addFirebaseMessage(RemoteMessage message) async {
+    // CRITICAL FIX: Wait if already syncing to avoid race conditions
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) { // Max wait 5 seconds
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    // FIX: Don't ignore any notifications - show them all
-    debugPrint('📨 [Manager] Received Firebase message: ${item.id}');
-    debugPrint('📨 [Manager] Title: ${item.title}, Body: ${item.body}');
+    // VALIDATION: Don't add notifications with no real content
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification');
+      return;
+    }
 
-    // Remove if exists (deduplicate)
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
+      return;
+    }
+
+    await loadNotifications();
+
+    // CRITICAL FIX: Remove ALL existing notifications with same ID to prevent duplicates
     _notifications.removeWhere((n) => n.id == item.id);
 
-    // Insert at top
+    // Add new notification at the beginning
     _notifications.insert(0, item);
+    debugPrint('✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
 
-    _updateUnreadCount();
+    _sortAndCount();
     await _saveToDisk();
     notifyListeners();
-
-    debugPrint(
-        '✅ [Manager] Added notification, total: ${_notifications.length}, unread: $_unreadCount');
   }
 
-  // ============================================
-  // CRITICAL: Add notification from iOS native
-  // ============================================
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    try {
-      final item = NotificationItem.fromJson(data);
-
-      debugPrint('📱 [Manager] Received iOS notification: ${item.id}');
-      debugPrint('📱 [Manager] Title: ${item.title}, Body: ${item.body}');
-
-      // Remove if exists (deduplicate)
-      _notifications.removeWhere((n) => n.id == item.id);
-
-      // Insert at top
-      _notifications.insert(0, item);
-
-      _updateUnreadCount();
-      await _saveToDisk();
-
-      // Save to server
-      await NotificationService.saveNotificationToServer(item.toJson());
-
-      notifyListeners();
-
-      debugPrint(
-          '✅ [Manager] Added iOS notification, total: ${_notifications.length}');
-    } catch (e) {
-      debugPrint('❌ [Manager] Error adding iOS notification: $e');
+    // CRITICAL FIX: Wait if already syncing
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
     }
+
+    final item = NotificationItem.fromJson(data);
+
+    // VALIDATION
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification from native');
+      return;
+    }
+
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
+      return;
+    }
+
+    await loadNotifications();
+
+    // CRITICAL FIX: Remove ALL existing notifications with same ID
+    _notifications.removeWhere((n) => n.id == item.id);
+
+    // Add new notification
+    _notifications.insert(0, item);
+    debugPrint('✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
+
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
   }
 
-  // ============================================
-  // MARK AS READ
-  // ============================================
   Future<void> markAsRead(String id) async {
     final index = _notifications.indexWhere((n) => n.id == id);
     if (index != -1 && !_notifications[index].isRead) {
@@ -333,15 +349,9 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await _saveToDisk();
       notifyListeners();
-
-      // Update in background
-      NotificationService.markAsRead(id);
     }
   }
 
-  // ============================================
-  // MARK ALL AS READ
-  // ============================================
   Future<void> markAllAsRead() async {
     bool changed = false;
     for (var n in _notifications) {
@@ -357,31 +367,22 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // ============================================
-  // DELETE NOTIFICATION
-  // ============================================
   Future<void> deleteNotification(String id) async {
     _notifications.removeWhere((n) => n.id == id);
+    _deletedIds.add(id); // Mark as deleted
     _updateUnreadCount();
     await _saveToDisk();
-    await NotificationService.deleteNotification(id);
     notifyListeners();
   }
 
-  // ============================================
-  // CLEAR ALL
-  // ============================================
   Future<void> clearAllNotifications() async {
     _notifications.clear();
+    _deletedIds.addAll(_notifications.map((n) => n.id)); // Mark all as deleted
     _updateUnreadCount();
     await _saveToDisk();
-    await NotificationService.clearAllNotifications();
     notifyListeners();
   }
 
-  // ============================================
-  // SEARCH
-  // ============================================
   List<NotificationItem> searchNotifications(String query) {
     if (query.isEmpty) return _notifications;
     final q = query.toLowerCase();
@@ -392,12 +393,25 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
-  // ============================================
-  // PRIVATE METHODS
-  // ============================================
   void _sortAndCount() {
+    // CRITICAL FIX: Remove duplicates by ID as final safety check
+    final Map<String, NotificationItem> deduplicatedMap = {};
+    for (var notification in _notifications) {
+      if (!deduplicatedMap.containsKey(notification.id)) {
+        deduplicatedMap[notification.id] = notification;
+      } else {
+        // If duplicate found, keep the one with the most recent timestamp
+        if (notification.timestamp.isAfter(deduplicatedMap[notification.id]!.timestamp)) {
+          deduplicatedMap[notification.id] = notification;
+        }
+      }
+    }
+    
+    _notifications = deduplicatedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
+    
+    debugPrint('📊 [Manager] After dedup: ${_notifications.length} notifications');
   }
 
   void _updateUnreadCount() {
@@ -405,32 +419,43 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> _saveToDisk() async {
+    // CRITICAL FIX: Wait if NotificationService is writing
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 100) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Manager] Lock timeout - skipping save');
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      
+      // Final deduplication before saving
+      final Map<String, NotificationItem> deduplicatedMap = {
+        for (var item in _notifications) item.id: item
+      };
+      _notifications = deduplicatedMap.values.toList();
+      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
-      await prefs.setString(NotificationService.storageKey, jsonStr);
+      await prefs.setString(_storageKey, jsonStr);
+      await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+      
+      if (waitCount > 0) {
+        debugPrint('💾 [Manager] Saved to disk (waited $waitCount cycles)');
+      }
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
   }
-
-  void _startPeriodicSync() {
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) { // Increased frequency for real-time
-      debugPrint('⏰ [Manager] Periodic sync');
-      fetchFromMySQL();
-    });
-  }
-
-  void dispose() {
-    _syncTimer?.cancel();
-    super.dispose();
-  }
 }
 
-/// =========================
-/// LOCAL NOTIFICATION SERVICE
 /// =========================
 class LocalNotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
@@ -496,7 +521,7 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - FIXED
+/// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
 /// =========================
 
 @pragma('vm:entry-point')
@@ -504,14 +529,32 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
 
+  // VALIDATION: Only save valid notifications with actual content
+  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.title ?? '').isNotEmpty;
+  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.body ?? '').isNotEmpty;
+
+  // If notification has no real content, skip saving it
+  if (!hasTitle && !hasBody) {
+    debugPrint('🌙 [BG] Skipping empty notification - no title or body');
+    return;
+  }
+
   final item = NotificationItem.fromFirebaseMessage(message);
 
-  // ALWAYS save to disk, even for empty notifications
-  // The Flutter app will handle display
-  await NotificationService.saveToLocalDisk(item.toJson());
+  // Double check: Don't save if title is still the default or empty
+  if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    debugPrint('🌙 [BG] Skipping notification with default/empty title');
+    return;
+  }
 
-  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.id}');
+  await NotificationService.saveToLocalDisk(item.toJson());
+  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title}');
 }
+
+/// Show local notification on iOS in background
+/// Show local notification on iOS in background
 
 /// =========================
 /// METHOD CHANNEL FOR iOS NOTIFICATIONS
@@ -543,6 +586,47 @@ class NotificationMethodChannel {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// =========================
+/// APP LIFECYCLE HANDLER (NEW)
+/// =========================
+
+class AppLifecycleHandler extends StatefulWidget {
+  final Widget child;
+  const AppLifecycleHandler({required this.child, Key? key}) : super(key: key);
+
+  @override
+  State<AppLifecycleHandler> createState() => _AppLifecycleHandlerState();
+}
+
+class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
+      NotificationService.getAllNotifications(limit: 100);
+      NotificationManager.instance.fetchFromMySQL();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
+  }
+}
+
+/// =========================
 /// MAIN - FIXED
 /// =========================
 
@@ -554,14 +638,24 @@ void main() async {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
 
+    // ============================================
+    // CRITICAL: Enable foreground notifications for iOS
+    // ============================================
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
     LocalNotificationService.initialize();
 
     // CRITICAL: Setup iOS method channel
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // Initialize notification manager
-    await NotificationManager.instance.initialize();
+    // Load notifications from disk
+    await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
 
@@ -591,7 +685,11 @@ void main() async {
     debugPrint('�� Init Error: $e');
   }
 
-  runApp(const MyApp());
+  runApp(
+    AppLifecycleHandler(
+      child: const MyApp(),
+    ),
+  );
 }
 
 Future<void> _requestIgnoreBatteryOptimizations() async {
@@ -995,13 +1093,26 @@ class NotificationDetailScreen extends StatelessWidget {
               notification.body,
               textAlign: TextAlign.justify,
               style: GoogleFonts.cairo(
-                fontSize: 16,
-                fontWeight: FontWeight.normal,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
                 height: 1.6,
                 color: const Color(0xFF4A5568),
               ),
             ),
             const SizedBox(height: 32),
+            // Company name section - always show only company name
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'الشركة العامة لتع��ئة وخدمات الغاز',
+                  style: GoogleFonts.cairo(
+                    fontSize: 10,
+                    color: const Color(0xFF2D3748),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -1095,10 +1206,23 @@ class NotificationDetailScreen extends StatelessWidget {
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      final dateFormat = DateFormat('yyyy-MM-dd HH:mm', 'ar_IQ');
-      return dateFormat.format(timestamp);
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp.toUtc());
+
+      if (difference.inMinutes < 1) {
+        return 'الآن';
+      } else if (difference.inHours < 1) {
+        return 'منذ ${difference.inMinutes} دقيقة';
+      } else if (difference.inDays < 1) {
+        return 'منذ ${difference.inHours} ساعة';
+      } else if (difference.inDays < 7) {
+        return 'منذ ${difference.inDays} يوم';
+      } else {
+        final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
+        return dateFormat.format(timestamp);
+      }
     } catch (e) {
-      return '${timestamp.year}-${timestamp.month}-${timestamp.day} ${timestamp.hour}:${timestamp.minute}';
+      return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
     }
   }
 }
@@ -1361,7 +1485,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح ��ذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -1373,7 +1497,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '4. حماية البيانات',
-                      'تتخذ الشركة العامة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
+                      'تتخذ الشركة ال��امة لتعبئة وخدمات الغاز جميع التدبير الأمنية اللازمة لحماية بيانات الموظفين من الوصول غير المصرح به أو الكشف عنها.',
                     ),
                     _buildPrivacySection(
                       '5. مشاركة البيانات',
@@ -1491,8 +1615,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       await _forceRefresh();
     });
 
-    // Start periodic refresh every 10 seconds for real-time updates
-    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    // Start periodic refresh every 30 seconds for real-time updates
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted) {
         _forceRefresh();
       }
@@ -1557,22 +1681,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     await NotificationManager.instance.clearAllNotifications();
                   }
                   break;
-                case 'refresh':
-                  await _forceRefresh();
-                  break;
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'refresh',
-                child: Row(
-                  children: [
-                    const Icon(Icons.refresh, color: Color(0xFF00BFA5)),
-                    const SizedBox(width: 8),
-                    Text('تحديث', style: GoogleFonts.cairo()),
-                  ],
-                ),
-              ),
               PopupMenuItem(
                 value: 'mark_all_read',
                 child: Row(
@@ -1781,7 +1892,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشعارات الجديدة هنا',
+                : 'ستظهر الإشعا��ات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2132,8 +2243,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now();
-      Duration difference = now.difference(timestamp);
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp.toUtc());
 
       if (difference.inMinutes < 1) {
         return 'الآن';
@@ -2425,7 +2536,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
         var originalOpen = window.open;
         window.open = function(url, name, specs) {
           if (url && url.indexOf('download=1') !== -1) {
-            var cleanUrl = url.replace(/[?&]download=1/g, '');
+            var cleanUrl = url.replace(/[?&]download=1/g', '';
             window.location.href = cleanUrl;
             return window;
           }
@@ -2537,6 +2648,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   bool _shouldShowButtons() {
+    // Hide buttons on login page
+    if (isOnLoginPage) {
+      return false;
+    }
+
     if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
@@ -2585,95 +2701,98 @@ class _WebViewScreenState extends State<WebViewScreen> {
             backgroundColor: Colors.white,
             child: Padding(
               padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00BFA5).withOpacity(0.1),
-                      shape: BoxShape.circle,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00BFA5).withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.logout,
+                        size: 48,
+                        color: Color(0xFF00BFA5),
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.logout,
-                      size: 48,
-                      color: Color(0xFF00BFA5),
+                    const SizedBox(height: 20),
+                    Text(
+                      'الخروج من التطبيق',
+                      style: GoogleFonts.cairo(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'الخروج من التطبيق',
-                    style: GoogleFonts.cairo(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                    const SizedBox(height: 12),
+                    Text(
+                      'هل تريد الخروج من التطبيق؟',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        color: Colors.black54,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'هل تريد الخروج من التطبيق؟',
-                    style: GoogleFonts.cairo(
-                      fontSize: 16,
-                      color: Colors.black54,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.of(context).pop(true);
-                            if (Platform.isAndroid) {
-                              SystemNavigator.pop();
-                            } else if (Platform.isIOS) {
-                              exit(0);
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00BFA5),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(context).pop(true);
+                              if (Platform.isAndroid) {
+                                SystemNavigator.pop();
+                              } else if (Platform.isIOS) {
+                                exit(0);
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00BFA5),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
                             ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            'نعم',
-                            style: GoogleFonts.cairo(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                            child: Text(
+                              'نعم',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(false),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.black54,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.black54,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              side: BorderSide(
+                                  color: Colors.grey.shade300, width: 1.5),
                             ),
-                            side: BorderSide(
-                                color: Colors.grey.shade300, width: 1.5),
-                          ),
-                          child: Text(
-                            'لا',
-                            style: GoogleFonts.cairo(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
+                            child: Text(
+                              '��ا',
+                              style: GoogleFonts.cairo(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2703,7 +2822,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           title: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              'الشركة العامة لتعب��ة وخدمات الغاز',
+              'الشركة العامة لتعبئة وخدمات الغاز',
               style:
                   GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
             ),
