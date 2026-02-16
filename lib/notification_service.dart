@@ -36,7 +36,7 @@ class NotificationService {
   }
 
   // =========================================================
-  // CRITICAL: Save to Local Disk (Safe for Background)
+  // CRITICAL: Save to Local Disk (Safe for Background) - FIXED
   // =========================================================
   static Future<void> saveToLocalDisk(
     Map<String, dynamic> newNotificationJson,
@@ -51,13 +51,11 @@ class NotificationService {
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // Add new item to TOP of list
+      // CRITICAL FIX: Remove existing notifications with the same ID to prevent duplicates
       final newId = newNotificationJson['id'].toString();
-
-      // Remove if exists (deduplicate)
       list.removeWhere((item) => item['id'].toString() == newId);
 
-      // Insert at top
+      // Add new item to TOP of list
       list.insert(0, newNotificationJson);
 
       // Limit to 200
