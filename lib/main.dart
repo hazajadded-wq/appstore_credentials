@@ -171,6 +171,13 @@ class NotificationManager extends ChangeNotifier {
 
   /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
+    // CRITICAL FIX: Wait briefly if NotificationService is writing
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
@@ -181,9 +188,10 @@ class NotificationManager extends ChangeNotifier {
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
-        _sortAndCount();
+        _sortAndCount(); // This now includes deduplication
         notifyListeners();
-        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+        debugPrint(
+            '📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
       }
 
       if (deletedJson != null) {
@@ -226,12 +234,13 @@ class NotificationManager extends ChangeNotifier {
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
+          // Always use server data but preserve read status
           localMap[serverItem.id] = NotificationItem(
             id: serverItem.id,
             title: serverItem.title,
             body: serverItem.body,
             imageUrl: serverItem.imageUrl,
-            timestamp: serverItem.timestamp,
+            timestamp: serverItem.timestamp, // Use server timestamp
             data: serverItem.data,
             type: serverItem.type,
             isRead: localItem.isRead,
@@ -243,7 +252,7 @@ class NotificationManager extends ChangeNotifier {
       }
 
       _notifications = localMap.values.toList();
-      _sortAndCount();
+      _sortAndCount(); // This now includes deduplication
 
       if (_notifications.length > 200) {
         _notifications = _notifications.take(200).toList();
@@ -252,6 +261,9 @@ class NotificationManager extends ChangeNotifier {
       if (hasChanges) {
         await _saveToDisk();
       }
+
+      debugPrint(
+          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -261,6 +273,14 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
+    // CRITICAL FIX: Wait if already syncing to avoid race conditions
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      // Max wait 5 seconds
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     final item = NotificationItem.fromFirebaseMessage(message);
 
     // VALIDATION: Don't add notifications with no real content
@@ -277,34 +297,13 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-    if (existingIndex != -1) {
-      // Update existing with new data, but only if new timestamp is newer or equal
-      final existing = _notifications[existingIndex];
-      if (item.timestamp.isAfter(existing.timestamp) ||
-          item.timestamp.isAtSameMomentAs(existing.timestamp)) {
-        _notifications[existingIndex] = NotificationItem(
-          id: item.id,
-          title: item.title,
-          body: item.body,
-          imageUrl: item.imageUrl,
-          timestamp: item.timestamp, // Update to new timestamp
-          data: item.data,
-          isRead: existing.isRead, // Keep read status
-          type: item.type,
-        );
-        debugPrint(
-            '✅ [Manager] Updated existing notification: ${item.title} with newer timestamp');
-      } else {
-        debugPrint(
-            '⚠️ [Manager] Skipping update with older timestamp for ${item.id}');
-        return; // Don't add or update if older
-      }
-    } else {
-      // Add new
-      _notifications.insert(0, item);
-      debugPrint('✅ [Manager] Added new notification: ${item.title}');
-    }
+    // CRITICAL FIX: Remove ALL existing notifications with same ID to prevent duplicates
+    _notifications.removeWhere((n) => n.id == item.id);
+
+    // Add new notification at the beginning
+    _notifications.insert(0, item);
+    debugPrint(
+        '✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
 
     _sortAndCount();
     await _saveToDisk();
@@ -312,6 +311,13 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
+    // CRITICAL FIX: Wait if already syncing
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     final item = NotificationItem.fromJson(data);
 
     // VALIDATION
@@ -328,35 +334,17 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-    if (existingIndex != -1) {
-      // Update existing
-      final existing = _notifications[existingIndex];
-      if (item.timestamp.isAfter(existing.timestamp) ||
-          item.timestamp.isAtSameMomentAs(existing.timestamp)) {
-        _notifications[existingIndex] = NotificationItem(
-          id: item.id,
-          title: item.title,
-          body: item.body,
-          imageUrl: item.imageUrl,
-          timestamp: item.timestamp,
-          data: item.data,
-          isRead: existing.isRead,
-          type: item.type,
-        );
-      } else {
-        debugPrint(
-            '⚠️ [Manager] Skipping native update with older timestamp for ${item.id}');
-        return;
-      }
-    } else {
-      _notifications.insert(0, item);
-    }
+    // CRITICAL FIX: Remove ALL existing notifications with same ID
+    _notifications.removeWhere((n) => n.id == item.id);
+
+    // Add new notification
+    _notifications.insert(0, item);
+    debugPrint(
+        '✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
 
     _sortAndCount();
     await _saveToDisk();
     notifyListeners();
-    debugPrint('✅ [Manager] Added/Updated native notification: ${item.title}');
   }
 
   Future<void> markAsRead(String id) async {
@@ -411,8 +399,26 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _sortAndCount() {
+    // CRITICAL FIX: Remove duplicates by ID as final safety check
+    final Map<String, NotificationItem> deduplicatedMap = {};
+    for (var notification in _notifications) {
+      if (!deduplicatedMap.containsKey(notification.id)) {
+        deduplicatedMap[notification.id] = notification;
+      } else {
+        // If duplicate found, keep the one with the most recent timestamp
+        if (notification.timestamp
+            .isAfter(deduplicatedMap[notification.id]!.timestamp)) {
+          deduplicatedMap[notification.id] = notification;
+        }
+      }
+    }
+
+    _notifications = deduplicatedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
+
+    debugPrint(
+        '📊 [Manager] After dedup: ${_notifications.length} notifications');
   }
 
   void _updateUnreadCount() {
@@ -420,13 +426,37 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> _saveToDisk() async {
+    // CRITICAL FIX: Wait if NotificationService is writing
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 100) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Manager] Lock timeout - skipping save');
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
+
+      // Final deduplication before saving
+      final Map<String, NotificationItem> deduplicatedMap = {
+        for (var item in _notifications) item.id: item
+      };
+      _notifications = deduplicatedMap.values.toList();
+      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+
+      if (waitCount > 0) {
+        debugPrint('💾 [Manager] Saved to disk (waited $waitCount cycles)');
+      }
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -501,17 +531,10 @@ void _navigateToNotifications() {
 /// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
 /// =========================
 
-// 🔥 STEP 1 — Add Global Processed Set
-final Set<String> _processedMessageIds = {};
-
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-
-  // 🔥 STEP 2 — Protect Background Handler
-  if (_processedMessageIds.contains(message.messageId)) return;
-  _processedMessageIds.add(message.messageId ?? '');
 
   // VALIDATION: Only save valid notifications with actual content
   final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
@@ -692,10 +715,6 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     // Handle when app is terminated and opened via notification
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
-      // 🔥 STEP 4 — Protect getInitialMessage()
-      if (_processedMessageIds.contains(initialMessage.messageId)) return;
-      _processedMessageIds.add(initialMessage.messageId ?? '');
-
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
       await NotificationManager.instance.addFirebaseMessage(initialMessage);
       Future.delayed(const Duration(seconds: 1), () {
@@ -719,10 +738,6 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Message ID: ${message.messageId}');
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
-
-    // 🔥 STEP 3 — Protect onMessage
-    if (_processedMessageIds.contains(message.messageId)) return;
-    _processedMessageIds.add(message.messageId ?? '');
 
     // ALWAYS add to notification manager - THIS IS THE FIX
     NotificationManager.instance.addFirebaseMessage(message);
@@ -1607,8 +1622,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       await _forceRefresh();
     });
 
-    // Start periodic refresh every 10 seconds for real-time updates
-    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    // Start periodic refresh every 30 seconds for real-time updates
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted) {
         _forceRefresh();
       }
@@ -1884,7 +1899,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           Text(
             _searchQuery.isNotEmpty
                 ? 'جرب البحث بكلمات أخرى'
-                : 'ستظهر الإشا��ات الجديدة هنا',
+                : 'ستظهر الإشعا��ات الجديدة هنا',
             style: GoogleFonts.cairo(
               fontSize: 16,
               color: Colors.grey[600],
@@ -2773,7 +2788,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                   color: Colors.grey.shade300, width: 1.5),
                             ),
                             child: Text(
-                              'لا',
+                              '��ا',
                               style: GoogleFonts.cairo(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
