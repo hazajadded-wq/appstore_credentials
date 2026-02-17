@@ -25,8 +25,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'notification_service.dart';
 import 'firebase_options.dart';
 
-// ======== NEW: Deduplication tracking for session =============
+// ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
 final Set<String> _handledNotificationIds = {};
+final Set<String> _processedMessageIds = {};
 
 /// =========================
 /// DATA MODEL
@@ -91,12 +92,10 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    // Use ID from data payload
     String id = message.data['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // Parse sent_at from data with proper UTC handling
     DateTime timestamp;
     try {
       if (message.data['sent_at'] != null) {
@@ -133,9 +132,7 @@ class NotificationItem {
           map['data_payload'].toString().isNotEmpty) {
         try {
           payload = jsonDecode(map['data_payload']);
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       } else if (map['data_payload'] is Map) {
         payload = Map<String, dynamic>.from(map['data_payload']);
       }
@@ -164,7 +161,7 @@ class NotificationItem {
 }
 
 /// =========================
-/// NOTIFICATION MANAGER - FIXED
+/// NOTIFICATION MANAGER - مع تحسين قوي لمنع التكرار
 /// =========================
 
 class NotificationManager extends ChangeNotifier {
@@ -178,6 +175,7 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
+  final Set<String> _processedInSession = {};
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
@@ -186,7 +184,6 @@ class NotificationManager extends ChangeNotifier {
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
 
-  /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
     int waitCount = 0;
     while (NotificationService.isWriting && waitCount < 50) {
@@ -205,9 +202,7 @@ class NotificationManager extends ChangeNotifier {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
         _sortAndCount();
-        notifyListeners();
-        debugPrint(
-            '📂 [Manager] Loaded ${_notifications.length} from disk${waitCount > 0 ? " (waited $waitCount cycles)" : ""}');
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       }
 
       if (deletedJson != null) {
@@ -218,7 +213,6 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// SYNC FROM SERVER AND DISK - FIXED to prevent duplicates
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
     _isSyncing = true;
@@ -244,22 +238,12 @@ class NotificationManager extends ChangeNotifier {
       };
 
       bool hasChanges = false;
-      int duplicatesSkipped = 0;
 
       for (var serverItem in serverItems) {
         if (_deletedIds.contains(serverItem.id)) continue;
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
-
-          final timeDifference =
-              serverItem.timestamp.difference(localItem.timestamp).abs();
-
-          if (timeDifference.inSeconds < 2) {
-            duplicatesSkipped++;
-            continue;
-          }
-
           if (serverItem.timestamp.isAfter(localItem.timestamp)) {
             localMap[serverItem.id] = NotificationItem(
               id: serverItem.id,
@@ -274,30 +258,12 @@ class NotificationManager extends ChangeNotifier {
             hasChanges = true;
           }
         } else {
-          bool found = false;
-          for (var localItem in _notifications) {
-            if (localItem.title == serverItem.title &&
-                localItem.body == serverItem.body &&
-                localItem.timestamp
-                        .difference(serverItem.timestamp)
-                        .abs()
-                        .inSeconds <
-                    5) {
-              duplicatesSkipped++;
-              found = true;
-              break;
-            }
-          }
-
-          if (!found) {
-            localMap[serverItem.id] = serverItem;
-            hasChanges = true;
-          }
+          localMap[serverItem.id] = serverItem;
+          hasChanges = true;
         }
       }
 
       localMap.removeWhere((id, _) => _deletedIds.contains(id));
-
       _notifications = localMap.values.toList();
       _sortAndCount();
 
@@ -310,7 +276,7 @@ class NotificationManager extends ChangeNotifier {
       }
 
       debugPrint(
-          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications (skipped $duplicatesSkipped duplicates)');
+          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -319,12 +285,15 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // UPDATED: addFirebaseMessage with content-based deduplication
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    int waitCount = 0;
-    while (_isSyncing && waitCount < 50) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
+        'msg_${DateTime.now().millisecondsSinceEpoch}';
+
+    if (_processedInSession.contains(messageId)) {
+      debugPrint(
+          '⚠️ [Manager] Message $messageId already processed in session, skipping');
+      return;
     }
 
     final item = NotificationItem.fromFirebaseMessage(message);
@@ -340,37 +309,49 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
-    await loadNotifications();
+    _processedInSession.add(messageId);
+    _handledNotificationIds.add(messageId);
 
-    // 💡 Robust deduplication: by id, else by (title, body, timestamp within 5s)
-    final alreadyExists = _notifications.any((n) =>
-        n.id == item.id ||
-        (n.title == item.title &&
-            n.body == item.body &&
-            n.timestamp.difference(item.timestamp).abs().inSeconds < 5));
-
-    if (alreadyExists) {
-      debugPrint('❌ [Manager] Duplicate notification, skipping');
-      return;
-    }
-
-    _notifications.insert(0, item);
-    debugPrint(
-        '✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
-
-    _sortAndCount();
-    await _saveToDisk();
-    notifyListeners();
-  }
-
-  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     int waitCount = 0;
     while (_isSyncing && waitCount < 50) {
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
 
+    await loadNotifications();
+
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
+
+    if (existingIndex != -1) {
+      final existing = _notifications[existingIndex];
+      if (item.timestamp.isAfter(existing.timestamp)) {
+        _notifications[existingIndex] = item;
+        _sortAndCount();
+        await _saveToDisk();
+        notifyListeners();
+        debugPrint('✅ [Manager] Updated existing notification: ${item.id}');
+      } else {
+        debugPrint(
+            '⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
+      }
+      return;
+    }
+
+    _notifications.insert(0, item);
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
+    debugPrint('✅ [Manager] Added new notification: ${item.id}');
+  }
+
+  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     final item = NotificationItem.fromJson(data);
+
+    if (_processedInSession.contains(item.id)) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
+      return;
+    }
 
     if (item.title.isEmpty ||
         (item.title == 'إشعار جديد' && item.body.isEmpty)) {
@@ -383,27 +364,30 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
+    _processedInSession.add(item.id);
+    _handledNotificationIds.add(item.id);
+
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     await loadNotifications();
 
-    // Apply same deduplication logic for native notifications
-    final alreadyExists = _notifications.any((n) =>
-        n.id == item.id ||
-        (n.title == item.title &&
-            n.body == item.body &&
-            n.timestamp.difference(item.timestamp).abs().inSeconds < 5));
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
 
-    if (alreadyExists) {
-      debugPrint('❌ [Manager] Duplicate native notification, skipping');
+    if (existingIndex != -1) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already exists, skipping');
       return;
     }
 
     _notifications.insert(0, item);
-    debugPrint(
-        '✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
-
     _sortAndCount();
     await _saveToDisk();
     notifyListeners();
+    debugPrint('✅ [Manager] Added native notification: ${item.id}');
   }
 
   Future<void> markAsRead(String id) async {
@@ -459,7 +443,6 @@ class NotificationManager extends ChangeNotifier {
 
   void _sortAndCount() {
     final Map<String, NotificationItem> deduplicatedMap = {};
-
     for (var notification in _notifications) {
       if (!deduplicatedMap.containsKey(notification.id)) {
         deduplicatedMap[notification.id] = notification;
@@ -470,13 +453,9 @@ class NotificationManager extends ChangeNotifier {
         }
       }
     }
-
     _notifications = deduplicatedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
-
-    debugPrint(
-        '📊 [Manager] After dedup: ${_notifications.length} notifications');
   }
 
   void _updateUnreadCount() {
@@ -498,21 +477,6 @@ class NotificationManager extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
-
-      final Map<String, NotificationItem> deduplicatedMap = {};
-      for (var item in _notifications) {
-        if (!deduplicatedMap.containsKey(item.id)) {
-          deduplicatedMap[item.id] = item;
-        } else {
-          final existing = deduplicatedMap[item.id]!;
-          if (item.timestamp.isAfter(existing.timestamp)) {
-            deduplicatedMap[item.id] = item;
-          }
-        }
-      }
-
-      _notifications = deduplicatedMap.values.toList();
-      _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
@@ -585,23 +549,28 @@ void _navigateToNotifications() {
     navigatorKey.currentState!.push(
       MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
-  } else {
-    Future.delayed(const Duration(milliseconds: 500), () {
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-      );
-    });
   }
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
+/// FCM BACKGROUND HANDLER
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+
+  final messageId = message.messageId ??
+      message.data['id']?.toString() ??
+      'bg_${DateTime.now().millisecondsSinceEpoch}';
+
+  if (_processedMessageIds.contains(messageId)) {
+    debugPrint('🌙 [BG] Message $messageId already processed, skipping');
+    return;
+  }
+
+  _processedMessageIds.add(messageId);
+  debugPrint('🌙 [BG] Message Received: $messageId');
 
   final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
       (message.notification?.title ?? '').isNotEmpty;
@@ -620,41 +589,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  // Check for duplicates in SharedPreferences
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(NotificationService.storageKey);
-    if (jsonStr != null) {
-      final list = jsonDecode(jsonStr) as List;
-      for (var existing in list) {
-        final existingId = existing['id']?.toString();
-        final existingTitle = existing['title']?.toString() ?? '';
-        final existingBody = existing['body']?.toString() ?? '';
-
-        if (existingId == item.id) {
-          debugPrint('🌙 [BG] Duplicate ID found, skipping');
-          return;
-        }
-
-        if (existingTitle == item.title && existingBody == item.body) {
-          final DateTime existingTime =
-              DateTime.tryParse(existing['timestamp'] ?? '') ??
-                  DateTime.now().toUtc();
-          final timeDiff = item.timestamp.difference(existingTime).abs();
-          if (timeDiff.inSeconds < 10) {
-            debugPrint('🌙 [BG] Content duplicate found, skipping');
-            return;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    debugPrint('🌙 [BG] Error checking duplicates: $e');
-  }
-
   await Future.delayed(const Duration(milliseconds: 500));
   await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved: ${item.title} (ID: ${item.id})');
+  debugPrint('🌙 [BG] Notification Saved: ${item.id}');
 }
 
 /// =========================
@@ -719,7 +656,6 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
-      NotificationService.getAllNotifications(limit: 100);
       NotificationManager.instance.fetchFromMySQL();
     }
   }
@@ -731,7 +667,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - FIXED
+/// MAIN
 /// =========================
 
 void main() async {
@@ -752,7 +688,6 @@ void main() async {
     );
 
     LocalNotificationService.initialize();
-
     NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
@@ -768,7 +703,6 @@ void main() async {
     );
 
     debugPrint('🔔 Notification permissions: ${settings.authorizationStatus}');
-
     await messaging.subscribeToTopic('all_employees');
 
     final token = await messaging.getToken();
@@ -801,24 +735,23 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
-// =======================================
-// Fix: Only handle a notification id ONCE per launch/session
-// =======================================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      String notifId = initialMessage.data['id']?.toString() ??
-          initialMessage.messageId ??
-          DateTime.now().millisecondsSinceEpoch.toString();
 
-      if (!_handledNotificationIds.contains(notifId)) {
-        _handledNotificationIds.add(notifId);
+      final messageId = initialMessage.messageId ??
+          initialMessage.data['id']?.toString() ??
+          'init_${DateTime.now().millisecondsSinceEpoch}';
+
+      if (!_handledNotificationIds.contains(messageId)) {
+        _handledNotificationIds.add(messageId);
         await NotificationManager.instance.addFirebaseMessage(initialMessage);
-        _navigateToNotifications();
-      } else {
-        debugPrint('❎ [Launch] Notification already handled, skipping');
+
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _navigateToNotifications();
+        });
       }
     }
   } catch (e) {
@@ -827,34 +760,30 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    String notifId = message.data['id']?.toString() ??
-        message.messageId ??
-        DateTime.now().millisecondsSinceEpoch.toString();
 
-    if (!_handledNotificationIds.contains(notifId)) {
-      _handledNotificationIds.add(notifId);
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
+        'click_${DateTime.now().millisecondsSinceEpoch}';
+
+    if (!_handledNotificationIds.contains(messageId)) {
+      _handledNotificationIds.add(messageId);
       await NotificationManager.instance.addFirebaseMessage(message);
       _navigateToNotifications();
     } else {
-      debugPrint('❎ [BG] Notification already handled, skipping');
+      debugPrint('❎ [Click] Notification already handled, skipping');
     }
   });
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('🌞 [FG] Notification received while app is FOREGROUND');
-    debugPrint('🌞 [FG] Message ID: ${message.messageId}');
-    debugPrint('🌞 [FG] Title: ${message.notification?.title}');
-    debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    String notifId = message.data['id']?.toString() ??
-        message.messageId ??
-        DateTime.now().millisecondsSinceEpoch.toString();
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
+        'fg_${DateTime.now().millisecondsSinceEpoch}';
 
-    if (!_handledNotificationIds.contains(notifId)) {
-      _handledNotificationIds.add(notifId);
-      Future.delayed(const Duration(milliseconds: 300), () {
-        NotificationManager.instance.addFirebaseMessage(message);
-      });
+    if (!_handledNotificationIds.contains(messageId)) {
+      _handledNotificationIds.add(messageId);
+      NotificationManager.instance.addFirebaseMessage(message);
     } else {
       debugPrint('❎ [FG] Notification already handled, skipping');
     }
@@ -919,8 +848,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Lifecycle] App Resumed - Force refresh notifications');
-
       Future.delayed(const Duration(milliseconds: 500), () {
         NotificationManager.instance.loadNotifications().then((_) {
           NotificationManager.instance.fetchFromMySQL();
@@ -948,9 +875,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 }
 
-// --------------------------------------------------------
-// UI COMPONENTS
-// --------------------------------------------------------
+/// =========================
+/// UI COMPONENTS
+/// =========================
 
 class ModernCard extends StatelessWidget {
   final Widget child;
@@ -1119,232 +1046,9 @@ class NotificationIcon extends StatelessWidget {
   }
 }
 
-// --------------------------------------------------------
-// SCREENS
-// --------------------------------------------------------
-
-class NotificationDetailScreen extends StatelessWidget {
-  final NotificationItem notification;
-
-  const NotificationDetailScreen({Key? key, required this.notification})
-      : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: Text(
-          'تفاصيل الإشعار',
-          style: GoogleFonts.cairo(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              notification.title,
-              style: GoogleFonts.cairo(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF2D3748),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  Icons.access_time,
-                  size: 16,
-                  color: Colors.grey[600],
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  _formatTimestamp(notification.timestamp),
-                  style: GoogleFonts.cairo(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _getNotificationColor(notification.type)
-                        .withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _getNotificationTypeLabel(notification.type),
-                    style: GoogleFonts.cairo(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: _getNotificationColor(notification.type),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 32),
-            if (notification.imageUrl != null &&
-                notification.imageUrl!.isNotEmpty)
-              Column(
-                children: [
-                  Container(
-                    height: 250,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: Colors.grey[100],
-                    ),
-                    child: _buildNotificationImage(notification.imageUrl!),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ),
-            Text(
-              notification.body,
-              textAlign: TextAlign.justify,
-              style: GoogleFonts.cairo(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                height: 1.6,
-                color: const Color(0xFF4A5568),
-              ),
-            ),
-            const SizedBox(height: 32),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'الشركة العامة لتعبئة وخدمات الغاز',
-                  style: GoogleFonts.cairo(
-                    fontSize: 10,
-                    color: const Color(0xFF2D3748),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotificationImage(String imageUrl) {
-    try {
-      Uri uri = Uri.parse(imageUrl);
-
-      if (!uri.hasScheme) {
-        uri = Uri.parse('https://$imageUrl');
-      }
-
-      if (uri.scheme == 'http' || uri.scheme == 'https') {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: CachedNetworkImage(
-            imageUrl: uri.toString(),
-            width: double.infinity,
-            height: 250,
-            fit: BoxFit.cover,
-            placeholder: (context, url) => Container(
-              color: Colors.grey[200],
-              child: const Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF00BFA5),
-                ),
-              ),
-            ),
-            errorWidget: (context, url, error) {
-              return Container(
-                color: Colors.grey[100],
-                child: Center(
-                  child: Icon(
-                    Icons.image_not_supported_outlined,
-                    color: Colors.grey[400],
-                    size: 50,
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      }
-    } catch (e) {}
-
-    return Container(
-      color: Colors.grey[100],
-      child: Center(
-        child: Icon(
-          Icons.image_not_supported_outlined,
-          color: Colors.grey[400],
-          size: 50,
-        ),
-      ),
-    );
-  }
-
-  Color _getNotificationColor(String type) {
-    switch (type) {
-      case 'salary':
-        return Colors.green;
-      case 'announcement':
-        return Colors.blue;
-      case 'department':
-        return Colors.orange;
-      case 'test':
-        return Colors.purple;
-      default:
-        return const Color(0xFF00BFA5);
-    }
-  }
-
-  String _getNotificationTypeLabel(String type) {
-    switch (type) {
-      case 'salary':
-        return 'راتب';
-      case 'announcement':
-        return 'إعلان';
-      case 'department':
-        return 'قسم';
-      case 'test':
-        return 'اختبار';
-      default:
-        return 'عام';
-    }
-  }
-
-  String _formatTimestamp(DateTime timestamp) {
-    try {
-      DateTime now = DateTime.now().toUtc();
-      Duration difference = now.difference(timestamp);
-
-      if (difference.inMinutes < 1) {
-        return 'الآن';
-      } else if (difference.inMinutes < 60) {
-        return 'منذ ${difference.inMinutes} دقيقة';
-      } else if (difference.inHours < 24) {
-        return 'منذ ${difference.inHours} ساعة';
-      } else if (difference.inDays < 7) {
-        return 'منذ ${difference.inDays} يوم';
-      } else {
-        final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
-        return dateFormat.format(timestamp.toLocal());
-      }
-    } catch (e) {
-      return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
-    }
-  }
-}
+/// =========================
+/// SPLASH SCREEN
+/// =========================
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
@@ -1545,6 +1249,10 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
+/// =========================
+/// PRIVACY POLICY SCREEN
+/// =========================
+
 class PrivacyPolicyScreen extends StatelessWidget {
   const PrivacyPolicyScreen({Key? key}) : super(key: key);
 
@@ -1703,9 +1411,9 @@ class PrivacyPolicyScreen extends StatelessWidget {
   }
 }
 
-// ============================================
-// NOTIFICATIONS SCREEN
-// ============================================
+/// =========================
+/// NOTIFICATIONS SCREEN
+/// =========================
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({Key? key}) : super(key: key);
@@ -1751,7 +1459,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Notifications] App resumed - Force refresh');
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {
           _forceRefresh();
@@ -2196,11 +1903,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   Widget _buildNotificationImageInList(String imageUrl) {
     try {
       Uri uri = Uri.parse(imageUrl);
-
       if (!uri.hasScheme) {
         uri = Uri.parse('https://$imageUrl');
       }
-
       if (uri.scheme == 'http' || uri.scheme == 'https') {
         return CachedNetworkImage(
           imageUrl: uri.toString(),
@@ -2230,7 +1935,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         );
       }
     } catch (e) {}
-
     return Container(
       color: Colors.grey[100],
       child: Center(
@@ -2376,6 +2080,233 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   }
 }
 
+/// =========================
+/// NOTIFICATION DETAIL SCREEN
+/// =========================
+
+class NotificationDetailScreen extends StatelessWidget {
+  final NotificationItem notification;
+
+  const NotificationDetailScreen({Key? key, required this.notification})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: Text(
+          'تفاصيل الإشعار',
+          style: GoogleFonts.cairo(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              notification.title,
+              style: GoogleFonts.cairo(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF2D3748),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  Icons.access_time,
+                  size: 16,
+                  color: Colors.grey[600],
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _formatTimestamp(notification.timestamp),
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _getNotificationColor(notification.type)
+                        .withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _getNotificationTypeLabel(notification.type),
+                    style: GoogleFonts.cairo(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: _getNotificationColor(notification.type),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 32),
+            if (notification.imageUrl != null &&
+                notification.imageUrl!.isNotEmpty)
+              Column(
+                children: [
+                  Container(
+                    height: 250,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.grey[100],
+                    ),
+                    child: _buildNotificationImage(notification.imageUrl!),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            Text(
+              notification.body,
+              textAlign: TextAlign.justify,
+              style: GoogleFonts.cairo(
+                fontSize: 16,
+                height: 1.6,
+                color: const Color(0xFF4A5568),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'الشركة العامة لتعبئة وخدمات الغاز',
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    color: const Color(0xFF2D3748),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationImage(String imageUrl) {
+    try {
+      Uri uri = Uri.parse(imageUrl);
+      if (!uri.hasScheme) {
+        uri = Uri.parse('https://$imageUrl');
+      }
+      if (uri.scheme == 'http' || uri.scheme == 'https') {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: CachedNetworkImage(
+            imageUrl: uri.toString(),
+            width: double.infinity,
+            height: 250,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00BFA5),
+                ),
+              ),
+            ),
+            errorWidget: (context, url, error) {
+              return Container(
+                color: Colors.grey[100],
+                child: Center(
+                  child: Icon(
+                    Icons.image_not_supported_outlined,
+                    color: Colors.grey[400],
+                    size: 50,
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      }
+    } catch (e) {}
+    return Container(
+      color: Colors.grey[100],
+      child: Center(
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          color: Colors.grey[400],
+          size: 50,
+        ),
+      ),
+    );
+  }
+
+  Color _getNotificationColor(String type) {
+    switch (type) {
+      case 'salary':
+        return Colors.green;
+      case 'announcement':
+        return Colors.blue;
+      case 'department':
+        return Colors.orange;
+      case 'test':
+        return Colors.purple;
+      default:
+        return const Color(0xFF00BFA5);
+    }
+  }
+
+  String _getNotificationTypeLabel(String type) {
+    switch (type) {
+      case 'salary':
+        return 'راتب';
+      case 'announcement':
+        return 'إعلان';
+      case 'department':
+        return 'قسم';
+      case 'test':
+        return 'اختبار';
+      default:
+        return 'عام';
+    }
+  }
+
+  String _formatTimestamp(DateTime timestamp) {
+    try {
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp);
+
+      if (difference.inMinutes < 1) {
+        return 'الآن';
+      } else if (difference.inMinutes < 60) {
+        return 'منذ ${difference.inMinutes} دقيقة';
+      } else if (difference.inHours < 24) {
+        return 'منذ ${difference.inHours} ساعة';
+      } else if (difference.inDays < 7) {
+        return 'منذ ${difference.inDays} يوم';
+      } else {
+        final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
+        return dateFormat.format(timestamp.toLocal());
+      }
+    } catch (e) {
+      return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
+    }
+  }
+}
+
+/// =========================
+/// WEBVIEW SCREEN
+/// =========================
+
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({Key? key}) : super(key: key);
 
@@ -2405,7 +2336,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
-
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         _initializeWebView();
