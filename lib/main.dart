@@ -544,22 +544,13 @@ class LocalNotificationService {
   }
 }
 
-/// وظيفة محسنة للانتقال إلى صفحة الإشعارات
 void _navigateToNotifications() {
-  // التحقق من أننا لسنا بالفعل في صفحة الإشعارات
-  final currentRoute = navigatorKey.currentState?.widget.toString() ?? '';
-  if (currentRoute.contains('NotificationsScreen')) {
-    debugPrint('Already in NotificationsScreen, skipping navigation');
-    return;
-  }
-
   if (navigatorKey.currentState != null) {
     navigatorKey.currentState!.push(
       MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
   } else {
-    // محاولة ثانية في حال لم يكن الـ navigator جاهزاً
-    Future.delayed(const Duration(milliseconds: 500), () {
+    Future.delayed(const Duration(milliseconds: 300), () {
       navigatorKey.currentState?.push(
         MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
@@ -682,7 +673,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - مع التعديل المطلوب لمنع تكرار الإشعارات
+/// MAIN - مع التعديل المطلوب
 /// =========================
 
 void main() async {
@@ -751,77 +742,124 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 }
 
 /// =========================
-/// ✅ الإعداد المعدل لمنع تكرار الإشعارات - عند الضغط على الإشعار في الخلفية فقط انتقل للصفحة
+/// ✅ الإعداد المعدل مع حماية مزدوجة لمنع التكرار في iOS
 /// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
+  // معرف محلي لمنع المعالجة المزدوجة السريعة في iOS
+  String? lastProcessedId;
+  DateTime? lastProcessedTime;
+  final Set<String> _processedClickIds = {}; // تتبع النقرات المعالجة
+
+  bool isDuplicate(String? messageId) {
+    if (messageId == null) return false;
+    final now = DateTime.now();
+
+    // التحقق من التكرار خلال 5 ثوانٍ
+    if (lastProcessedId == messageId &&
+        lastProcessedTime != null &&
+        now.difference(lastProcessedTime!).inSeconds < 5) {
+      debugPrint(
+          '🛡️ [iOS Guard] Duplicate detected within 5 seconds: $messageId');
+      return true;
+    }
+
+    // التحقق من التكرار في مجموعة النقرات المعالجة
+    if (_processedClickIds.contains(messageId)) {
+      debugPrint(
+          '🛡️ [iOS Guard] Message already processed in clicks: $messageId');
+      return true;
+    }
+
+    lastProcessedId = messageId;
+    lastProcessedTime = now;
+    _processedClickIds.add(messageId);
+
+    // تنظيف المجموعة بعد 10 ثوانٍ لمنع تراكم الذاكرة
+    Future.delayed(const Duration(seconds: 10), () {
+      _processedClickIds.remove(messageId);
+    });
+
+    return false;
+  }
+
+  // 1. معالجة الإشعار عند فتح التطبيق من الصفر (Terminated)
   try {
-    // معالجة الإشعار عند فتح التطبيق من حالة مغلقة (terminated)
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
-      debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-
-      final messageId = initialMessage.messageId ??
+      final mId = initialMessage.messageId ??
           initialMessage.data['id']?.toString() ??
           'init_${DateTime.now().millisecondsSinceEpoch}';
 
-      // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
-      if (!_handledNotificationIds.contains(messageId)) {
-        _handledNotificationIds.add(messageId);
+      if (!isDuplicate(mId)) {
+        debugPrint('🍎 [iOS] Opening from Terminated - ID: $mId');
 
-        // تأخير أطول للسماح بتهيئة التطبيق بالكامل
-        Future.delayed(const Duration(milliseconds: 800), () {
-          _navigateToNotifications();
+        // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (!_handledNotificationIds.contains(mId)) {
+            _handledNotificationIds.add(mId);
+            _navigateToNotifications();
+            debugPrint('🍎 [iOS] Navigated from Terminated state');
+          }
         });
-
-        debugPrint(
-            '🚀 [Launch] Navigating to notifications screen without adding duplicate');
       }
     }
   } catch (e) {
-    debugPrint('Error getting initial message: $e');
+    debugPrint('❌ [iOS] Error in initial message: $e');
   }
 
-  // معالجة الإشعار عند النقر عليه والتطبيق في الخلفية (background)
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-    debugPrint('👆 [Click] App opened from Background via Notification');
-
-    final messageId = message.messageId ??
+  // 2. معالجة النقر على الإشعار (Background / Suspended)
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    final mId = message.messageId ??
         message.data['id']?.toString() ??
         'click_${DateTime.now().millisecondsSinceEpoch}';
 
+    if (isDuplicate(mId)) {
+      debugPrint('🚫 [iOS] Duplicate Tap Blocked for ID: $mId');
+      return;
+    }
+
+    debugPrint('🍎 [iOS] Notification Tapped - Navigating Only (ID: $mId)');
+
     // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
-    if (!_handledNotificationIds.contains(messageId)) {
-      _handledNotificationIds.add(messageId);
-      _navigateToNotifications();
-      debugPrint(
-          '👆 [Click] Navigating to notifications screen without adding duplicate');
-    } else {
-      debugPrint('❎ [Click] Notification already handled, skipping');
+    // المزامنة التلقائية عند فتح التطبيق ستقوم بجلب الإشعار من MySQL
+
+    if (!_handledNotificationIds.contains(mId)) {
+      _handledNotificationIds.add(mId);
+
+      // تأخير قصير للسماح بتهيئة التطبيق
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _navigateToNotifications();
+        debugPrint('🍎 [iOS] Navigated from tapped notification');
+      });
     }
   });
 
-  // معالجة الإشعار عند وصوله والتطبيق في المقدمة (foreground)
+  // 3. معالجة وصول الإشعار والتطبيق مفتوح (Foreground)
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('🌞 [FG] Notification received while app is FOREGROUND');
-
-    final messageId = message.messageId ??
+    final mId = message.messageId ??
         message.data['id']?.toString() ??
         'fg_${DateTime.now().millisecondsSinceEpoch}';
 
     // ✅ في المقدمة، نضيف الإشعار فقط (لا ننتقل للصفحة)
-    if (!_handledNotificationIds.contains(messageId)) {
-      _handledNotificationIds.add(messageId);
-      NotificationManager.instance.addFirebaseMessage(message);
-      debugPrint('🌞 [FG] Adding notification to list (foreground)');
-    } else {
-      debugPrint('❎ [FG] Notification already handled, skipping');
-    }
+    if (mId.isNotEmpty && !_handledNotificationIds.contains(mId)) {
+      _handledNotificationIds.add(mId);
+      debugPrint('🍎 [iOS] Foreground Message Received - Adding: $mId');
 
-    // عرض الإشعار المحلي (اختياري - يمكن إزالته إذا لم يكن مطلوباً)
-    if (Platform.isAndroid && message.notification != null) {
-      LocalNotificationService.showNotification(message);
+      // إضافة الإشعار إلى القائمة المحلية
+      NotificationManager.instance.addFirebaseMessage(message);
+
+      // عرض الإشعار المحلي إذا كان الجهاز iOS
+      if (Platform.isIOS && message.notification != null) {
+        // يمكن إضافة إشعار محلي لنظام iOS هنا إذا لزم الأمر
+        debugPrint('🍎 [iOS] Showing local notification');
+      }
+    } else {
+      debugPrint('🍎 [iOS] Foreground message already handled: $mId');
     }
   });
+
+  debugPrint(
+      '✅ [iOS] Notification navigation setup completed with duplicate protection');
 }
 
 /// =========================
