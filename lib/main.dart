@@ -88,7 +88,7 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    // FIXED: Prefer ID from data payload (from PHP), fallback to MessageID
+    // نفضل الـ ID القادم من البايلود لأنه يطابق قاعدة البيانات
     String id = message.data['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
@@ -116,40 +116,55 @@ class NotificationItem {
     );
   }
 
+  // ✅ التعديل الجوهري: دالة مرنة جداً لقبول البيانات بأي شكل لضمان الظهور
   factory NotificationItem.fromMySQL(Map<String, dynamic> map) {
+    // 1. معالجة البيانات الإضافية
     Map<String, dynamic> payload = {};
-    if (map['data_payload'] != null) {
-      if (map['data_payload'] is Map) {
-        payload = Map<String, dynamic>.from(map['data_payload']);
-      } else if (map['data'] is Map) {
+    try {
+      if (map['data'] != null && map['data'] is Map) {
         payload = Map<String, dynamic>.from(map['data']);
+      } else if (map['data_payload'] != null) {
+        if (map['data_payload'] is String) {
+          payload = jsonDecode(map['data_payload']);
+        } else if (map['data_payload'] is Map) {
+          payload = Map<String, dynamic>.from(map['data_payload']);
+        }
       }
-    }
+    } catch (_) {}
 
+    // 2. معالجة التاريخ (الجوكر) - يقبل نص أو رقم
     DateTime timestamp;
     try {
-      // Robust Timestamp Parsing
-      if (map['timestamp'] is int) {
-        timestamp =
-            DateTime.fromMillisecondsSinceEpoch(map['timestamp']).toUtc();
-      } else if (map['sent_at'] != null) {
-        timestamp = DateTime.parse(map['sent_at']).toUtc();
+      if (map['sent_at'] != null && map['sent_at'].toString().isNotEmpty) {
+        // يحاول قراءة صيغة MySQL: 2024-02-18 10:30:00
+        timestamp = DateTime.parse(map['sent_at'].toString()).toUtc();
+      } else if (map['timestamp'] != null) {
+        // يحاول قراءة رقم milliseconds
+        var ts = map['timestamp'];
+        if (ts is int) {
+          timestamp = DateTime.fromMillisecondsSinceEpoch(ts).toUtc();
+        } else if (ts is String) {
+          timestamp =
+              DateTime.fromMillisecondsSinceEpoch(int.parse(ts)).toUtc();
+        } else {
+          timestamp = DateTime.now().toUtc();
+        }
       } else {
         timestamp = DateTime.now().toUtc();
       }
     } catch (e) {
-      timestamp = DateTime.now().toUtc();
+      timestamp = DateTime.now().toUtc(); // في أسوأ الحالات نستخدم الوقت الحالي
     }
 
     return NotificationItem(
-      id: map['id'].toString(),
-      title: map['title'] ?? '',
-      body: map['body'] ?? '',
-      imageUrl: map['imageUrl'] ?? map['image_url'], // Handle both keys
+      id: map['id'].toString(), // تحويل أي ID (رقم/نص) إلى String
+      title: map['title']?.toString() ?? 'إشعار',
+      body: map['body']?.toString() ?? '',
+      imageUrl: map['imageUrl']?.toString() ?? map['image_url']?.toString(),
       timestamp: timestamp,
       data: payload,
       isRead: false,
-      type: map['type'] ?? 'general',
+      type: map['type']?.toString() ?? 'general',
     );
   }
 }
@@ -177,15 +192,16 @@ class NotificationManager extends ChangeNotifier {
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
 
-  // 1. Load from Disk
+  // تحميل من الذاكرة المحلية
   Future<void> loadNotifications() async {
     try {
-      // Use Service to get raw data
+      // جلب البيانات الخام من السيرفس
       final listMap = await NotificationService.getLocalNotifications();
+      // تحويلها لكائنات باستخدام الدالة المحسنة fromJson
       _notifications =
           listMap.map((e) => NotificationItem.fromJson(e)).toList();
 
-      // Load deleted IDs
+      // تحميل المحذوفات
       final prefs = await SharedPreferences.getInstance();
       final deletedJson = prefs.getString(_deletedIdsKey);
       if (deletedJson != null) {
@@ -199,14 +215,14 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // 2. Fetch from API (Sync)
+  // المزامنة مع السيرفر
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
     _isSyncing = true;
     notifyListeners();
 
     try {
-      // Load local first to compare
+      // تحميل المحلي أولاً
       await loadNotifications();
 
       final serverListRaw =
@@ -215,21 +231,24 @@ class NotificationManager extends ChangeNotifier {
       if (serverListRaw.isNotEmpty) {
         bool hasNewData = false;
         for (var rawItem in serverListRaw) {
-          // Check ID
+          // التحقق من المعرف
           String id = rawItem['id'].toString();
+
+          // إذا كان محذوفاً محلياً، تجاهله
           if (_deletedIds.contains(id)) continue;
 
+          // إذا كان موجوداً بالفعل، تجاهله
           bool exists = _notifications.any((n) => n.id == id);
 
           if (!exists) {
-            // Safe save via Service (Service handles locks)
+            // حفظ آمن عبر السيرفس
             await NotificationService.saveToLocalDisk(rawItem);
             hasNewData = true;
           }
         }
 
         if (hasNewData) {
-          await loadNotifications(); // Reload to show new data
+          await loadNotifications(); // إعادة تحميل لعرض الجديد
         }
       }
       debugPrint('✅ [Manager] MySQL sync completed');
@@ -241,16 +260,16 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // 3. Handle Foreground Message
+  // التعامل مع الإشعار القادم أثناء فتح التطبيق
   Future<void> handleForegroundMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
     if (_deletedIds.contains(item.id)) return;
     if (_notifications.any((n) => n.id == item.id)) return;
 
-    // Save using service
+    // حفظ عبر السيرفس
     await NotificationService.saveToLocalDisk(item.toJson());
-    // Reload UI
+    // تحديث الواجهة
     await loadNotifications();
   }
 
@@ -286,7 +305,7 @@ class NotificationManager extends ChangeNotifier {
     notifyListeners();
 
     await NotificationService.deleteNotification(id);
-    // Save deleted IDs
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
   }
@@ -304,7 +323,7 @@ class NotificationManager extends ChangeNotifier {
 
   void _sortAndCount() {
     final ids = <String>{};
-    _notifications.retainWhere((x) => ids.add(x.id)); // Remove duplicates
+    _notifications.retainWhere((x) => ids.add(x.id)); // حذف المكرر في الذاكرة
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
   }
@@ -378,7 +397,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   debugPrint('🌙 [BG] Background Message Received: ${item.id}');
-  // This saves the notification while app is terminated/backgrounded
+  // يتم حفظ الإشعار هنا في الخلفية، لذلك لا داعي لحفظه عند النقر
   await NotificationService.saveToLocalDisk(item.toJson());
 }
 
@@ -413,10 +432,10 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
-      // Just reload from disk to see what BG handler saved
+      debugPrint('📱 [AppLifecycle] App resumed');
+      // تحميل ما تم حفظه في الخلفية
       NotificationManager.instance.loadNotifications();
-      // Then fetch from server
+      // ثم جلب الجديد من السيرفر
       NotificationManager.instance.fetchFromMySQL();
     }
   }
@@ -449,7 +468,7 @@ void main() async {
     LocalNotificationService.initialize();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // Initial Load
+    // تحميل مبدئي
     await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
@@ -488,28 +507,27 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 }
 
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // 1. Foreground
+  // 1. التطبيق مفتوح (Foreground)
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('📱 [Foreground] Saving notification...');
     NotificationManager.instance.handleForegroundMessage(message);
   });
 
-  // 2. Background/Terminated Click
+  // 2. النقر والإشعارات في الخلفية (Background Click)
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     debugPrint('👆 [Background Click] Navigating only (NO SAVE)...');
-    // IMPORTANT: Do NOT save here. Background handler already saved it.
-    // Just refresh the list to see the file on disk.
+    // 🛑 لا نحفظ هنا، لأن الـ Handler في الخلفية حفظه بالفعل
+    // فقط نعيد التحميل وننتقل
     NotificationManager.instance.loadNotifications().then((_) {
       _navigateToNotifications();
     });
   });
 
-  // 3. Terminated State (Cold Start)
+  // 3. التطبيق مغلق تماماً (Terminated Launch)
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
     debugPrint('🚀 [Terminated Launch] Navigating only...');
-    // In rare cases, BG handler might not have fired. Safe save check.
-    // But usually we just navigate.
+    // احتياطاً نحفظه إذا لم يعمل الـ Background Handler
     await NotificationService.saveToLocalDisk(
         NotificationItem.fromFirebaseMessage(initialMessage).toJson());
 
@@ -1410,7 +1428,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           ),
           const SizedBox(height: 24),
           Text(
-            _searchQuery.isNotEmpty ? 'لا توجد نتائج للبحث' : 'لا توجد إشعارات',
+            _searchQuery.isNotEmpty
+                ? 'لا توجد نتائج للبحث'
+                : 'لا توجد إش��ارات',
             style: GoogleFonts.cairo(
               fontSize: 20,
               fontWeight: FontWeight.bold,
