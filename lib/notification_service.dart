@@ -4,16 +4,19 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// NotificationService - Client for PHP/MySQL notifications API.
-/// Prevents duplicates strictly by notification ID.
+/// مع تحسينات قوية لمنع التكرار
 class NotificationService {
   static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
   static const String storageKey = 'stored_notifications_final';
 
-  // CRITICAL: Shared lock to prevent concurrent SharedPreferences access
   static bool _isWriting = false;
   static int _lockWaitCount = 0;
+
+  // تتبع الإشعارات المحفوظة
   static final Map<String, int> _lastSavedTimestamps = {};
+  static final Set<String> _savedInSession = {};
+  static final Set<String> _processedIds = {};
 
   // =========================================================
   // Get all notifications from MySQL
@@ -41,23 +44,35 @@ class NotificationService {
   }
 
   // =========================================================
-  // CRITICAL: Save to Local Disk (Safe for Background)
-  // Prevent duplicate notifications strictly by ID
+  // Save to Local Disk - مع منع التكرار نهائياً
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
-    // VALIDATION: Skip empty notifications
+    // التحقق من صحة البيانات
     final title = newNotificationJson['title']?.toString() ?? '';
     final body = newNotificationJson['body']?.toString() ?? '';
     if (title.isEmpty || (title == 'إشعار جديد' && body.isEmpty)) {
-      debugPrint('⚠️ [BG-Service] Skipping empty notification');
+      debugPrint('⚠️ [Service] Skipping empty notification');
       return;
     }
 
-    // CRITICAL: Get ID and timestamp
+    // الحصول على المعرف الفريد
     final String newId = newNotificationJson['id']?.toString() ??
         newNotificationJson['message_id']?.toString() ??
-        DateTime.now().millisecondsSinceEpoch.toString();
+        'notif_${DateTime.now().millisecondsSinceEpoch}';
+
+    // التحقق من المعالجة المسبقة
+    if (_processedIds.contains(newId)) {
+      debugPrint(
+          '⚠️ [Service] Notification $newId already processed, skipping');
+      return;
+    }
+
+    if (_savedInSession.contains(newId)) {
+      debugPrint(
+          '⚠️ [Service] Notification $newId already saved in session, skipping');
+      return;
+    }
 
     DateTime newTimestamp;
     try {
@@ -72,31 +87,30 @@ class NotificationService {
       newTimestamp = DateTime.now().toUtc();
     }
 
-    // CRITICAL: Check if this ID has recently been saved (skip if so)
+    // التحقق من التكرار بناءً على الوقت
     final lastTimestamp = _lastSavedTimestamps[newId];
     if (lastTimestamp != null) {
       final lastTime =
           DateTime.fromMillisecondsSinceEpoch(lastTimestamp).toUtc();
-      // If difference is less than 1 second, it's a duplicate
-      if (newTimestamp.difference(lastTime).abs().inSeconds < 1) {
+      if (newTimestamp.difference(lastTime).abs().inSeconds < 3) {
         debugPrint(
-            '⚠️ [BG-Service] Duplicate detected for ID $newId, skipping');
+            '⚠️ [Service] Time-based duplicate detected for ID $newId, skipping');
         return;
       }
     }
 
-    // Wait if another operation is writing
+    // انتظار القفل
     int waitCount = 0;
     while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
+
     if (waitCount >= 100) {
-      debugPrint('⚠️ [BG-Service] Lock timeout - skipping save');
+      debugPrint('⚠️ [Service] Lock timeout - skipping save');
       return;
     }
 
-    // Acquire lock
     _isWriting = true;
     _lockWaitCount++;
 
@@ -104,88 +118,52 @@ class NotificationService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Get existing list
+      // قراءة القائمة الحالية
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // Remove ALL occurrences of this ID (aggressive deduplication)
-      int removedCount = 0;
-      list.removeWhere((item) {
+      // التحقق مرة أخرى من التكرار في القائمة الحالية
+      bool alreadyExists = list.any((item) {
         final itemId = item['id']?.toString();
-        if (itemId == newId) {
-          removedCount++;
-          return true;
-        }
-        return false;
+        return itemId == newId;
       });
 
-      // Prepare final notification with proper timestamp
+      if (alreadyExists) {
+        debugPrint(
+            '⚠️ [Service] Notification $newId already exists in storage, skipping');
+        _processedIds.add(newId);
+        _savedInSession.add(newId);
+        return;
+      }
+
+      // إعداد الإشعار النهائي
       final Map<String, dynamic> finalNotification =
           Map.from(newNotificationJson);
       finalNotification['id'] = newId;
       finalNotification['timestamp'] = newTimestamp.toIso8601String();
 
-      // Insert at top
+      // إدراج في البداية
       list.insert(0, finalNotification);
 
-      // Limit to 200
+      // الحد إلى 200
       if (list.length > 200) {
         list = list.sublist(0, 200);
       }
 
-      // FINAL DEDUPLICATION PASS: Keep only the latest by ID
-      final Map<String, dynamic> deduplicatedMap = {};
-      for (var item in list) {
-        final id = item['id']?.toString();
-        if (id != null) {
-          // If duplicate exists, keep the one with latest timestamp
-          if (!deduplicatedMap.containsKey(id)) {
-            deduplicatedMap[id] = item;
-          } else {
-            final existing = deduplicatedMap[id];
-            final DateTime existingTime = _parseTimestamp(existing);
-            final DateTime newTime = _parseTimestamp(item);
-            if (newTime.isAfter(existingTime)) {
-              deduplicatedMap[id] = item;
-            }
-          }
-        }
-      }
-      list = deduplicatedMap.values.toList();
-
-      // Sort by timestamp (newest first)
-      list.sort((a, b) {
-        final DateTime aTime = _parseTimestamp(a);
-        final DateTime bTime = _parseTimestamp(b);
-        return bTime.compareTo(aTime);
-      });
-
+      // حفظ في SharedPreferences
       await prefs.setString(storageKey, jsonEncode(list));
 
-      // Update last saved timestamp
+      // تحديث التتبع
       _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
+      _savedInSession.add(newId);
+      _processedIds.add(newId);
 
-      debugPrint(
-          '💾 [BG-Service] Saved notification $newId (removed $removedCount duplicates)');
+      debugPrint('💾 [Service] Saved notification $newId successfully');
     } catch (e) {
-      debugPrint('❌ [BG-Service] Save Failed: $e');
+      debugPrint('❌ [Service] Save Failed: $e');
     } finally {
       _isWriting = false;
     }
-  }
-
-  // Helper to parse timestamp from map
-  static DateTime _parseTimestamp(Map<String, dynamic> item) {
-    try {
-      if (item['timestamp'] != null) {
-        return DateTime.parse(item['timestamp']).toUtc();
-      } else if (item['sent_at'] != null) {
-        return DateTime.parse(item['sent_at']).toUtc();
-      }
-    } catch (e) {
-      // ignore
-    }
-    return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   // =========================================================
@@ -194,8 +172,10 @@ class NotificationService {
   static bool get isWriting => _isWriting;
   static int get lockWaitCount => _lockWaitCount;
 
-  // Clear timestamp cache (useful for testing)
+  // مسح التتبع
   static void clearTimestampCache() {
     _lastSavedTimestamps.clear();
+    _savedInSession.clear();
+    _processedIds.clear();
   }
 }
