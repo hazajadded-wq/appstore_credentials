@@ -103,9 +103,7 @@ class NotificationItem {
       } else if (message.data['timestamp'] != null) {
         timestamp = DateTime.parse(message.data['timestamp']).toUtc();
       } else if (message.sentTime != null) {
-        timestamp =
-            DateTime.fromMillisecondsSinceEpoch(message.sentTime! as int)
-                .toUtc();
+        timestamp = DateTime.fromMillisecondsSinceEpoch(message.sentTime!.millisecondsSinceEpoch).toUtc();
       } else {
         timestamp = DateTime.now().toUtc();
       }
@@ -161,7 +159,7 @@ class NotificationItem {
 }
 
 /// =========================
-/// NOTIFICATION MANAGER - مع تحسين قوي لمنع التكرار
+/// NOTIFICATION MANAGER
 /// =========================
 
 class NotificationManager extends ChangeNotifier {
@@ -275,8 +273,7 @@ class NotificationManager extends ChangeNotifier {
         await _saveToDisk();
       }
 
-      debugPrint(
-          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
+      debugPrint('✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -286,20 +283,18 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    final messageId = message.messageId ??
-        message.data['id']?.toString() ??
-        'msg_${DateTime.now().millisecondsSinceEpoch}';
-
+    final messageId = message.messageId ?? 
+                      message.data['id']?.toString() ?? 
+                      'msg_${DateTime.now().millisecondsSinceEpoch}';
+    
     if (_processedInSession.contains(messageId)) {
-      debugPrint(
-          '⚠️ [Manager] Message $messageId already processed in session, skipping');
+      debugPrint('⚠️ [Manager] Message $messageId already processed in session, skipping');
       return;
     }
 
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    if (item.title.isEmpty ||
-        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
       debugPrint('❌ [Manager] Skipping empty notification');
       return;
     }
@@ -321,7 +316,7 @@ class NotificationManager extends ChangeNotifier {
     await loadNotifications();
 
     final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-
+    
     if (existingIndex != -1) {
       final existing = _notifications[existingIndex];
       if (item.timestamp.isAfter(existing.timestamp)) {
@@ -331,8 +326,7 @@ class NotificationManager extends ChangeNotifier {
         notifyListeners();
         debugPrint('✅ [Manager] Updated existing notification: ${item.id}');
       } else {
-        debugPrint(
-            '⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
+        debugPrint('⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
       }
       return;
     }
@@ -346,15 +340,13 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     final item = NotificationItem.fromJson(data);
-
+    
     if (_processedInSession.contains(item.id)) {
-      debugPrint(
-          '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
+      debugPrint('⚠️ [Manager] Native notification ${item.id} already processed, skipping');
       return;
     }
 
-    if (item.title.isEmpty ||
-        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
       debugPrint('❌ [Manager] Skipping empty notification from native');
       return;
     }
@@ -376,10 +368,9 @@ class NotificationManager extends ChangeNotifier {
     await loadNotifications();
 
     final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-
+    
     if (existingIndex != -1) {
-      debugPrint(
-          '⚠️ [Manager] Native notification ${item.id} already exists, skipping');
+      debugPrint('⚠️ [Manager] Native notification ${item.id} already exists, skipping');
       return;
     }
 
@@ -434,11 +425,9 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> searchNotifications(String query) {
     if (query.isEmpty) return _notifications;
     final q = query.toLowerCase();
-    return _notifications
-        .where((n) =>
-            n.title.toLowerCase().contains(q) ||
-            n.body.toLowerCase().contains(q))
-        .toList();
+    return _notifications.where((n) =>
+        n.title.toLowerCase().contains(q) ||
+        n.body.toLowerCase().contains(q)).toList();
   }
 
   void _sortAndCount() {
@@ -478,13 +467,11 @@ class NotificationManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      final jsonStr =
-          jsonEncode(_notifications.map((e) => e.toJson()).toList());
+      final jsonStr = jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
 
-      debugPrint(
-          '💾 [Manager] Saved ${_notifications.length} notifications to disk');
+      debugPrint('💾 [Manager] Saved ${_notifications.length} notifications to disk');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -549,6 +536,12 @@ void _navigateToNotifications() {
     navigatorKey.currentState!.push(
       MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
+  } else {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+      );
+    });
   }
 }
 
@@ -559,16 +552,16 @@ void _navigateToNotifications() {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  final messageId = message.messageId ??
-      message.data['id']?.toString() ??
-      'bg_${DateTime.now().millisecondsSinceEpoch}';
-
+  
+  final messageId = message.messageId ?? 
+                    message.data['id']?.toString() ?? 
+                    'bg_${DateTime.now().millisecondsSinceEpoch}';
+  
   if (_processedMessageIds.contains(messageId)) {
     debugPrint('🌙 [BG] Message $messageId already processed, skipping');
     return;
   }
-
+  
   _processedMessageIds.add(messageId);
   debugPrint('🌙 [BG] Message Received: $messageId');
 
@@ -614,8 +607,7 @@ class NotificationMethodChannel {
         debugPrint('📱 [iOS Channel] Navigation command received');
         Future.delayed(const Duration(milliseconds: 300), () {
           navigatorKey.currentState?.pushAndRemoveUntil(
-            MaterialPageRoute(
-                builder: (context) => const NotificationsScreen()),
+            MaterialPageRoute(builder: (context) => const NotificationsScreen()),
             (route) => false,
           );
         });
@@ -667,7 +659,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN
+/// MAIN - مع التعديل المطلوب
 /// =========================
 
 void main() async {
@@ -735,59 +727,72 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
+/// =========================
+/// ✅ الإعداد المعدل حسب طلبك - عند الضغط على الإشعار في الخلفية فقط انتقل للصفحة
+/// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
+    // معالجة الإشعار عند فتح التطبيق من حالة مغلقة (terminated)
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-
-      final messageId = initialMessage.messageId ??
-          initialMessage.data['id']?.toString() ??
-          'init_${DateTime.now().millisecondsSinceEpoch}';
-
+      
+      final messageId = initialMessage.messageId ?? 
+                        initialMessage.data['id']?.toString() ?? 
+                        'init_${DateTime.now().millisecondsSinceEpoch}';
+      
+      // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
       if (!_handledNotificationIds.contains(messageId)) {
         _handledNotificationIds.add(messageId);
-        await NotificationManager.instance.addFirebaseMessage(initialMessage);
-
+        
+        // تأخير قصير للسماح بتهيئة التطبيق
         Future.delayed(const Duration(milliseconds: 500), () {
           _navigateToNotifications();
         });
+        
+        debugPrint('🚀 [Launch] Navigating to notifications screen without adding duplicate');
       }
     }
   } catch (e) {
     debugPrint('Error getting initial message: $e');
   }
 
+  // معالجة الإشعار عند النقر عليه والتطبيق في الخلفية (background)
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-
-    final messageId = message.messageId ??
-        message.data['id']?.toString() ??
-        'click_${DateTime.now().millisecondsSinceEpoch}';
-
+    
+    final messageId = message.messageId ?? 
+                      message.data['id']?.toString() ?? 
+                      'click_${DateTime.now().millisecondsSinceEpoch}';
+    
+    // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
     if (!_handledNotificationIds.contains(messageId)) {
       _handledNotificationIds.add(messageId);
-      await NotificationManager.instance.addFirebaseMessage(message);
       _navigateToNotifications();
+      debugPrint('👆 [Click] Navigating to notifications screen without adding duplicate');
     } else {
       debugPrint('❎ [Click] Notification already handled, skipping');
     }
   });
 
+  // معالجة الإشعار عند وصوله والتطبيق في المقدمة (foreground)
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('🌞 [FG] Notification received while app is FOREGROUND');
-
-    final messageId = message.messageId ??
-        message.data['id']?.toString() ??
-        'fg_${DateTime.now().millisecondsSinceEpoch}';
-
+    
+    final messageId = message.messageId ?? 
+                      message.data['id']?.toString() ?? 
+                      'fg_${DateTime.now().millisecondsSinceEpoch}';
+    
+    // ✅ في المقدمة، نضيف الإشعار فقط (لا ننتقل للصفحة)
     if (!_handledNotificationIds.contains(messageId)) {
       _handledNotificationIds.add(messageId);
       NotificationManager.instance.addFirebaseMessage(message);
+      debugPrint('🌞 [FG] Adding notification to list (foreground)');
     } else {
       debugPrint('❎ [FG] Notification already handled, skipping');
     }
 
+    // عرض الإشعار المحلي إذا كان في الخلفية (اختياري)
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
     }
