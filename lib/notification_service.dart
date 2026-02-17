@@ -44,7 +44,7 @@ class NotificationService {
   }
 
   // =========================================================
-  // Save to Local Disk - مع منع التكرار نهائياً
+  // Save to Local Disk - مع حماية مشددة للتكرار خاصة لـ iOS
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
@@ -74,31 +74,6 @@ class NotificationService {
       return;
     }
 
-    DateTime newTimestamp;
-    try {
-      if (newNotificationJson['timestamp'] != null) {
-        newTimestamp = DateTime.parse(newNotificationJson['timestamp']).toUtc();
-      } else if (newNotificationJson['sent_at'] != null) {
-        newTimestamp = DateTime.parse(newNotificationJson['sent_at']).toUtc();
-      } else {
-        newTimestamp = DateTime.now().toUtc();
-      }
-    } catch (e) {
-      newTimestamp = DateTime.now().toUtc();
-    }
-
-    // التحقق من التكرار بناءً على الوقت
-    final lastTimestamp = _lastSavedTimestamps[newId];
-    if (lastTimestamp != null) {
-      final lastTime =
-          DateTime.fromMillisecondsSinceEpoch(lastTimestamp).toUtc();
-      if (newTimestamp.difference(lastTime).abs().inSeconds < 3) {
-        debugPrint(
-            '⚠️ [Service] Time-based duplicate detected for ID $newId, skipping');
-        return;
-      }
-    }
-
     // انتظار القفل
     int waitCount = 0;
     while (_isWriting && waitCount < 100) {
@@ -122,15 +97,23 @@ class NotificationService {
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // التحقق مرة أخرى من التكرار في القائمة الحالية
+      // التحقق من التكرار بناءً على ID (فحص دقيق)
       bool alreadyExists = list.any((item) {
         final itemId = item['id']?.toString();
-        return itemId == newId;
+        final itemMessageId = item['message_id']?.toString();
+
+        // فحص المعرفات المختلفة
+        return (itemId == newId) ||
+            (itemMessageId == newId) ||
+            (newId.isNotEmpty && itemId == newId) ||
+            (item['title'] == title &&
+                item['body'] == body &&
+                _isWithinTimeFrame(item, newNotificationJson));
       });
 
       if (alreadyExists) {
         debugPrint(
-            '⚠️ [Service] Notification $newId already exists in storage, skipping');
+            '🚫 [iOS Guard] Notification already exists in storage, skipping save: $newId');
         _processedIds.add(newId);
         _savedInSession.add(newId);
         return;
@@ -140,7 +123,11 @@ class NotificationService {
       final Map<String, dynamic> finalNotification =
           Map.from(newNotificationJson);
       finalNotification['id'] = newId;
-      finalNotification['timestamp'] = newTimestamp.toIso8601String();
+
+      // التأكد من وجود timestamp
+      if (!finalNotification.containsKey('timestamp')) {
+        finalNotification['timestamp'] = DateTime.now().toIso8601String();
+      }
 
       // إدراج في البداية
       list.insert(0, finalNotification);
@@ -154,7 +141,6 @@ class NotificationService {
       await prefs.setString(storageKey, jsonEncode(list));
 
       // تحديث التتبع
-      _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
       _savedInSession.add(newId);
       _processedIds.add(newId);
 
@@ -163,6 +149,32 @@ class NotificationService {
       debugPrint('❌ [Service] Save Failed: $e');
     } finally {
       _isWriting = false;
+    }
+  }
+
+  // دالة مساعدة للتحقق من الوقت بين الإشعارات
+  static bool _isWithinTimeFrame(
+      Map<String, dynamic> existingItem, Map<String, dynamic> newItem) {
+    try {
+      DateTime existingTime;
+      DateTime newTime;
+
+      if (existingItem['timestamp'] != null) {
+        existingTime = DateTime.parse(existingItem['timestamp']).toUtc();
+      } else {
+        return false;
+      }
+
+      if (newItem['timestamp'] != null) {
+        newTime = DateTime.parse(newItem['timestamp']).toUtc();
+      } else {
+        newTime = DateTime.now().toUtc();
+      }
+
+      // إذا كان الفرق أقل من 10 ثوانٍ، يعتبر مكرر
+      return newTime.difference(existingTime).abs().inSeconds < 10;
+    } catch (e) {
+      return false;
     }
   }
 
