@@ -19,8 +19,9 @@ class NotificationService {
   // =========================================================
   // Get all notifications from MySQL
   // =========================================================
-  static Future<List<Map<String, dynamic>>> getAllNotifications(
-      {int limit = 100}) async {
+  static Future<List<Map<String, dynamic>>> getAllNotifications({
+    int limit = 100,
+  }) async {
     final uri = Uri.parse('$apiEndpoint?action=get_all&limit=$limit');
 
     try {
@@ -190,6 +191,81 @@ class NotificationService {
       // ignore
     }
     return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  // =========================================================
+  // Save notification to server
+  // =========================================================
+  static Future<bool> saveNotificationToServer(
+    Map<String, dynamic> notification,
+  ) async {
+    try {
+      final uri = Uri.parse('$apiEndpoint?action=save_notification');
+
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(notification),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // =========================================================
+  // Mark as read
+  // =========================================================
+  static Future<bool> markAsRead(String id) async {
+    try {
+      final uri = Uri.parse('$apiEndpoint?action=mark_as_read');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'id': id}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // =========================================================
+  // Delete notification
+  // =========================================================
+  static Future<bool> deleteNotification(String id) async {
+    try {
+      final uri = Uri.parse('$apiEndpoint?action=delete_notification');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'id': id}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   // =========================================================
