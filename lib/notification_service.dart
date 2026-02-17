@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// NotificationService - Client for PHP/MySQL notifications API.
-/// FIXED: No duplicates, proper UTC time handling
+/// Prevents duplicates strictly by notification ID.
 class NotificationService {
   static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
@@ -13,8 +13,7 @@ class NotificationService {
   // CRITICAL: Shared lock to prevent concurrent SharedPreferences access
   static bool _isWriting = false;
   static int _lockWaitCount = 0;
-  static final Map<String, int> _lastSavedTimestamps =
-      {}; // Track last save time per ID
+  static final Map<String, int> _lastSavedTimestamps = {};
 
   // =========================================================
   // Get all notifications from MySQL
@@ -43,7 +42,7 @@ class NotificationService {
 
   // =========================================================
   // CRITICAL: Save to Local Disk (Safe for Background)
-  // WITH PROPER LOCKING AND DEDUPLICATION
+  // Prevent duplicate notifications strictly by ID
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
@@ -60,7 +59,6 @@ class NotificationService {
         newNotificationJson['message_id']?.toString() ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    // Parse timestamp properly
     DateTime newTimestamp;
     try {
       if (newNotificationJson['timestamp'] != null) {
@@ -74,7 +72,7 @@ class NotificationService {
       newTimestamp = DateTime.now().toUtc();
     }
 
-    // CRITICAL: Check if we've saved this ID recently with same timestamp
+    // CRITICAL: Check if this ID has recently been saved (skip if so)
     final lastTimestamp = _lastSavedTimestamps[newId];
     if (lastTimestamp != null) {
       final lastTime =
@@ -87,13 +85,12 @@ class NotificationService {
       }
     }
 
-    // CRITICAL FIX: Wait if another operation is writing
+    // Wait if another operation is writing
     int waitCount = 0;
     while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 100));
       waitCount++;
     }
-
     if (waitCount >= 100) {
       debugPrint('⚠️ [BG-Service] Lock timeout - skipping save');
       return;
@@ -111,7 +108,7 @@ class NotificationService {
       final jsonStr = prefs.getString(storageKey);
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // CRITICAL FIX: Remove ALL occurrences of this ID (aggressive deduplication)
+      // Remove ALL occurrences of this ID (aggressive deduplication)
       int removedCount = 0;
       list.removeWhere((item) {
         final itemId = item['id']?.toString();
@@ -136,7 +133,7 @@ class NotificationService {
         list = list.sublist(0, 200);
       }
 
-      // FINAL DEDUPLICATION PASS: Ensure no duplicates by ID
+      // FINAL DEDUPLICATION PASS: Keep only the latest by ID
       final Map<String, dynamic> deduplicatedMap = {};
       for (var item in list) {
         final id = item['id']?.toString();
@@ -145,7 +142,6 @@ class NotificationService {
           if (!deduplicatedMap.containsKey(id)) {
             deduplicatedMap[id] = item;
           } else {
-            // Compare timestamps
             final existing = deduplicatedMap[id];
             final DateTime existingTime = _parseTimestamp(existing);
             final DateTime newTime = _parseTimestamp(item);
