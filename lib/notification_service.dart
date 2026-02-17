@@ -221,7 +221,7 @@ class NotificationService {
   }
 
   // =========================================================
-  // Mark as read
+  // Mark as read on server
   // =========================================================
   static Future<bool> markAsRead(String id) async {
     try {
@@ -240,12 +240,13 @@ class NotificationService {
       }
       return false;
     } catch (e) {
+      debugPrint('❌ [NotificationService] markAsRead Error: $e');
       return false;
     }
   }
 
   // =========================================================
-  // Delete notification
+  // Delete notification on server
   // =========================================================
   static Future<bool> deleteNotification(String id) async {
     try {
@@ -264,6 +265,7 @@ class NotificationService {
       }
       return false;
     } catch (e) {
+      debugPrint('❌ [NotificationService] deleteNotification Error: $e');
       return false;
     }
   }
