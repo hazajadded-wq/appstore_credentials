@@ -88,7 +88,7 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    // Use ID from data payload (provided by PHP) if available, otherwise messageId
+    // FIXED: Prefer ID from data payload (from PHP), fallback to MessageID
     String id = message.data['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
@@ -115,6 +115,43 @@ class NotificationItem {
       type: message.data['type'] ?? 'general',
     );
   }
+
+  factory NotificationItem.fromMySQL(Map<String, dynamic> map) {
+    Map<String, dynamic> payload = {};
+    if (map['data_payload'] != null) {
+      if (map['data_payload'] is Map) {
+        payload = Map<String, dynamic>.from(map['data_payload']);
+      } else if (map['data'] is Map) {
+        payload = Map<String, dynamic>.from(map['data']);
+      }
+    }
+
+    DateTime timestamp;
+    try {
+      // Robust Timestamp Parsing
+      if (map['timestamp'] is int) {
+        timestamp =
+            DateTime.fromMillisecondsSinceEpoch(map['timestamp']).toUtc();
+      } else if (map['sent_at'] != null) {
+        timestamp = DateTime.parse(map['sent_at']).toUtc();
+      } else {
+        timestamp = DateTime.now().toUtc();
+      }
+    } catch (e) {
+      timestamp = DateTime.now().toUtc();
+    }
+
+    return NotificationItem(
+      id: map['id'].toString(),
+      title: map['title'] ?? '',
+      body: map['body'] ?? '',
+      imageUrl: map['imageUrl'] ?? map['image_url'], // Handle both keys
+      timestamp: timestamp,
+      data: payload,
+      isRead: false,
+      type: map['type'] ?? 'general',
+    );
+  }
 }
 
 /// =========================
@@ -131,61 +168,70 @@ class NotificationManager extends ChangeNotifier {
   List<NotificationItem> _notifications = [];
   int _unreadCount = 0;
   bool _isSyncing = false;
-
-  // Session cache to prevent immediate reprocessing
-  final Set<String> _processedIds = {};
+  Set<String> _deletedIds = {};
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
+  static const String _storageKey = 'stored_notifications_final';
+  static const String _deletedIdsKey = 'deleted_notification_ids';
+
+  // 1. Load from Disk
   Future<void> loadNotifications() async {
     try {
+      // Use Service to get raw data
       final listMap = await NotificationService.getLocalNotifications();
       _notifications =
           listMap.map((e) => NotificationItem.fromJson(e)).toList();
+
+      // Load deleted IDs
+      final prefs = await SharedPreferences.getInstance();
+      final deletedJson = prefs.getString(_deletedIdsKey);
+      if (deletedJson != null) {
+        _deletedIds = Set<String>.from(jsonDecode(deletedJson));
+      }
+
       _sortAndCount();
-      debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       notifyListeners();
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
     }
   }
 
+  // 2. Fetch from API (Sync)
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
     _isSyncing = true;
     notifyListeners();
 
     try {
-      final serverListRaw =
-          await NotificationService.getAllNotifications(limit: 50);
-
-      if (serverListRaw.isEmpty) {
-        _isSyncing = false;
-        notifyListeners();
-        return;
-      }
-
       // Load local first to compare
       await loadNotifications();
 
-      bool hasNewData = false;
-      for (var rawItem in serverListRaw) {
-        String id = rawItem['id'].toString();
-        bool exists = _notifications.any((n) => n.id == id);
+      final serverListRaw =
+          await NotificationService.getAllNotifications(limit: 50);
 
-        if (!exists) {
-          // Safe save via Service
-          await NotificationService.saveToLocalDisk(rawItem);
-          hasNewData = true;
+      if (serverListRaw.isNotEmpty) {
+        bool hasNewData = false;
+        for (var rawItem in serverListRaw) {
+          // Check ID
+          String id = rawItem['id'].toString();
+          if (_deletedIds.contains(id)) continue;
+
+          bool exists = _notifications.any((n) => n.id == id);
+
+          if (!exists) {
+            // Safe save via Service (Service handles locks)
+            await NotificationService.saveToLocalDisk(rawItem);
+            hasNewData = true;
+          }
+        }
+
+        if (hasNewData) {
+          await loadNotifications(); // Reload to show new data
         }
       }
-
-      if (hasNewData) {
-        await loadNotifications();
-      }
-
       debugPrint('✅ [Manager] MySQL sync completed');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
@@ -195,30 +241,16 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // Called when app is in Foreground
+  // 3. Handle Foreground Message
   Future<void> handleForegroundMessage(RemoteMessage message) async {
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    if (_processedIds.contains(item.id)) return;
-    _processedIds.add(item.id);
+    if (_deletedIds.contains(item.id)) return;
+    if (_notifications.any((n) => n.id == item.id)) return;
 
-    // Check in-memory list
-    if (_notifications.any((n) => n.id == item.id)) {
-      debugPrint(
-          '⚠️ [Manager] Notification ${item.id} already exists, skipping');
-      return;
-    }
-
-    _notifications.insert(0, item);
-    _sortAndCount();
-    notifyListeners();
-
-    // Save to disk
+    // Save using service
     await NotificationService.saveToLocalDisk(item.toJson());
-  }
-
-  // Called when clicking notification
-  Future<void> refreshOnNotificationClick() async {
+    // Reload UI
     await loadNotifications();
   }
 
@@ -233,31 +265,46 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> markAllAsRead() async {
-    for (var n in _notifications) n.isRead = true;
-    _updateUnreadCount();
-    notifyListeners();
-    await _saveAllToDisk();
+    bool changed = false;
+    for (var n in _notifications) {
+      if (!n.isRead) {
+        n.isRead = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      _updateUnreadCount();
+      notifyListeners();
+      await _saveAllToDisk();
+    }
   }
 
   Future<void> deleteNotification(String id) async {
     _notifications.removeWhere((n) => n.id == id);
+    _deletedIds.add(id);
     _updateUnreadCount();
     notifyListeners();
+
     await NotificationService.deleteNotification(id);
+    // Save deleted IDs
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
   }
 
   Future<void> clearAllNotifications() async {
+    _deletedIds.addAll(_notifications.map((n) => n.id));
     _notifications.clear();
     _updateUnreadCount();
     notifyListeners();
     await NotificationService.clearAllNotifications();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
   }
 
   void _sortAndCount() {
-    // Remove duplicates
     final ids = <String>{};
-    _notifications.retainWhere((x) => ids.add(x.id));
-
+    _notifications.retainWhere((x) => ids.add(x.id)); // Remove duplicates
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
   }
@@ -271,7 +318,7 @@ class NotificationManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
-      await prefs.setString(NotificationService.storageKey, jsonStr);
+      await prefs.setString(_storageKey, jsonStr);
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -325,19 +372,60 @@ void _navigateToNotifications() {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-
   final item = NotificationItem.fromFirebaseMessage(message);
-
   if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
     return;
   }
 
-  // ✅ Safe save that prevents duplicates
+  debugPrint('🌙 [BG] Background Message Received: ${item.id}');
+  // This saves the notification while app is terminated/backgrounded
   await NotificationService.saveToLocalDisk(item.toJson());
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// =========================
+/// APP LIFECYCLE HANDLER
+/// =========================
+
+class AppLifecycleHandler extends StatefulWidget {
+  final Widget child;
+  const AppLifecycleHandler({required this.child, Key? key}) : super(key: key);
+
+  @override
+  State<AppLifecycleHandler> createState() => _AppLifecycleHandlerState();
+}
+
+class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
+      // Just reload from disk to see what BG handler saved
+      NotificationManager.instance.loadNotifications();
+      // Then fetch from server
+      NotificationManager.instance.fetchFromMySQL();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
+  }
+}
 
 /// =========================
 /// MAIN
@@ -361,17 +449,15 @@ void main() async {
     LocalNotificationService.initialize();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
+    // Initial Load
     await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
-
     await messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
-      provisional: false,
     );
-
     await messaging.subscribeToTopic('all_employees');
 
     if (Platform.isAndroid) {
@@ -383,7 +469,11 @@ void main() async {
     debugPrint('❌ Init Error: $e');
   }
 
-  runApp(const MyApp());
+  runApp(
+    AppLifecycleHandler(
+      child: const MyApp(),
+    ),
+  );
 }
 
 Future<void> _requestIgnoreBatteryOptimizations() async {
@@ -397,37 +487,34 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
-/// =========================
-/// ✅ NAVIGATION LOGIC FIX
-/// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // 1️⃣ FOREGROUND: App is open
+  // 1. Foreground
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('📱 [Foreground] Received message');
+    debugPrint('📱 [Foreground] Saving notification...');
     NotificationManager.instance.handleForegroundMessage(message);
   });
 
-  // 2️⃣ BACKGROUND CLICK: User tapped notification
+  // 2. Background/Terminated Click
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('👆 [Background Click] User tapped notification');
-    // 🛑 DO NOT SAVE HERE. It was already saved by background handler.
-    // Just refresh and navigate.
-    NotificationManager.instance.refreshOnNotificationClick().then((_) {
+    debugPrint('👆 [Background Click] Navigating only (NO SAVE)...');
+    // IMPORTANT: Do NOT save here. Background handler already saved it.
+    // Just refresh the list to see the file on disk.
+    NotificationManager.instance.loadNotifications().then((_) {
       _navigateToNotifications();
     });
   });
 
-  // 3️⃣ TERMINATED: App launched from notification
+  // 3. Terminated State (Cold Start)
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
-    debugPrint('🚀 [Terminated Launch] App launched from notification');
-
-    // 🛑 Safe Save: In case background handler didn't run.
-    // NotificationService handles duplicate checking.
+    debugPrint('🚀 [Terminated Launch] Navigating only...');
+    // In rare cases, BG handler might not have fired. Safe save check.
+    // But usually we just navigate.
     await NotificationService.saveToLocalDisk(
         NotificationItem.fromFirebaseMessage(initialMessage).toJson());
 
     Future.delayed(const Duration(milliseconds: 800), () {
+      NotificationManager.instance.loadNotifications();
       _navigateToNotifications();
     });
   }
@@ -470,29 +557,11 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
+class _MyAppState extends State<MyApp> {
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     NotificationManager.instance.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        NotificationManager.instance.loadNotifications().then((_) {
-          NotificationManager.instance.fetchFromMySQL();
-        });
-      });
-    }
   }
 
   @override
