@@ -25,6 +25,17 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'notification_service.dart';
 import 'firebase_options.dart';
 
+// ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
+final Set<String> _handledNotificationIds = {};
+
+// Helper: normalize any Map to Map<String, dynamic>
+Map<String, dynamic> _asStringKeyedMap(dynamic source) {
+  if (source is Map) {
+    return source.map((key, value) => MapEntry(key.toString(), value));
+  }
+  return <String, dynamic>{};
+}
+
 /// =========================
 /// DATA MODEL
 /// =========================
@@ -60,48 +71,85 @@ class NotificationItem {
       'data': data,
       'isRead': isRead,
       'type': type,
+      'message_id': data['message_id'] ?? data['firebase_message_id'] ?? id,
     };
   }
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
+    // يدعم كل من milliseconds و ISO8601
+    DateTime ts;
+    final rawTs = json['timestamp'];
+    if (rawTs is int) {
+      ts = DateTime.fromMillisecondsSinceEpoch(rawTs).toUtc();
+    } else if (rawTs is String && rawTs.isNotEmpty) {
+      try {
+        ts = DateTime.parse(rawTs).toUtc();
+      } catch (_) {
+        ts = DateTime.now().toUtc();
+      }
+    } else {
+      ts = DateTime.now().toUtc();
+    }
+
+    final Map<String, dynamic> dataMap = _asStringKeyedMap(json['data']);
+
+    final unifiedId = json['message_id']?.toString() ??
+        dataMap['message_id']?.toString() ??
+        dataMap['firebase_message_id']?.toString() ??
+        json['id']?.toString() ??
+        '';
+
+    if (!(dataMap.containsKey('message_id') ||
+        dataMap.containsKey('firebase_message_id'))) {
+      dataMap['message_id'] = unifiedId;
+    }
+
     return NotificationItem(
-      id: json['id'].toString(),
+      id: (json['id'] ?? unifiedId).toString(),
       title: json['title'] ?? '',
       body: json['body'] ?? '',
       imageUrl: json['imageUrl'],
-      timestamp: DateTime.fromMillisecondsSinceEpoch(
-              json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch)
-          .toUtc(),
-      data: json['data'] != null ? Map<String, dynamic>.from(json['data']) : {},
+      timestamp: ts,
+      data: dataMap,
       isRead: json['isRead'] ?? false,
       type: json['type'] ?? 'general',
     );
   }
 
   factory NotificationItem.fromFirebaseMessage(RemoteMessage message) {
-    final imageUrl = message.data['image_url'] ??
+    final normalizedData = _asStringKeyedMap(message.data);
+
+    final imageUrl = normalizedData['image_url'] ??
         message.notification?.android?.imageUrl ??
         message.notification?.apple?.imageUrl ??
-        message.data['image'];
+        normalizedData['image'];
 
     String title =
-        message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
-    String body = message.notification?.body ?? message.data['body'] ?? '';
+        message.notification?.title ?? normalizedData['title'] ?? 'إشعار جديد';
+    String body = message.notification?.body ?? normalizedData['body'] ?? '';
 
-    // نفضل الـ ID القادم من البايلود لأنه يطابق قاعدة البيانات
-    String id = message.data['id']?.toString() ??
+    // توحيد المعرّف: نفضّل message_id/firebase_message_id أولاً
+    String id = normalizedData['message_id']?.toString() ??
+        normalizedData['firebase_message_id']?.toString() ??
+        normalizedData['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
     DateTime timestamp;
     try {
-      if (message.sentTime != null) {
-        timestamp = message.sentTime!;
+      if (normalizedData['sent_at'] != null) {
+        timestamp = DateTime.parse(normalizedData['sent_at']).toUtc();
+      } else if (normalizedData['timestamp'] != null) {
+        timestamp = DateTime.parse(normalizedData['timestamp']).toUtc();
+      } else if (message.sentTime != null) {
+        timestamp = DateTime.fromMillisecondsSinceEpoch(
+                message.sentTime!.millisecondsSinceEpoch)
+            .toUtc();
       } else {
-        timestamp = DateTime.now();
+        timestamp = DateTime.now().toUtc();
       }
     } catch (e) {
-      timestamp = DateTime.now();
+      timestamp = DateTime.now().toUtc();
     }
 
     return NotificationItem(
@@ -110,61 +158,64 @@ class NotificationItem {
       body: body,
       imageUrl: imageUrl,
       timestamp: timestamp,
-      data: message.data,
-      isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
-      type: message.data['type'] ?? 'general',
+      data: {
+        ...normalizedData,
+        if (!(normalizedData.containsKey('message_id') ||
+            normalizedData.containsKey('firebase_message_id')))
+          'message_id': id,
+      },
+      isRead:
+          normalizedData['is_read'] == '1' || normalizedData['is_read'] == 1,
+      type: normalizedData['type'] ?? 'general',
     );
   }
 
-  // ✅ التعديل الجوهري: دالة مرنة جداً لقبول البيانات بأي شكل لضمان الظهور
   factory NotificationItem.fromMySQL(Map<String, dynamic> map) {
-    // 1. معالجة البيانات الإضافية
     Map<String, dynamic> payload = {};
-    try {
-      if (map['data'] != null && map['data'] is Map) {
-        payload = Map<String, dynamic>.from(map['data']);
-      } else if (map['data_payload'] != null) {
-        if (map['data_payload'] is String) {
-          payload = jsonDecode(map['data_payload']);
-        } else if (map['data_payload'] is Map) {
-          payload = Map<String, dynamic>.from(map['data_payload']);
-        }
+    if (map['data_payload'] != null) {
+      if (map['data_payload'] is String &&
+          map['data_payload'].toString().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(map['data_payload']);
+          payload = _asStringKeyedMap(decoded);
+        } catch (e) {}
+      } else if (map['data_payload'] is Map) {
+        payload = _asStringKeyedMap(map['data_payload']);
       }
-    } catch (_) {}
+    }
 
-    // 2. معالجة التاريخ (الجوكر) - يقبل نص أو رقم
+    // توحيد المعرّف باستخدام firebase_message_id/message_id
+    final unifiedId = (map['message_id']?.toString() ??
+            map['firebase_message_id']?.toString() ??
+            map['id']?.toString() ??
+            '')
+        .trim();
+
     DateTime timestamp;
     try {
       if (map['sent_at'] != null && map['sent_at'].toString().isNotEmpty) {
-        // يحاول قراءة صيغة MySQL: 2024-02-18 10:30:00
         timestamp = DateTime.parse(map['sent_at'].toString()).toUtc();
-      } else if (map['timestamp'] != null) {
-        // يحاول قراءة رقم milliseconds
-        var ts = map['timestamp'];
-        if (ts is int) {
-          timestamp = DateTime.fromMillisecondsSinceEpoch(ts).toUtc();
-        } else if (ts is String) {
-          timestamp =
-              DateTime.fromMillisecondsSinceEpoch(int.parse(ts)).toUtc();
-        } else {
-          timestamp = DateTime.now().toUtc();
-        }
       } else {
         timestamp = DateTime.now().toUtc();
       }
     } catch (e) {
-      timestamp = DateTime.now().toUtc(); // في أسوأ الحالات نستخدم الوقت الحالي
+      timestamp = DateTime.now().toUtc();
     }
 
     return NotificationItem(
-      id: map['id'].toString(), // تحويل أي ID (رقم/نص) إلى String
-      title: map['title']?.toString() ?? 'إشعار',
-      body: map['body']?.toString() ?? '',
-      imageUrl: map['imageUrl']?.toString() ?? map['image_url']?.toString(),
+      id: unifiedId,
+      title: map['title'] ?? '',
+      body: map['body'] ?? '',
+      imageUrl: map['image_url'],
       timestamp: timestamp,
-      data: payload,
+      data: {
+        ...payload,
+        if (!(payload.containsKey('message_id') ||
+            payload.containsKey('firebase_message_id')))
+          'message_id': unifiedId,
+      },
       isRead: false,
-      type: map['type']?.toString() ?? 'general',
+      type: map['type'] ?? 'general',
     );
   }
 }
@@ -184,6 +235,7 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
+  final Set<String> _processedInSession = {};
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
@@ -192,66 +244,117 @@ class NotificationManager extends ChangeNotifier {
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
 
-  // تحميل من الذاكرة المحلية
-  Future<void> loadNotifications() async {
-    try {
-      // جلب البيانات الخام من السيرفس
-      final listMap = await NotificationService.getLocalNotifications();
-      // تحويلها لكائنات باستخدام الدالة المحسنة fromJson
-      _notifications =
-          listMap.map((e) => NotificationItem.fromJson(e)).toList();
+  // مفتاح موحّد لإزالة التكرارات: يفضّل message_id ثم id
+  String _dedupKey(NotificationItem n) {
+    final mid = (n.data['message_id']?.toString() ??
+        n.data['firebase_message_id']?.toString());
+    if (mid != null && mid.isNotEmpty) return mid;
+    return n.id;
+  }
 
-      // تحميل المحذوفات
+  Future<void> loadNotifications() async {
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+
+      final jsonStr = prefs.getString(_storageKey);
       final deletedJson = prefs.getString(_deletedIdsKey);
+
+      if (jsonStr != null) {
+        final list = jsonDecode(jsonStr) as List;
+        _notifications = list
+            .map((e) => NotificationItem.fromJson(_asStringKeyedMap(e)))
+            .toList();
+        _sortAndCount();
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+      }
+
       if (deletedJson != null) {
         _deletedIds = Set<String>.from(jsonDecode(deletedJson));
       }
-
-      _sortAndCount();
-      notifyListeners();
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
     }
   }
 
-  // المزامنة مع السيرفر
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
     _isSyncing = true;
-    notifyListeners();
+    Future.microtask(() => notifyListeners());
 
     try {
-      // تحميل المحلي أولاً
+      final serverListRaw =
+          await NotificationService.getAllNotifications(limit: 100);
+
       await loadNotifications();
 
-      final serverListRaw =
-          await NotificationService.getAllNotifications(limit: 50);
+      if (serverListRaw.isEmpty) {
+        _isSyncing = false;
+        notifyListeners();
+        return;
+      }
 
-      if (serverListRaw.isNotEmpty) {
-        bool hasNewData = false;
-        for (var rawItem in serverListRaw) {
-          // التحقق من المعرف
-          String id = rawItem['id'].toString();
+      final serverItems = serverListRaw
+          .map((m) => NotificationItem.fromMySQL(_asStringKeyedMap(m)))
+          .toList();
 
-          // إذا كان محذوفاً محلياً، تجاهله
-          if (_deletedIds.contains(id)) continue;
+      final Map<String, NotificationItem> localMap = {
+        for (var item in _notifications) _dedupKey(item): item
+      };
 
-          // إذا كان موجوداً بالفعل، تجاهله
-          bool exists = _notifications.any((n) => n.id == id);
+      bool hasChanges = false;
 
-          if (!exists) {
-            // حفظ آمن عبر السيرفس
-            await NotificationService.saveToLocalDisk(rawItem);
-            hasNewData = true;
-          }
+      for (var serverItem in serverItems) {
+        final key = _dedupKey(serverItem);
+
+        if (_deletedIds.contains(serverItem.id) || _deletedIds.contains(key)) {
+          continue;
         }
 
-        if (hasNewData) {
-          await loadNotifications(); // إعادة تحميل لعرض الجديد
+        if (localMap.containsKey(key)) {
+          final localItem = localMap[key]!;
+          if (serverItem.timestamp.isAfter(localItem.timestamp)) {
+            localMap[key] = NotificationItem(
+              id: serverItem.id,
+              title: serverItem.title,
+              body: serverItem.body,
+              imageUrl: serverItem.imageUrl,
+              timestamp: serverItem.timestamp,
+              data: serverItem.data,
+              type: serverItem.type,
+              isRead: localItem.isRead,
+            );
+            hasChanges = true;
+          }
+        } else {
+          localMap[key] = serverItem;
+          hasChanges = true;
         }
       }
-      debugPrint('✅ [Manager] MySQL sync completed');
+
+      // إزالة أي عناصر محذوفة
+      localMap.removeWhere((key, item) =>
+          _deletedIds.contains(item.id) || _deletedIds.contains(key));
+
+      _notifications = localMap.values.toList();
+      _sortAndCount();
+
+      if (_notifications.length > 200) {
+        _notifications = _notifications.take(200).toList();
+      }
+
+      if (hasChanges) {
+        await _saveToDisk();
+      }
+
+      debugPrint(
+          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -260,26 +363,128 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  // التعامل مع الإشعار القادم أثناء فتح التطبيق
-  Future<void> handleForegroundMessage(RemoteMessage message) async {
+  Future<void> addFirebaseMessage(RemoteMessage message) async {
+    final normalizedData = _asStringKeyedMap(message.data);
+    final messageId = normalizedData['message_id']?.toString() ??
+        normalizedData['firebase_message_id']?.toString() ??
+        message.messageId ??
+        normalizedData['id']?.toString() ??
+        'msg_${DateTime.now().millisecondsSinceEpoch}';
+
+    if (_processedInSession.contains(messageId)) {
+      debugPrint(
+          '⚠️ [Manager] Message $messageId already processed in session, skipping');
+      return;
+    }
+
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    if (_deletedIds.contains(item.id)) return;
-    if (_notifications.any((n) => n.id == item.id)) return;
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification');
+      return;
+    }
 
-    // حفظ عبر السيرفس
-    await NotificationService.saveToLocalDisk(item.toJson());
-    // تحديث الواجهة
+    if (_deletedIds.contains(item.id) ||
+        _deletedIds.contains(_dedupKey(item))) {
+      debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
+      return;
+    }
+
+    _processedInSession.add(messageId);
+    _handledNotificationIds.add(messageId);
+
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     await loadNotifications();
+
+    final existingIndex =
+        _notifications.indexWhere((n) => _dedupKey(n) == _dedupKey(item));
+
+    if (existingIndex != -1) {
+      final existing = _notifications[existingIndex];
+      if (item.timestamp.isAfter(existing.timestamp)) {
+        _notifications[existingIndex] = item;
+        _sortAndCount();
+        await _saveToDisk();
+        notifyListeners();
+        debugPrint('✅ [Manager] Updated existing notification: ${item.id}');
+      } else {
+        debugPrint(
+            '⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
+      }
+      return;
+    }
+
+    _notifications.insert(0, item);
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
+    debugPrint('✅ [Manager] Added new notification: ${item.id}');
+  }
+
+  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
+    final Map<String, dynamic> normalized = _asStringKeyedMap(data);
+    final item = NotificationItem.fromJson(normalized);
+
+    if (_processedInSession.contains(item.id) ||
+        _processedInSession.contains(_dedupKey(item))) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
+      return;
+    }
+
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification from native');
+      return;
+    }
+
+    if (_deletedIds.contains(item.id) ||
+        _deletedIds.contains(_dedupKey(item))) {
+      debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
+      return;
+    }
+
+    _processedInSession.add(item.id);
+    _handledNotificationIds.add(item.id);
+
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    await loadNotifications();
+
+    final existingIndex =
+        _notifications.indexWhere((n) => _dedupKey(n) == _dedupKey(item));
+
+    if (existingIndex != -1) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already exists, skipping');
+      return;
+    }
+
+    _notifications.insert(0, item);
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
+    debugPrint('✅ [Manager] Added native notification: ${item.id}');
   }
 
   Future<void> markAsRead(String id) async {
-    final index = _notifications.indexWhere((n) => n.id == id);
+    final index =
+        _notifications.indexWhere((n) => n.id == id || _dedupKey(n) == id);
     if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
+      await _saveToDisk();
       notifyListeners();
-      await _saveAllToDisk();
     }
   }
 
@@ -293,37 +498,51 @@ class NotificationManager extends ChangeNotifier {
     }
     if (changed) {
       _updateUnreadCount();
+      await _saveToDisk();
       notifyListeners();
-      await _saveAllToDisk();
     }
   }
 
   Future<void> deleteNotification(String id) async {
-    _notifications.removeWhere((n) => n.id == id);
+    _notifications.removeWhere((n) => n.id == id || _dedupKey(n) == id);
     _deletedIds.add(id);
     _updateUnreadCount();
+    await _saveToDisk();
     notifyListeners();
-
-    await NotificationService.deleteNotification(id);
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
   }
 
   Future<void> clearAllNotifications() async {
-    _deletedIds.addAll(_notifications.map((n) => n.id));
+    _deletedIds.addAll(_notifications.map((n) => _dedupKey(n)));
     _notifications.clear();
     _updateUnreadCount();
+    await _saveToDisk();
     notifyListeners();
-    await NotificationService.clearAllNotifications();
+  }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+  List<NotificationItem> searchNotifications(String query) {
+    if (query.isEmpty) return _notifications;
+    final q = query.toLowerCase();
+    return _notifications
+        .where((n) =>
+            n.title.toLowerCase().contains(q) ||
+            n.body.toLowerCase().contains(q))
+        .toList();
   }
 
   void _sortAndCount() {
-    final ids = <String>{};
-    _notifications.retainWhere((x) => ids.add(x.id)); // حذف المكرر في الذاكرة
+    final Map<String, NotificationItem> deduplicatedMap = {};
+    for (var notification in _notifications) {
+      final key = _dedupKey(notification);
+      if (!deduplicatedMap.containsKey(key)) {
+        deduplicatedMap[key] = notification;
+      } else {
+        final existing = deduplicatedMap[key]!;
+        if (notification.timestamp.isAfter(existing.timestamp)) {
+          deduplicatedMap[key] = notification;
+        }
+      }
+    }
+    _notifications = deduplicatedMap.values.toList();
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
   }
@@ -332,12 +551,29 @@ class NotificationManager extends ChangeNotifier {
     _unreadCount = _notifications.where((n) => !n.isRead).length;
   }
 
-  Future<void> _saveAllToDisk() async {
+  Future<void> _saveToDisk() async {
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 100) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Manager] Lock timeout - skipping save');
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
+      await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+
+      debugPrint(
+          '💾 [Manager] Saved ${_notifications.length} notifications to disk');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -359,13 +595,50 @@ class LocalNotificationService {
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
 
+    // Named parameters per current plugin signature
     _notificationsPlugin.initialize(
       settings: initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse details) {
         debugPrint('🔔 Local Notification Tapped');
         _navigateToNotifications();
       },
+      // Optionally add background response if needed:
+      // onDidReceiveBackgroundNotificationResponse: (NotificationResponse details) { ... },
     );
+  }
+
+  static void showNotification(RemoteMessage message) async {
+    if (!Platform.isAndroid) return;
+
+    try {
+      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+          AndroidNotificationDetails(
+        'high_importance_channel',
+        'High Importance Notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+        showWhen: true,
+      );
+      const NotificationDetails platformChannelSpecifics =
+          NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      // Named parameters per current plugin signature
+      await _notificationsPlugin.show(
+        id: id,
+        title: message.notification?.title ?? 'إشعار جديد',
+        body: message.notification?.body ?? '',
+        notificationDetails: platformChannelSpecifics,
+        payload: jsonEncode({
+          ..._asStringKeyedMap(message.data),
+          'message_id': message.data['message_id'] ??
+              message.data['firebase_message_id'] ??
+              message.messageId
+        }),
+      );
+    } catch (e) {
+      debugPrint('❌ Error showing local notification: $e');
+    }
   }
 }
 
@@ -391,14 +664,47 @@ void _navigateToNotifications() {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
+  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+
   final item = NotificationItem.fromFirebaseMessage(message);
+
   if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    debugPrint('🌙 [BG] Skipping notification with default/empty title');
     return;
   }
 
-  debugPrint('🌙 [BG] Background Message Received: ${item.id}');
-  // يتم حفظ الإشعار هنا في الخلفية، لذلك لا داعي لحفظه عند النقر
+  await Future.delayed(const Duration(milliseconds: 500));
   await NotificationService.saveToLocalDisk(item.toJson());
+  debugPrint('🌙 [BG] Notification Saved: ${item.id}');
+}
+
+/// =========================
+/// METHOD CHANNEL FOR iOS NOTIFICATIONS
+/// =========================
+
+class NotificationMethodChannel {
+  static const MethodChannel _channel = MethodChannel('notification_handler');
+
+  static void setupListener() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'saveNotification') {
+        debugPrint('📱 [iOS Channel] Received notification from native iOS');
+        final Map<String, dynamic> data = _asStringKeyedMap(call.arguments);
+
+        await Future.delayed(const Duration(milliseconds: 200));
+        await NotificationManager.instance.addNotificationFromNative(data);
+      } else if (call.method == 'navigateToNotifications') {
+        debugPrint('📱 [iOS Channel] Navigation command received');
+        Future.delayed(const Duration(milliseconds: 300), () {
+          navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+            (route) => false,
+          );
+        });
+      }
+    });
+  }
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -432,10 +738,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('📱 [AppLifecycle] App resumed');
-      // تحميل ما تم حفظه في الخلفية
-      NotificationManager.instance.loadNotifications();
-      // ثم جلب الجديد من السيرفر
+      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
       NotificationManager.instance.fetchFromMySQL();
     }
   }
@@ -447,7 +750,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN
+/// MAIN - الحل النهائي ✅
 /// =========================
 
 void main() async {
@@ -466,18 +769,25 @@ void main() async {
     );
 
     LocalNotificationService.initialize();
+    NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    // تحميل مبدئي
     await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission(
+
+    NotificationSettings settings = await messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
+      // provisional: false, // REMOVE: not supported in your version
     );
+
+    debugPrint('🔔 Notification permissions: ${settings.authorizationStatus}');
     await messaging.subscribeToTopic('all_employees');
+
+    final token = await messaging.getToken();
+    debugPrint('🔑 FCM Token: $token');
 
     if (Platform.isAndroid) {
       await _requestIgnoreBatteryOptimizations();
@@ -506,33 +816,27 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
+/// =========================
+/// ✅ الحل النهائي - القاعدة الذهبية
+/// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // 1. التطبيق مفتوح (Foreground)
+  // 1️⃣ عند وصول الإشعار والتطبيق مفتوح (Foreground) - نحفظ فقط
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('📱 [Foreground] Saving notification...');
-    NotificationManager.instance.handleForegroundMessage(message);
+    NotificationManager.instance.addFirebaseMessage(message);
   });
 
-  // 2. النقر والإشعارات في الخلفية (Background Click)
+  // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('👆 [Background Click] Navigating only (NO SAVE)...');
-    // 🛑 لا نحفظ هنا، لأن الـ Handler في الخلفية حفظه بالفعل
-    // فقط نعيد التحميل وننتقل
-    NotificationManager.instance.loadNotifications().then((_) {
-      _navigateToNotifications();
-    });
+    debugPrint('👆 [Background Click] Navigating only...');
+    _navigateToNotifications();
   });
 
-  // 3. التطبيق مغلق تماماً (Terminated Launch)
+  // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
     debugPrint('🚀 [Terminated Launch] Navigating only...');
-    // احتياطاً نحفظه إذا لم يعمل الـ Background Handler
-    await NotificationService.saveToLocalDisk(
-        NotificationItem.fromFirebaseMessage(initialMessage).toJson());
-
-    Future.delayed(const Duration(milliseconds: 800), () {
-      NotificationManager.instance.loadNotifications();
+    Future.delayed(const Duration(milliseconds: 500), () {
       _navigateToNotifications();
     });
   }
@@ -575,11 +879,29 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> {
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     NotificationManager.instance.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        NotificationManager.instance.loadNotifications().then((_) {
+          NotificationManager.instance.fetchFromMySQL();
+        });
+      });
+    }
   }
 
   @override
@@ -1313,7 +1635,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                       const SizedBox(width: 8),
                       _buildFilterChip('salary', 'الرواتب'),
                       const SizedBox(width: 8),
-                      _buildFilterChip('announcement', 'الإعلانات'),
+                      _buildFilterChip('announcement', 'ال��علانات'),
                       const SizedBox(width: 8),
                       _buildFilterChip('department', 'الأقسام'),
                       const SizedBox(width: 8),
@@ -1428,9 +1750,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           ),
           const SizedBox(height: 24),
           Text(
-            _searchQuery.isNotEmpty
-                ? 'لا توجد نتائج للبحث'
-                : 'لا توجد إش��ارات',
+            _searchQuery.isNotEmpty ? 'لا توجد نتائج للبحث' : 'لا توجد إشعارات',
             style: GoogleFonts.cairo(
               fontSize: 20,
               fontWeight: FontWeight.bold,
