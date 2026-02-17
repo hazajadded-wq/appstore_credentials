@@ -24,10 +24,154 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'notification_service.dart';
 
+// Global navigator key for navigation from background
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// =========================
+/// LOCAL NOTIFICATION SERVICE
+/// =========================
+class LocalNotificationService {
+  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  static Future<void> initialize() async {
+    // Android settings
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    // iOS settings
+    final DarwinInitializationSettings initializationSettingsIOS =
+        DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    final InitializationSettings initializationSettings =
+        InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    // Initialize with callbacks
+      await _notificationsPlugin.initialize(
+      settings: initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        debugPrint('🔔 Local Notification Tapped');
+        _handleNotificationTap(response);
+      },
+    );
+
+    // Create notification channel for Android
+    if (Platform.isAndroid) {
+      await _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(const AndroidNotificationChannel(
+            'high_importance_channel',
+            'High Importance Notifications',
+            description: 'This channel is used for important notifications.',
+            importance: Importance.max,
+            showBadge: true,
+          ));
+    }
+  }
+
+  static void _handleNotificationTap(NotificationResponse response) {
+    debugPrint('🔔 Handling notification tap');
+    if (response.payload != null) {
+      try {
+        final data = jsonDecode(response.payload!);
+        debugPrint('🔔 Payload: $data');
+      } catch (e) {
+        debugPrint('🔔 Error parsing payload: $e');
+      }
+    }
+    _navigateToNotifications();
+  }
+
+  static Future<void> showNotification(RemoteMessage message) async {
+    try {
+      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      
+      // Android notification details
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+          AndroidNotificationDetails(
+        'high_importance_channel',
+        'High Importance Notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+        showWhen: true,
+        enableVibration: true,
+        playSound: true,
+      );
+
+      // iOS notification details
+      const DarwinNotificationDetails iosPlatformChannelSpecifics =
+          DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      const NotificationDetails platformChannelSpecifics =
+          NotificationDetails(
+        android: androidPlatformChannelSpecifics,
+        iOS: iosPlatformChannelSpecifics,
+      );
+
+      await _notificationsPlugin.show(
+        id: id,
+        title: message.notification?.title ?? message.data['title'] ?? 'إشعار جديد',
+        body: message.notification?.body ?? message.data['body'] ?? '',
+        notificationDetails: platformChannelSpecifics,
+        payload: jsonEncode(message.data),
+      );
+      
+      debugPrint('🔔 Local notification shown with ID: $id');
+    } catch (e) {
+      debugPrint('❌ Error showing local notification: $e');
+    }
+  }
+}
+
+void _navigateToNotifications() {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (navigatorKey.currentState != null) {
+      navigatorKey.currentState!.push(
+        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+      );
+    }
+  });
+}
+
+/// =========================
+/// FCM BACKGROUND HANDLER
+/// =========================
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  debugPrint('🌙 [BG] Handling background message: ${message.messageId}');
+  
+  try {
+    await Firebase.initializeApp();
+    await LocalNotificationService.initialize();
+    
+    // Show local notification
+    await LocalNotificationService.showNotification(message);
+    
+    // Save to disk
+    final item = NotificationItem.fromFirebaseMessage(message);
+    await NotificationService.saveToLocalDisk(item.toJson());
+    
+    debugPrint('🌙 [BG] Notification saved: ${item.title}');
+  } catch (e) {
+    debugPrint('🌙 [BG] Error: $e');
+  }
+}
+
 /// =========================
 /// DATA MODEL
 /// =========================
-
 class NotificationItem {
   final String id;
   final String title;
@@ -38,7 +182,7 @@ class NotificationItem {
   bool isRead;
   final String type;
   bool isDeleted;
-  final String source; // Track source: 'fcm', 'mysql', 'local'
+  final String source;
 
   NotificationItem({
     required this.id,
@@ -145,7 +289,6 @@ class NotificationItem {
 /// =========================
 /// NOTIFICATION MANAGER
 /// =========================
-
 class NotificationManager extends ChangeNotifier {
   static NotificationManager? _instance;
   static NotificationManager get instance =>
@@ -157,8 +300,8 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
-  Set<String> _processedMessageIds = {}; // Track processed FCM message IDs
-  Set<String> _processedMySQLIds = {}; // Track processed MySQL IDs
+  Set<String> _processedMessageIds = {};
+  Set<String> _processedMySQLIds = {};
   DateTime _lastSyncTime = DateTime.now().subtract(const Duration(minutes: 5));
 
   List<NotificationItem> get notifications =>
@@ -171,29 +314,24 @@ class NotificationManager extends ChangeNotifier {
   static const String _processedMessageIdsKey = 'processed_fcm_ids';
   static const String _processedMySQLIdsKey = 'processed_mysql_ids';
 
-  /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Load deleted IDs
       final deletedIdsStr = prefs.getString(_deletedIdsKey);
       if (deletedIdsStr != null) {
         _deletedIds = Set<String>.from(jsonDecode(deletedIdsStr));
       }
 
-      // Load processed FCM IDs
       final processedFcmStr = prefs.getString(_processedMessageIdsKey);
       if (processedFcmStr != null) {
         _processedMessageIds = Set<String>.from(jsonDecode(processedFcmStr));
-        // Keep only last 500 to prevent memory issues
         if (_processedMessageIds.length > 500) {
           _processedMessageIds = _processedMessageIds.skip(300).toSet();
         }
       }
 
-      // Load processed MySQL IDs
       final processedMySqlStr = prefs.getString(_processedMySQLIdsKey);
       if (processedMySqlStr != null) {
         _processedMySQLIds = Set<String>.from(jsonDecode(processedMySqlStr));
@@ -202,14 +340,11 @@ class NotificationManager extends ChangeNotifier {
         }
       }
 
-      // Load notifications
       final jsonStr = prefs.getString(_storageKey);
-
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
 
-        // Mark notifications as deleted if in deletedIds
         for (var notification in _notifications) {
           if (_deletedIds.contains(notification.id)) {
             notification.isDeleted = true;
@@ -225,9 +360,7 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// SYNC FROM SERVER AND DISK - COMPLETELY FIXED to prevent duplicates
   Future<void> fetchFromMySQL() async {
-    // Prevent too frequent syncs
     if (DateTime.now().difference(_lastSyncTime).inSeconds < 30) {
       debugPrint('⏱️ [Manager] Skipping sync - too frequent');
       return;
@@ -261,12 +394,10 @@ class NotificationManager extends ChangeNotifier {
       int newItemsCount = 0;
 
       for (var serverItem in serverItems) {
-        // Skip if this ID is deleted locally
         if (_deletedIds.contains(serverItem.id)) {
           continue;
         }
 
-        // Skip if we've already processed this MySQL ID recently
         if (_processedMySQLIds.contains(serverItem.id)) {
           debugPrint(
               '⏭️ [Manager] Skipping already processed MySQL ID: ${serverItem.id}');
@@ -275,7 +406,6 @@ class NotificationManager extends ChangeNotifier {
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
-          // Update only if server item is newer and not deleted
           if (serverItem.timestamp.isAfter(localItem.timestamp) &&
               !localItem.isDeleted) {
             localMap[serverItem.id] = NotificationItem(
@@ -295,14 +425,12 @@ class NotificationManager extends ChangeNotifier {
                 '🔄 [Manager] Updated existing notification: ${serverItem.id}');
           }
         } else {
-          // Check if this is a duplicate of an FCM notification
           bool isDuplicate = _notifications.any((n) =>
               n.title == serverItem.title &&
               n.body == serverItem.body &&
               (n.timestamp.difference(serverItem.timestamp).inSeconds < 10));
 
           if (!isDuplicate) {
-            // New notification from server
             localMap[serverItem.id] = serverItem;
             _processedMySQLIds.add(serverItem.id);
             newItemsCount++;
@@ -317,12 +445,10 @@ class NotificationManager extends ChangeNotifier {
 
       _notifications = localMap.values.toList();
 
-      // Filter out deleted ones for sorting
       final activeNotifications =
           _notifications.where((n) => !n.isDeleted).toList();
       activeNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-      // Rebuild list with active first, then deleted
       final deletedNotifications =
           _notifications.where((n) => n.isDeleted).toList();
       _notifications = [...activeNotifications, ...deletedNotifications];
@@ -346,12 +472,10 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// ADD FIREBASE MESSAGE - COMPLETELY FIXED to prevent duplicates
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final messageId =
         message.messageId ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}';
 
-    // Check if we already processed this exact message ID
     if (_processedMessageIds.contains(messageId)) {
       debugPrint('⚠️ [Manager] Duplicate FCM message skipped (ID): $messageId');
       return;
@@ -359,7 +483,6 @@ class NotificationManager extends ChangeNotifier {
 
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    // Skip if this ID is deleted
     if (_deletedIds.contains(item.id)) {
       debugPrint('⚠️ [Manager] Skipping deleted notification: ${item.id}');
       _processedMessageIds.add(messageId);
@@ -367,7 +490,6 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
-    // Skip empty notifications
     if (item.title.isEmpty ||
         (item.title == 'إشعار جديد' && item.body.isEmpty)) {
       debugPrint('❌ [Manager] Skipping empty notification');
@@ -378,10 +500,8 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    // Check for duplicates based on content similarity (not just ID)
     bool isDuplicate = false;
 
-    // Check by exact ID first
     final existingById =
         _notifications.any((n) => n.id == item.id && !n.isDeleted);
     if (existingById) {
@@ -389,11 +509,9 @@ class NotificationManager extends ChangeNotifier {
       debugPrint('⚠️ [Manager] Duplicate by ID: ${item.id}');
     }
 
-    // Check by content similarity (for cases where ID might be different)
     if (!isDuplicate) {
       for (var existing in _notifications) {
         if (!existing.isDeleted) {
-          // Check if same title and body within 10 seconds
           if (existing.title == item.title &&
               existing.body == item.body &&
               existing.timestamp.difference(item.timestamp).inSeconds.abs() <
@@ -403,7 +521,6 @@ class NotificationManager extends ChangeNotifier {
             break;
           }
 
-          // Check if same ID pattern (FCM sometimes changes ID)
           if (existing.id
                   .contains(item.id.substring(0, min(20, item.id.length))) ||
               item.id.contains(
@@ -422,11 +539,9 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
-    // Add new notification
     _notifications.insert(0, item);
     _processedMessageIds.add(messageId);
-    _processedMySQLIds
-        .add(item.id); // Also add to MySQL set to prevent future duplicates
+    _processedMySQLIds.add(item.id);
 
     debugPrint('✅ [Manager] Added new notification: ${item.title}');
 
@@ -447,8 +562,6 @@ class NotificationManager extends ChangeNotifier {
       _updateUnreadCount();
       await _saveToDisk();
       notifyListeners();
-
-      // Optionally sync to server
       NotificationService.markAsRead(id);
     }
   }
@@ -468,14 +581,11 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// DELETE NOTIFICATION
   Future<void> deleteNotification(String id) async {
     final index = _notifications.indexWhere((n) => n.id == id);
     if (index != -1) {
-      // Mark as deleted
       _notifications[index].isDeleted = true;
       _deletedIds.add(id);
-
       _updateUnreadCount();
       await _saveToDisk();
       notifyListeners();
@@ -507,16 +617,13 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _sortAndCount() {
-    // Sort only non-deleted notifications
     final activeNotifications =
         _notifications.where((n) => !n.isDeleted).toList();
     activeNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
-    // Rebuild list with active first, then deleted
     final deletedNotifications =
         _notifications.where((n) => n.isDeleted).toList();
     _notifications = [...activeNotifications, ...deletedNotifications];
-
     _updateUnreadCount();
   }
 
@@ -530,12 +637,9 @@ class NotificationManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Save notifications
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
-
-      // Save deleted IDs
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
 
       debugPrint(
@@ -548,15 +652,10 @@ class NotificationManager extends ChangeNotifier {
   Future<void> _saveProcessedIds() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // Save processed FCM IDs
       await prefs.setString(
           _processedMessageIdsKey, jsonEncode(_processedMessageIds.toList()));
-
-      // Save processed MySQL IDs
       await prefs.setString(
           _processedMySQLIdsKey, jsonEncode(_processedMySQLIds.toList()));
-
       debugPrint(
           '💾 [Manager] Saved processed IDs. FCM: ${_processedMessageIds.length}, MySQL: ${_processedMySQLIds.length}');
     } catch (e) {
@@ -564,7 +663,6 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// Clear old processed IDs periodically
   void cleanOldProcessedIds() {
     if (_processedMessageIds.length > 500) {
       _processedMessageIds = _processedMessageIds.skip(300).toSet();
@@ -577,160 +675,89 @@ class NotificationManager extends ChangeNotifier {
 }
 
 /// =========================
-/// LOCAL NOTIFICATION SERVICE
+/// MAIN
 /// =========================
-class LocalNotificationService {
-  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-  static void initialize() {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-
-    _notificationsPlugin.initialize(
-      settings: initializationSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse details) {
-        debugPrint('🔔 Local Notification Tapped (Foreground)');
-        _navigateToNotifications();
-      },
-    );
-  }
-
-  static void showNotification(RemoteMessage message) async {
-    if (!Platform.isAndroid) return;
-
-    try {
-      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      const AndroidNotificationDetails androidPlatformChannelSpecifics =
-          AndroidNotificationDetails(
-        'high_importance_channel',
-        'High Importance Notifications',
-        importance: Importance.max,
-        priority: Priority.high,
-        showWhen: true,
-      );
-      const NotificationDetails platformChannelSpecifics =
-          NotificationDetails(android: androidPlatformChannelSpecifics);
-
-      await _notificationsPlugin.show(
-        id: id,
-        title: message.notification?.title ?? 'إشعار جديد',
-        body: message.notification?.body ?? '',
-        notificationDetails: platformChannelSpecifics,
-        payload: jsonEncode(message.data),
-      );
-    } catch (e) {
-      debugPrint('❌ Error showing local notification: $e');
-    }
-  }
-}
-
-void _navigateToNotifications() async {
-  await NotificationManager.instance.loadNotifications();
-
-  if (navigatorKey.currentState != null) {
-    navigatorKey.currentState!.push(
-      MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-    );
-  } else {
-    Future.delayed(const Duration(milliseconds: 500), () {
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-      );
-    });
-  }
-}
-
-/// =========================
-/// FCM BACKGROUND HANDLER - FIXED
-/// =========================
-
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
-  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-
-  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.title ?? '').isNotEmpty;
-  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.body ?? '').isNotEmpty;
-
-  if (!hasTitle && !hasBody) {
-    debugPrint('🌙 [BG] Skipping empty notification - no title or body');
-    return;
-  }
-
-  final item = NotificationItem.fromFirebaseMessage(message);
-
-  if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
-    debugPrint('🌙 [BG] Skipping notification with default/empty title');
-    return;
-  }
-
-  // Check if this notification was deleted before saving
-  final prefs = await SharedPreferences.getInstance();
-
-  // Check deleted IDs
-  final deletedIdsStr = prefs.getString('deleted_notification_ids');
-  if (deletedIdsStr != null) {
-    final deletedIds = Set<String>.from(jsonDecode(deletedIdsStr));
-    if (deletedIds.contains(item.id)) {
-      debugPrint('🌙 [BG] Skipping deleted notification: ${item.id}');
-      return;
-    }
-  }
-
-  // Check processed FCM IDs to avoid duplicates in background
-  final processedFcmStr = prefs.getString('processed_fcm_ids');
-  if (processedFcmStr != null) {
-    final processedIds = Set<String>.from(jsonDecode(processedFcmStr));
-    if (processedIds.contains(message.messageId)) {
-      debugPrint(
-          '🌙 [BG] Skipping already processed FCM message: ${message.messageId}');
-      return;
-    }
-  }
-
-  await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title}');
-}
-
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-/// =========================
-/// MAIN & NAVIGATION LOGIC
-/// =========================
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('ar_IQ', null);
 
   try {
+    // Initialize Firebase
     await Firebase.initializeApp();
+    debugPrint('🔥 Firebase initialized');
 
-    LocalNotificationService.initialize();
+    // Initialize local notifications
+    await LocalNotificationService.initialize();
+    debugPrint('🔔 Local notifications initialized');
+
+    // Set background message handler
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    debugPrint('🌙 Background handler set');
+
+    // Get FCM token
+    final messaging = FirebaseMessaging.instance;
+    final token = await messaging.getToken();
+    debugPrint('🔑 FCM Token: $token');
+
+    // Request permissions
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: true,
+    );
+    debugPrint('🔔 Permission status: ${settings.authorizationStatus}');
+
+    // Subscribe to topic
+    await messaging.subscribeToTopic('all_employees');
+    debugPrint('📡 Subscribed to all_employees topic');
+
+    // Set up foreground message handler
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('🌞 [FG] Foreground message received');
+      debugPrint('🌞 Title: ${message.notification?.title}');
+      debugPrint('🌞 Body: ${message.notification?.body}');
+      
+      // Show local notification
+      LocalNotificationService.showNotification(message);
+      
+      // Save to manager
+      NotificationManager.instance.addFirebaseMessage(message);
+    });
+
+    // Handle when app is opened from terminated state
+    final initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('🚀 App opened from terminated state');
+      await NotificationManager.instance.addFirebaseMessage(initialMessage);
+      Future.delayed(const Duration(seconds: 1), () {
+        _navigateToNotifications();
+      });
+    }
+
+    // Handle when app is opened from background
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('👆 App opened from background');
+      NotificationManager.instance.addFirebaseMessage(message);
+      _navigateToNotifications();
+    });
+
+    // Load notifications
     await NotificationManager.instance.loadNotifications();
 
-    final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission(alert: true, badge: true, sound: true);
-
-    await messaging.subscribeToTopic('all_employees');
-
+    // Request battery optimization permission for Android
     if (Platform.isAndroid) {
       await _requestIgnoreBatteryOptimizations();
     }
-
-    await _setupNotificationNavigation(messaging);
 
     // Clean old processed IDs periodically
     Timer.periodic(const Duration(hours: 1), (_) {
       NotificationManager.instance.cleanOldProcessedIds();
     });
-  } catch (e) {
+
+  } catch (e, stack) {
     debugPrint('❌ Init Error: $e');
+    debugPrint('❌ Stack: $stack');
   }
 
   runApp(const MyApp());
@@ -747,39 +774,9 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
-Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  try {
-    final initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
-      Future.delayed(const Duration(seconds: 2), () {
-        _navigateToNotifications();
-      });
-    }
-  } catch (e) {
-    debugPrint('Error getting initial message: $e');
-  }
-
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-    debugPrint('👆 [Click] App opened from Background via Notification');
-    await NotificationManager.instance.addFirebaseMessage(message);
-    _navigateToNotifications();
-  });
-
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('🌞 [FG] Notification received while app is open');
-    NotificationManager.instance.addFirebaseMessage(message);
-    if (message.notification != null) {
-      LocalNotificationService.showNotification(message);
-    }
-  });
-}
-
 /// =========================
 /// THEME & UI
 /// =========================
-
 final ThemeData appTheme = ThemeData(
   primarySwatch: Colors.teal,
   useMaterial3: true,
@@ -829,11 +826,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Lifecycle] App Resumed - Syncing notifications...');
-      NotificationManager.instance.loadNotifications().then((_) {
-        // Don't auto-sync on resume to prevent duplicates
-        // NotificationManager.instance.fetchFromMySQL();
-      });
+      debugPrint('🔄 [Lifecycle] App Resumed');
+      NotificationManager.instance.loadNotifications();
     }
   }
 
@@ -859,7 +853,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 // --------------------------------------------------------
 // UI COMPONENTS
 // --------------------------------------------------------
-
 class ModernCard extends StatelessWidget {
   final Widget child;
   final double? width;
@@ -1030,7 +1023,6 @@ class NotificationIcon extends StatelessWidget {
 // --------------------------------------------------------
 // SCREENS
 // --------------------------------------------------------
-
 class NotificationDetailScreen extends StatelessWidget {
   final NotificationItem notification;
 
@@ -1130,7 +1122,6 @@ class NotificationDetailScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 32),
-            // Show only the company name - NO data payload display
             Text(
               'الشركة العامة لتعبئة وخدمات الغاز',
               style: GoogleFonts.cairo(
@@ -1602,7 +1593,6 @@ class PrivacyPolicyScreen extends StatelessWidget {
   }
 }
 
-// Notifications Screen - FIXED
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({Key? key}) : super(key: key);
 
@@ -1621,7 +1611,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await NotificationManager.instance.loadNotifications();
     });
@@ -1646,9 +1635,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     setState(() {
       _isRefreshing = true;
     });
-
     await NotificationManager.instance.fetchFromMySQL();
-
     setState(() {
       _isRefreshing = false;
     });
@@ -1939,7 +1926,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             if (!notification.isRead) {
               await NotificationManager.instance.markAsRead(notification.id);
             }
-
             Navigator.push(
               context,
               MaterialPageRoute(
@@ -2298,7 +2284,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
-
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         _initializeWebView();
