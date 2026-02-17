@@ -27,7 +27,6 @@ import 'firebase_options.dart';
 
 // ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
 final Set<String> _handledNotificationIds = {};
-final Set<String> _processedMessageIds = {};
 
 /// =========================
 /// DATA MODEL
@@ -565,29 +564,9 @@ void _navigateToNotifications() {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  final messageId = message.messageId ??
-      message.data['id']?.toString() ??
-      'bg_${DateTime.now().millisecondsSinceEpoch}';
-
-  if (_processedMessageIds.contains(messageId)) {
-    debugPrint('🌙 [BG] Message $messageId already processed, skipping');
-    return;
-  }
-
-  _processedMessageIds.add(messageId);
-  debugPrint('🌙 [BG] Message Received: $messageId');
-
-  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.title ?? '').isNotEmpty;
-  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.body ?? '').isNotEmpty;
-
-  if (!hasTitle && !hasBody) {
-    debugPrint('🌙 [BG] Skipping empty notification');
-    return;
-  }
-
+  
+  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+  
   final item = NotificationItem.fromFirebaseMessage(message);
 
   if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
@@ -673,7 +652,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - مع التعديل المطلوب
+/// MAIN - الحل النهائي ✅
 /// =========================
 
 void main() async {
@@ -683,8 +662,6 @@ void main() async {
   try {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
-
-    NotificationService.clearTimestampCache();
 
     await FirebaseMessaging.instance
         .setForegroundNotificationPresentationOptions(
@@ -742,124 +719,30 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 }
 
 /// =========================
-/// ✅ الإعداد المعدل مع حماية مزدوجة لمنع التكرار في iOS
+/// ✅ الحل النهائي - القاعدة الذهبية
 /// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // معرف محلي لمنع المعالجة المزدوجة السريعة في iOS
-  String? lastProcessedId;
-  DateTime? lastProcessedTime;
-  final Set<String> _processedClickIds = {}; // تتبع النقرات المعالجة
-
-  bool isDuplicate(String? messageId) {
-    if (messageId == null) return false;
-    final now = DateTime.now();
-
-    // التحقق من التكرار خلال 5 ثوانٍ
-    if (lastProcessedId == messageId &&
-        lastProcessedTime != null &&
-        now.difference(lastProcessedTime!).inSeconds < 5) {
-      debugPrint(
-          '🛡️ [iOS Guard] Duplicate detected within 5 seconds: $messageId');
-      return true;
-    }
-
-    // التحقق من التكرار في مجموعة النقرات المعالجة
-    if (_processedClickIds.contains(messageId)) {
-      debugPrint(
-          '🛡️ [iOS Guard] Message already processed in clicks: $messageId');
-      return true;
-    }
-
-    lastProcessedId = messageId;
-    lastProcessedTime = now;
-    _processedClickIds.add(messageId);
-
-    // تنظيف المجموعة بعد 10 ثوانٍ لمنع تراكم الذاكرة
-    Future.delayed(const Duration(seconds: 10), () {
-      _processedClickIds.remove(messageId);
-    });
-
-    return false;
-  }
-
-  // 1. معالجة الإشعار عند فتح التطبيق من الصفر (Terminated)
-  try {
-    final initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      final mId = initialMessage.messageId ??
-          initialMessage.data['id']?.toString() ??
-          'init_${DateTime.now().millisecondsSinceEpoch}';
-
-      if (!isDuplicate(mId)) {
-        debugPrint('🍎 [iOS] Opening from Terminated - ID: $mId');
-
-        // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (!_handledNotificationIds.contains(mId)) {
-            _handledNotificationIds.add(mId);
-            _navigateToNotifications();
-            debugPrint('🍎 [iOS] Navigated from Terminated state');
-          }
-        });
-      }
-    }
-  } catch (e) {
-    debugPrint('❌ [iOS] Error in initial message: $e');
-  }
-
-  // 2. معالجة النقر على الإشعار (Background / Suspended)
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    final mId = message.messageId ??
-        message.data['id']?.toString() ??
-        'click_${DateTime.now().millisecondsSinceEpoch}';
-
-    if (isDuplicate(mId)) {
-      debugPrint('🚫 [iOS] Duplicate Tap Blocked for ID: $mId');
-      return;
-    }
-
-    debugPrint('🍎 [iOS] Notification Tapped - Navigating Only (ID: $mId)');
-
-    // ✅ فقط ننتقل إلى صفحة الإشعارات دون إضافة الإشعار
-    // المزامنة التلقائية عند فتح التطبيق ستقوم بجلب الإشعار من MySQL
-
-    if (!_handledNotificationIds.contains(mId)) {
-      _handledNotificationIds.add(mId);
-
-      // تأخير قصير للسماح بتهيئة التطبيق
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _navigateToNotifications();
-        debugPrint('🍎 [iOS] Navigated from tapped notification');
-      });
-    }
-  });
-
-  // 3. معالجة وصول الإشعار والتطبيق مفتوح (Foreground)
+  
+  // 1️⃣ عند وصول الإشعار والتطبيق مفتوح (Foreground) - نحفظ فقط
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    final mId = message.messageId ??
-        message.data['id']?.toString() ??
-        'fg_${DateTime.now().millisecondsSinceEpoch}';
-
-    // ✅ في المقدمة، نضيف الإشعار فقط (لا ننتقل للصفحة)
-    if (mId.isNotEmpty && !_handledNotificationIds.contains(mId)) {
-      _handledNotificationIds.add(mId);
-      debugPrint('🍎 [iOS] Foreground Message Received - Adding: $mId');
-
-      // إضافة الإشعار إلى القائمة المحلية
-      NotificationManager.instance.addFirebaseMessage(message);
-
-      // عرض الإشعار المحلي إذا كان الجهاز iOS
-      if (Platform.isIOS && message.notification != null) {
-        // يمكن إضافة إشعار محلي لنظام iOS هنا إذا لزم الأمر
-        debugPrint('🍎 [iOS] Showing local notification');
-      }
-    } else {
-      debugPrint('🍎 [iOS] Foreground message already handled: $mId');
-    }
+    debugPrint('📱 [Foreground] Saving notification...');
+    NotificationManager.instance.addFirebaseMessage(message);
   });
 
-  debugPrint(
-      '✅ [iOS] Notification navigation setup completed with duplicate protection');
+  // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    debugPrint('👆 [Background Click] Navigating only...');
+    _navigateToNotifications();
+  });
+
+  // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
+  final initialMessage = await messaging.getInitialMessage();
+  if (initialMessage != null) {
+    debugPrint('🚀 [Terminated Launch] Navigating only...');
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _navigateToNotifications();
+    });
+  }
 }
 
 /// =========================
