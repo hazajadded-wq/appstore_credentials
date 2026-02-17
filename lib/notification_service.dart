@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,8 +8,11 @@ class NotificationService {
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
   static const String storageKey = 'stored_notifications_final';
 
-  // Lock to prevent concurrent writes
   static bool _isWriting = false;
+  static final Set<String> _processedIds = {};
+
+  // تتبع الإشعارات المحفوظة في الجلسة الحالية
+  static final Set<String> _savedInSession = {};
 
   // =========================================================
   // Get All Notifications From MySQL
@@ -38,69 +40,121 @@ class NotificationService {
   }
 
   // =========================================================
-  // Save To Local Disk - Prevents Duplicates
+  // Save To Local Disk - ✅ الحفظ فقط عند الاستقبال وليس عند الضغط
   // =========================================================
-  static Future<void> saveToLocalDisk(
-      Map<String, dynamic> newNotificationJson) async {
-    // 1. Extract ID
-    final String? incomingId = newNotificationJson['id']?.toString() ??
-        newNotificationJson['message_id']?.toString() ??
-        newNotificationJson['data']?['id']?.toString();
-
-    // 2. Validate
-    final title = newNotificationJson['title']?.toString() ?? '';
-    final body = newNotificationJson['body']?.toString() ?? '';
-
-    if ((incomingId == null || incomingId.isEmpty) ||
-        (title.isEmpty && body.isEmpty)) {
+  static Future<void> saveToLocalDisk(Map<String, dynamic> newNotificationJson,
+      {bool fromClick = false}) async {
+    // ❌ لا نحفظ أبداً إذا كان من الضغط
+    if (fromClick) {
+      debugPrint('🚫 Skipping save from click event');
       return;
     }
 
-    // 3. Lock
-    int retry = 0;
+    final title = newNotificationJson['title']?.toString() ?? '';
+    final body = newNotificationJson['body']?.toString() ?? '';
+
+    if (title.isEmpty && body.isEmpty) {
+      debugPrint('⚠️ Empty notification skipped');
+      return;
+    }
+
+    // ✅ نستخدم message_id دائماً كمُعرّف موحّد
+    final String? incomingId = newNotificationJson['message_id']?.toString() ??
+        newNotificationJson['firebase_message_id']?.toString() ??
+        newNotificationJson['id']?.toString();
+
+    if (incomingId == null || incomingId.isEmpty) {
+      debugPrint('🚫 No valid ID found - skipping save');
+      return;
+    }
+
+    final String newId = incomingId;
+
+    // ✅ منع التكرار في نفس الجلسة
+    if (_processedIds.contains(newId)) {
+      debugPrint('🚫 Already processed in session: $newId');
+      return;
+    }
+
+    if (_savedInSession.contains(newId)) {
+      debugPrint('🚫 Already saved in session: $newId');
+      return;
+    }
+
+    // ✅ انتظار القفل
     while (_isWriting) {
       await Future.delayed(const Duration(milliseconds: 50));
-      retry++;
-      if (retry > 40) return;
     }
 
     _isWriting = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.reload(); // Critical for BG sync
-
       final jsonStr = prefs.getString(storageKey);
-      List<dynamic> currentList = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // 4. Strict Duplicate Check
-      bool alreadyExists =
-          currentList.any((item) => item['id']?.toString() == incomingId);
+      List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
+
+      // 🔥 منع التكرار نهائياً في التخزين
+      bool alreadyExists = list.any((item) {
+        final id = item['message_id']?.toString() ??
+            item['firebase_message_id']?.toString() ??
+            item['id']?.toString();
+        return id == newId;
+      });
 
       if (alreadyExists) {
-        debugPrint('🚫 [Service] ID $incomingId exists. Skipping.');
+        debugPrint('🚫 Duplicate detected in storage: $newId');
+        _processedIds.add(newId);
+        _savedInSession.add(newId);
         return;
       }
 
-      // 5. Prepare & Save
+      // ✅ تجهيز الإشعار للحفظ
       final Map<String, dynamic> finalNotification =
-          Map.from(newNotificationJson);
-      finalNotification['id'] = incomingId;
+          Map<String, dynamic>.from(newNotificationJson);
 
-      if (!finalNotification.containsKey('timestamp')) {
+      // توحيد المعرف داخل JSON
+      finalNotification['id'] = newId;
+      if (!(finalNotification.containsKey('message_id') ||
+          finalNotification.containsKey('firebase_message_id'))) {
+        finalNotification['message_id'] = newId;
+      }
+
+      // توحيد الـ timestamp إلى milliseconds
+      final rawTs = finalNotification['timestamp'];
+      if (rawTs == null) {
+        finalNotification['timestamp'] = DateTime.now().millisecondsSinceEpoch;
+      } else if (rawTs is String) {
+        try {
+          finalNotification['timestamp'] =
+              DateTime.parse(rawTs).millisecondsSinceEpoch;
+        } catch (_) {
+          finalNotification['timestamp'] =
+              DateTime.now().millisecondsSinceEpoch;
+        }
+      } else if (rawTs is! int) {
         finalNotification['timestamp'] = DateTime.now().millisecondsSinceEpoch;
       }
 
-      currentList.insert(0, finalNotification);
+      // إدراج في البداية (الأحدث أولاً)
+      list.insert(0, finalNotification);
 
-      if (currentList.length > 200) {
-        currentList = currentList.sublist(0, 200);
+      // الحد الأقصى 200 إشعار
+      if (list.length > 200) {
+        list = list.sublist(0, 200);
       }
 
-      await prefs.setString(storageKey, jsonEncode(currentList));
-      debugPrint('💾 [Service] Saved: $incomingId');
+      // حفظ في SharedPreferences
+      await prefs.setString(storageKey, jsonEncode(list));
+
+      // تحديث التتبع
+      _processedIds.add(newId);
+      _savedInSession.add(newId);
+
+      debugPrint('💾 Saved successfully: $newId');
+      debugPrint('📊 Total notifications: ${list.length}');
     } catch (e) {
-      debugPrint('❌ [Service] Save Failed: $e');
+      debugPrint('❌ Save Failed: $e');
     } finally {
       _isWriting = false;
     }
@@ -110,28 +164,31 @@ class NotificationService {
   // Get Local Notifications
   // =========================================================
   static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
-      final jsonStr = prefs.getString(storageKey);
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(storageKey);
 
-      if (jsonStr == null) return [];
+    if (jsonStr == null) return [];
+
+    try {
       return List<Map<String, dynamic>>.from(jsonDecode(jsonStr));
     } catch (e) {
+      debugPrint('❌ Error parsing local notifications: $e');
       return [];
     }
   }
 
   // =========================================================
-  // Delete Notification
+  // Delete Notification by ID
   // =========================================================
   static Future<bool> deleteNotification(String id) async {
-    while (_isWriting) await Future.delayed(const Duration(milliseconds: 50));
+    while (_isWriting) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
     _isWriting = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
       final jsonStr = prefs.getString(storageKey);
 
       if (jsonStr == null) return false;
@@ -139,14 +196,22 @@ class NotificationService {
       List<dynamic> list = jsonDecode(jsonStr);
       int initialLength = list.length;
 
-      list.removeWhere((item) => item['id']?.toString() == id);
+      list.removeWhere((item) {
+        final key = item['message_id']?.toString() ??
+            item['firebase_message_id']?.toString() ??
+            item['id']?.toString();
+        return key == id;
+      });
 
       if (list.length < initialLength) {
         await prefs.setString(storageKey, jsonEncode(list));
+        debugPrint('🗑️ Deleted notification: $id');
         return true;
       }
+
       return false;
     } catch (e) {
+      debugPrint('❌ Delete Failed: $e');
       return false;
     } finally {
       _isWriting = false;
@@ -154,18 +219,37 @@ class NotificationService {
   }
 
   // =========================================================
-  // Clear All
+  // Clear All Notifications
   // =========================================================
   static Future<void> clearAllNotifications() async {
-    while (_isWriting) await Future.delayed(const Duration(milliseconds: 50));
+    while (_isWriting) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
     _isWriting = true;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(storageKey);
+      debugPrint('🗑️ All notifications cleared');
+    } catch (e) {
+      debugPrint('❌ Clear Failed: $e');
     } finally {
       _isWriting = false;
     }
   }
 
+  // =========================================================
+  // Clear Session Cache
+  // =========================================================
+  static void clearSessionCache() {
+    _processedIds.clear();
+    _savedInSession.clear();
+    debugPrint('🧹 Session cache cleared');
+  }
+
+  // =========================================================
+  // Get Writing Status
+  // =========================================================
   static bool get isWriting => _isWriting;
 }
