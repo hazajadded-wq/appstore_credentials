@@ -25,17 +25,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'notification_service.dart';
 import 'firebase_options.dart';
 
-/// =========================
-/// FIREBASE BACKGROUND HANDLER (UPDATED)
-/// =========================
-bool _isHandlingNotificationTap = false;
-
-@pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  if (message.data.isNotEmpty) {
-    await NotificationService.saveToLocalDisk(message.data);
-  }
-}
+// ======== NEW: Deduplication tracking for session =============
+final Set<String> _handledNotificationIds = {};
 
 /// =========================
 /// DATA MODEL
@@ -328,6 +319,7 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
+  // UPDATED: addFirebaseMessage with content-based deduplication
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     int waitCount = 0;
     while (_isSyncing && waitCount < 50) {
@@ -350,31 +342,18 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existing = _notifications.firstWhere(
-      (n) => n.id == item.id,
-      orElse: () => NotificationItem(
-        id: '',
-        title: '',
-        body: '',
-        timestamp: DateTime.fromMillisecondsSinceEpoch(0).toUtc(),
-        data: {},
-      ),
-    );
+    // 💡 Robust deduplication: by id, else by (title, body, timestamp within 5s)
+    final alreadyExists = _notifications.any((n) =>
+        n.id == item.id ||
+        (n.title == item.title &&
+            n.body == item.body &&
+            n.timestamp.difference(item.timestamp).abs().inSeconds < 5));
 
-    if (existing.id.isNotEmpty) {
-      final diff = item.timestamp.difference(existing.timestamp).abs();
-      if (diff.inSeconds < 1) {
-        debugPrint('❌ [Manager] Duplicate detected (same timestamp), skipping');
-        return;
-      }
-
-      if (item.timestamp.isBefore(existing.timestamp)) {
-        debugPrint('❌ [Manager] New notification is older, keeping existing');
-        return;
-      }
+    if (alreadyExists) {
+      debugPrint('❌ [Manager] Duplicate notification, skipping');
+      return;
     }
 
-    _notifications.removeWhere((n) => n.id == item.id);
     _notifications.insert(0, item);
     debugPrint(
         '✅ [Manager] Added notification: ${item.title} (ID: ${item.id})');
@@ -406,31 +385,18 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existing = _notifications.firstWhere(
-      (n) => n.id == item.id,
-      orElse: () => NotificationItem(
-        id: '',
-        title: '',
-        body: '',
-        timestamp: DateTime.fromMillisecondsSinceEpoch(0).toUtc(),
-        data: {},
-      ),
-    );
+    // Apply same deduplication logic for native notifications
+    final alreadyExists = _notifications.any((n) =>
+        n.id == item.id ||
+        (n.title == item.title &&
+            n.body == item.body &&
+            n.timestamp.difference(item.timestamp).abs().inSeconds < 5));
 
-    if (existing.id.isNotEmpty) {
-      final diff = item.timestamp.difference(existing.timestamp).abs();
-      if (diff.inSeconds < 1) {
-        debugPrint('❌ [Manager] Duplicate native notification, skipping');
-        return;
-      }
-      if (item.timestamp.isBefore(existing.timestamp)) {
-        debugPrint(
-            '❌ [Manager] New native notification is older, keeping existing');
-        return;
-      }
+    if (alreadyExists) {
+      debugPrint('❌ [Manager] Duplicate native notification, skipping');
+      return;
     }
 
-    _notifications.removeWhere((n) => n.id == item.id);
     _notifications.insert(0, item);
     debugPrint(
         '✅ [Manager] Added native notification: ${item.title} (ID: ${item.id})');
@@ -629,6 +595,69 @@ void _navigateToNotifications() {
 }
 
 /// =========================
+/// FCM BACKGROUND HANDLER - WITH DUPLICATE FILTERING
+/// =========================
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  debugPrint('🌙 [BG] Message Received: ${message.messageId}');
+
+  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.title ?? '').isNotEmpty;
+  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
+      (message.notification?.body ?? '').isNotEmpty;
+
+  if (!hasTitle && !hasBody) {
+    debugPrint('🌙 [BG] Skipping empty notification');
+    return;
+  }
+
+  final item = NotificationItem.fromFirebaseMessage(message);
+
+  if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    debugPrint('🌙 [BG] Skipping notification with default/empty title');
+    return;
+  }
+
+  // Check for duplicates in SharedPreferences
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(NotificationService.storageKey);
+    if (jsonStr != null) {
+      final list = jsonDecode(jsonStr) as List;
+      for (var existing in list) {
+        final existingId = existing['id']?.toString();
+        final existingTitle = existing['title']?.toString() ?? '';
+        final existingBody = existing['body']?.toString() ?? '';
+
+        if (existingId == item.id) {
+          debugPrint('🌙 [BG] Duplicate ID found, skipping');
+          return;
+        }
+
+        if (existingTitle == item.title && existingBody == item.body) {
+          final DateTime existingTime =
+              DateTime.tryParse(existing['timestamp'] ?? '') ??
+                  DateTime.now().toUtc();
+          final timeDiff = item.timestamp.difference(existingTime).abs();
+          if (timeDiff.inSeconds < 10) {
+            debugPrint('🌙 [BG] Content duplicate found, skipping');
+            return;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    debugPrint('🌙 [BG] Error checking duplicates: $e');
+  }
+
+  await Future.delayed(const Duration(milliseconds: 500));
+  await NotificationService.saveToLocalDisk(item.toJson());
+  debugPrint('🌙 [BG] Notification Saved: ${item.title} (ID: ${item.id})');
+}
+
+/// =========================
 /// METHOD CHANNEL FOR iOS NOTIFICATIONS
 /// =========================
 
@@ -702,15 +731,11 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - UPDATED with Firebase changes
+/// MAIN - FIXED
 /// =========================
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Set up Firebase background message handler
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
   await initializeDateFormatting('ar_IQ', null);
 
   try {
@@ -729,6 +754,7 @@ void main() async {
     LocalNotificationService.initialize();
 
     NotificationMethodChannel.setupListener();
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
     await NotificationManager.instance.loadNotifications();
 
@@ -775,16 +801,25 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
+// =======================================
+// Fix: Only handle a notification id ONCE per launch/session
+// =======================================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
   try {
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      Future.delayed(const Duration(milliseconds: 500), () async {
-        // Don't save here - it's already saved by background handler
-        // Just navigate
+      String notifId = initialMessage.data['id']?.toString() ??
+          initialMessage.messageId ??
+          DateTime.now().millisecondsSinceEpoch.toString();
+
+      if (!_handledNotificationIds.contains(notifId)) {
+        _handledNotificationIds.add(notifId);
+        await NotificationManager.instance.addFirebaseMessage(initialMessage);
         _navigateToNotifications();
-      });
+      } else {
+        debugPrint('❎ [Launch] Notification already handled, skipping');
+      }
     }
   } catch (e) {
     debugPrint('Error getting initial message: $e');
@@ -792,9 +827,17 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
     debugPrint('👆 [Click] App opened from Background via Notification');
-    // Don't save here - it's already saved by background handler
-    // Just navigate
-    _navigateToNotifications();
+    String notifId = message.data['id']?.toString() ??
+        message.messageId ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    if (!_handledNotificationIds.contains(notifId)) {
+      _handledNotificationIds.add(notifId);
+      await NotificationManager.instance.addFirebaseMessage(message);
+      _navigateToNotifications();
+    } else {
+      debugPrint('❎ [BG] Notification already handled, skipping');
+    }
   });
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
@@ -803,9 +846,18 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
     debugPrint('🌞 [FG] Title: ${message.notification?.title}');
     debugPrint('🌞 [FG] Body: ${message.notification?.body}');
 
-    Future.delayed(const Duration(milliseconds: 300), () {
-      NotificationManager.instance.addFirebaseMessage(message);
-    });
+    String notifId = message.data['id']?.toString() ??
+        message.messageId ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    if (!_handledNotificationIds.contains(notifId)) {
+      _handledNotificationIds.add(notifId);
+      Future.delayed(const Duration(milliseconds: 300), () {
+        NotificationManager.instance.addFirebaseMessage(message);
+      });
+    } else {
+      debugPrint('❎ [FG] Notification already handled, skipping');
+    }
 
     if (Platform.isAndroid && message.notification != null) {
       LocalNotificationService.showNotification(message);
@@ -855,7 +907,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _setupFirebase(); // Added this line
   }
 
   @override
@@ -863,55 +914,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     NotificationManager.instance.dispose();
     super.dispose();
-  }
-
-  // ✅ NEW: Complete Firebase setup function
-  void _setupFirebase() async {
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
-
-    await messaging.requestPermission();
-
-    // 🔹 When notification arrives while app is open
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      if (message.data.isNotEmpty) {
-        await NotificationService.saveToLocalDisk(message.data);
-      }
-    });
-
-    // 🔹 When notification is tapped (app in background)
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-      _handleNotificationTap(message);
-    });
-
-    // 🔹 When app is opened from a terminated state via notification
-    RemoteMessage? initialMessage =
-        await FirebaseMessaging.instance.getInitialMessage();
-
-    if (initialMessage != null) {
-      _handleNotificationTap(initialMessage);
-    }
-  }
-
-  // ✅ NEW: Prevent duplicate handling
-  void _handleNotificationTap(RemoteMessage message) async {
-    if (_isHandlingNotificationTap) return;
-
-    _isHandlingNotificationTap = true;
-
-    try {
-      // ❌ Don't save here - already saved by background handler
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const NotificationsScreen(),
-        ),
-      );
-
-      await Future.delayed(const Duration(seconds: 1));
-    } finally {
-      _isHandlingNotificationTap = false;
-    }
   }
 
   @override
