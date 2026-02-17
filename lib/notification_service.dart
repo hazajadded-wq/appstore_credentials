@@ -16,12 +16,14 @@ class NotificationService {
   static final Map<String, int> _lastSavedTimestamps =
       {}; // Track last save time per ID
 
+  // ✅ NEW: Track processed message IDs to prevent duplicates across sessions
+  static final Set<String> _processedMessageIds = {};
+
   // =========================================================
   // Get all notifications from MySQL
   // =========================================================
-  static Future<List<Map<String, dynamic>>> getAllNotifications({
-    int limit = 100,
-  }) async {
+  static Future<List<Map<String, dynamic>>> getAllNotifications(
+      {int limit = 100}) async {
     final uri = Uri.parse('$apiEndpoint?action=get_all&limit=$limit');
 
     try {
@@ -48,6 +50,17 @@ class NotificationService {
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
+    // ✅ NEW: Check if this message was already processed
+    final String messageId = newNotificationJson['id']?.toString() ??
+        newNotificationJson['message_id']?.toString() ??
+        '${newNotificationJson['title']}_${newNotificationJson['body']}_${newNotificationJson['timestamp']}';
+
+    if (_processedMessageIds.contains(messageId)) {
+      debugPrint(
+          '⚠️ [BG-Service] Message $messageId already processed in this session, skipping');
+      return;
+    }
+
     // VALIDATION: Skip empty notifications
     final title = newNotificationJson['title']?.toString() ?? '';
     final body = newNotificationJson['body']?.toString() ?? '';
@@ -123,6 +136,28 @@ class NotificationService {
         return false;
       });
 
+      // ✅ NEW: Also check for content-based duplicates (same title+body within last hour)
+      final oneHourAgo =
+          DateTime.now().toUtc().subtract(const Duration(hours: 1));
+      list.removeWhere((item) {
+        final itemTitle = item['title']?.toString() ?? '';
+        final itemBody = item['body']?.toString() ?? '';
+        DateTime itemTime;
+        try {
+          itemTime = DateTime.parse(item['timestamp'] ?? '').toUtc();
+        } catch (e) {
+          itemTime = DateTime.now().toUtc();
+        }
+
+        if (itemTitle == title &&
+            itemBody == body &&
+            itemTime.isAfter(oneHourAgo)) {
+          removedCount++;
+          return true;
+        }
+        return false;
+      });
+
       // Prepare final notification with proper timestamp
       final Map<String, dynamic> finalNotification =
           Map.from(newNotificationJson);
@@ -170,6 +205,9 @@ class NotificationService {
       // Update last saved timestamp
       _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
 
+      // ✅ NEW: Mark this message as processed
+      _processedMessageIds.add(messageId);
+
       debugPrint(
           '💾 [BG-Service] Saved notification $newId (removed $removedCount duplicates)');
     } catch (e) {
@@ -194,83 +232,6 @@ class NotificationService {
   }
 
   // =========================================================
-  // Save notification to server
-  // =========================================================
-  static Future<bool> saveNotificationToServer(
-    Map<String, dynamic> notification,
-  ) async {
-    try {
-      final uri = Uri.parse('$apiEndpoint?action=save_notification');
-
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(notification),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['success'] == true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // =========================================================
-  // Mark as read on server
-  // =========================================================
-  static Future<bool> markAsRead(String id) async {
-    try {
-      final uri = Uri.parse('$apiEndpoint?action=mark_as_read');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['success'] == true;
-      }
-      return false;
-    } catch (e) {
-      debugPrint('❌ [NotificationService] markAsRead Error: $e');
-      return false;
-    }
-  }
-
-  // =========================================================
-  // Delete notification on server
-  // =========================================================
-  static Future<bool> deleteNotification(String id) async {
-    try {
-      final uri = Uri.parse('$apiEndpoint?action=delete_notification');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['success'] == true;
-      }
-      return false;
-    } catch (e) {
-      debugPrint('❌ [NotificationService] deleteNotification Error: $e');
-      return false;
-    }
-  }
-
-  // =========================================================
   // Utility methods
   // =========================================================
   static bool get isWriting => _isWriting;
@@ -279,5 +240,11 @@ class NotificationService {
   // Clear timestamp cache (useful for testing)
   static void clearTimestampCache() {
     _lastSavedTimestamps.clear();
+    _processedMessageIds.clear(); // ✅ NEW: Clear processed messages
+  }
+
+  // ✅ NEW: Check if message was already processed
+  static bool isMessageProcessed(String messageId) {
+    return _processedMessageIds.contains(messageId);
   }
 }
