@@ -16,9 +16,6 @@ class NotificationService {
   static final Map<String, int> _lastSavedTimestamps =
       {}; // Track last save time per ID
 
-  // ✅ NEW: Track processed message IDs to prevent duplicates across sessions
-  static final Set<String> _processedMessageIds = {};
-
   // =========================================================
   // Get all notifications from MySQL
   // =========================================================
@@ -50,17 +47,6 @@ class NotificationService {
   // =========================================================
   static Future<void> saveToLocalDisk(
       Map<String, dynamic> newNotificationJson) async {
-    // ✅ NEW: Check if this message was already processed
-    final String messageId = newNotificationJson['id']?.toString() ??
-        newNotificationJson['message_id']?.toString() ??
-        '${newNotificationJson['title']}_${newNotificationJson['body']}_${newNotificationJson['timestamp']}';
-
-    if (_processedMessageIds.contains(messageId)) {
-      debugPrint(
-          '⚠️ [BG-Service] Message $messageId already processed in this session, skipping');
-      return;
-    }
-
     // VALIDATION: Skip empty notifications
     final title = newNotificationJson['title']?.toString() ?? '';
     final body = newNotificationJson['body']?.toString() ?? '';
@@ -136,28 +122,6 @@ class NotificationService {
         return false;
       });
 
-      // ✅ NEW: Also check for content-based duplicates (same title+body within last hour)
-      final oneHourAgo =
-          DateTime.now().toUtc().subtract(const Duration(hours: 1));
-      list.removeWhere((item) {
-        final itemTitle = item['title']?.toString() ?? '';
-        final itemBody = item['body']?.toString() ?? '';
-        DateTime itemTime;
-        try {
-          itemTime = DateTime.parse(item['timestamp'] ?? '').toUtc();
-        } catch (e) {
-          itemTime = DateTime.now().toUtc();
-        }
-
-        if (itemTitle == title &&
-            itemBody == body &&
-            itemTime.isAfter(oneHourAgo)) {
-          removedCount++;
-          return true;
-        }
-        return false;
-      });
-
       // Prepare final notification with proper timestamp
       final Map<String, dynamic> finalNotification =
           Map.from(newNotificationJson);
@@ -205,9 +169,6 @@ class NotificationService {
       // Update last saved timestamp
       _lastSavedTimestamps[newId] = newTimestamp.millisecondsSinceEpoch;
 
-      // ✅ NEW: Mark this message as processed
-      _processedMessageIds.add(messageId);
-
       debugPrint(
           '💾 [BG-Service] Saved notification $newId (removed $removedCount duplicates)');
     } catch (e) {
@@ -240,11 +201,5 @@ class NotificationService {
   // Clear timestamp cache (useful for testing)
   static void clearTimestampCache() {
     _lastSavedTimestamps.clear();
-    _processedMessageIds.clear(); // ✅ NEW: Clear processed messages
-  }
-
-  // ✅ NEW: Check if message was already processed
-  static bool isMessageProcessed(String messageId) {
-    return _processedMessageIds.contains(messageId);
   }
 }
