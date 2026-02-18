@@ -572,16 +572,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
 
-  final item = NotificationItem.fromFirebaseMessage(message);
-
-  if (item.title.isEmpty || (item.title == 'إشعار جديد' && item.body.isEmpty)) {
-    debugPrint('🌙 [BG] Skipping notification with default/empty title');
-    return;
-  }
-
-  await Future.delayed(const Duration(milliseconds: 500));
-  await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved: ${item.id}');
+  // لا تقم بحفظ الإشعار عند كونه في الخلفية أو عند الضغط عليه
+  // الاعتماد يكون على المزامنة من MySQL عند فتح التطبيق
+  // فقط نسجل وصوله للديباغ
+  return;
 }
 
 /// =========================
@@ -735,14 +729,14 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
 
   // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('👆 [Background Click] Navigating only...');
+    debugPrint('👆 [Background Click] Navigating only (no saving)...');
     _navigateToNotifications();
   });
 
   // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
-    debugPrint('🚀 [Terminated Launch] Navigating only...');
+    debugPrint('🚀 [Terminated Launch] Navigating only (no saving)...');
     Future.delayed(const Duration(milliseconds: 500), () {
       _navigateToNotifications();
     });
@@ -2851,7 +2845,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     const Icon(Icons.error_outline,
                         size: 60, color: Colors.red),
                     const SizedBox(height: 15),
-                    Text('خطأ في ال��تصال',
+                    Text('خطأ في الاتصال',
                         style: GoogleFonts.cairo(fontSize: 18)),
                     Text(errorMessage,
                         style: GoogleFonts.cairo(fontSize: 12),
