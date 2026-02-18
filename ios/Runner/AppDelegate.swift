@@ -45,7 +45,45 @@ import UserNotifications
     // 4. Set Firebase Messaging Delegate
     Messaging.messaging().delegate = self
     
+    // 5. CRITICAL FIX: Listen for app termination to clean up WebView before Flutter engine shuts down
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppWillTerminate),
+      name: UIApplication.willTerminateNotification,
+      object: nil
+    )
+    
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+  
+  // CRITICAL FIX: Clean up WebView platform views before Flutter engine teardown
+  @objc private func handleAppWillTerminate() {
+    // Remove all platform views (WKWebView) from the view hierarchy
+    // before the Flutter engine starts its teardown sequence.
+    // This prevents the webview_flutter_wkwebview finalizer from
+    // trying to send messages through an already-destroyed engine.
+    if let controller = window?.rootViewController as? FlutterViewController {
+      // Notify Flutter side to dispose WebView
+      let channel = FlutterMethodChannel(
+        name: "webview_cleanup",
+        binaryMessenger: controller.binaryMessenger
+      )
+      channel.invokeMethod("dispose", arguments: nil)
+      
+      // Also forcefully remove WKWebView instances from view hierarchy
+      removeWKWebViews(from: controller.view)
+    }
+  }
+  
+  // Recursively find and remove WKWebView instances from view hierarchy
+  private func removeWKWebViews(from view: UIView) {
+    for subview in view.subviews {
+      if NSStringFromClass(type(of: subview)).contains("WKWebView") {
+        subview.removeFromSuperview()
+      } else {
+        removeWKWebViews(from: subview)
+      }
+    }
   }
 
   // Helper function for WebView screenshots
@@ -78,7 +116,6 @@ import UserNotifications
   }
   
   // MARK: - UNUserNotificationCenterDelegate Methods
-  // Note: We don't declare conformance again as FlutterAppDelegate already conforms to it
   
   // CRITICAL: Called when notification arrives while app is in FOREGROUND
   override func userNotificationCenter(
