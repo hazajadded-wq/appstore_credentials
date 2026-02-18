@@ -2880,16 +2880,16 @@ class _WebViewScreenState extends State<WebViewScreen>
                         builder: (context) => const NotificationsScreen()));
               }),
             // CRITICAL FIX FOR LOGIN: Add reload button
-            if (isOnLoginPage)
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                tooltip: 'إعادة تحميل',
-                onPressed: () {
-                  if (controller != null && !_isDisposed) {
-                    controller!.reload();
-                  }
-                },
-              ),
+            //  if (isOnLoginPage)
+            //  IconButton(
+            //   icon: const Icon(Icons.refresh),
+            // tooltip: 'إعادة تحميل',
+            //  onPressed: () {
+            //    if (controller != null && !_isDisposed) {
+            //   controller!.reload();
+            //  }
+            //   },
+            // ),
           ],
         ),
         body: Stack(children: [
@@ -2979,4 +2979,3 @@ class _WebViewScreenState extends State<WebViewScreen>
     );
   }
 }
-
