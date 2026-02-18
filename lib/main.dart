@@ -25,13 +25,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'notification_service.dart';
 import 'firebase_options.dart';
 
-// ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
-final Set<String> _handledNotificationIds = {};
-// ⛔️ قائمة معرفات يجب تجاهل حفظها عندما يأتي الإشعار من الضغط (background click / initial message)
-final Set<String> _skipSaveIdsOnClick = {};
-
 /// =========================
-/// DATA MODEL
+/// DATA MODEL - ✅ مُصحّح مع دعم المعرفات المتعددة
 /// =========================
 
 class NotificationItem {
@@ -43,6 +38,8 @@ class NotificationItem {
   final Map<String, dynamic> data;
   bool isRead;
   final String type;
+  /// ✅ جميع المعرفات المرتبطة بهذا الإشعار (messageId + dbId + etc)
+  final Set<String> associatedIds;
 
   NotificationItem({
     required this.id,
@@ -53,7 +50,8 @@ class NotificationItem {
     required this.data,
     this.isRead = false,
     this.type = 'general',
-  });
+    Set<String>? associatedIds,
+  }) : associatedIds = associatedIds ?? {id};
 
   Map<String, dynamic> toJson() {
     return {
@@ -65,12 +63,21 @@ class NotificationItem {
       'data': data,
       'isRead': isRead,
       'type': type,
+      'associatedIds': associatedIds.toList(),
     };
   }
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
+    Set<String> ids = {};
+    if (json['associatedIds'] != null) {
+      ids = Set<String>.from(
+          (json['associatedIds'] as List).map((e) => e.toString()));
+    }
+    final mainId = json['id'].toString();
+    ids.add(mainId);
+
     return NotificationItem(
-      id: json['id'].toString(),
+      id: mainId,
       title: json['title'] ?? '',
       body: json['body'] ?? '',
       imageUrl: json['imageUrl'],
@@ -80,6 +87,7 @@ class NotificationItem {
       data: json['data'] != null ? Map<String, dynamic>.from(json['data']) : {},
       isRead: json['isRead'] ?? false,
       type: json['type'] ?? 'general',
+      associatedIds: ids,
     );
   }
 
@@ -93,9 +101,20 @@ class NotificationItem {
         message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
     String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    String id = message.data['id']?.toString() ??
-        message.messageId ??
-        DateTime.now().millisecondsSinceEpoch.toString();
+    // ✅ جمع كل المعرفات الممكنة لمنع التضاعف
+    String messageId =
+        message.messageId ?? 'msg_${DateTime.now().millisecondsSinceEpoch}';
+    String? dataId = message.data['id']?.toString();
+    String? firebaseMessageId = message.data['firebase_message_id']?.toString();
+
+    // ✅ الأولوية للـ dataId القادم من السيرفر
+    String primaryId = dataId ?? messageId;
+
+    Set<String> allIds = {primaryId, messageId};
+    if (dataId != null && dataId.isNotEmpty) allIds.add(dataId);
+    if (firebaseMessageId != null && firebaseMessageId.isNotEmpty) {
+      allIds.add(firebaseMessageId);
+    }
 
     DateTime timestamp;
     try {
@@ -115,7 +134,7 @@ class NotificationItem {
     }
 
     return NotificationItem(
-      id: id,
+      id: primaryId,
       title: title,
       body: body,
       imageUrl: imageUrl,
@@ -123,14 +142,11 @@ class NotificationItem {
       data: message.data,
       isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
       type: message.data['type'] ?? 'general',
+      associatedIds: allIds,
     );
   }
 
   factory NotificationItem.fromMySQL(Map<String, dynamic> map) {
-    final String id = (map['message_id']?.toString().isNotEmpty ?? false)
-        ? map['message_id'].toString()
-        : map['id'].toString();
-
     Map<String, dynamic> payload = {};
     if (map['data_payload'] != null) {
       if (map['data_payload'] is String &&
@@ -152,8 +168,17 @@ class NotificationItem {
       timestamp = DateTime.now().toUtc();
     }
 
+    String dbId = map['id'].toString();
+    String? messageId = map['message_id']?.toString();
+
+    // ✅ جمع كل المعرفات من MySQL أيضاً
+    Set<String> allIds = {dbId};
+    if (messageId != null && messageId.isNotEmpty) {
+      allIds.add(messageId);
+    }
+
     return NotificationItem(
-      id: id,
+      id: dbId,
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       imageUrl: map['image_url'],
@@ -161,12 +186,45 @@ class NotificationItem {
       data: payload,
       isRead: false,
       type: map['type'] ?? 'general',
+      associatedIds: allIds,
+    );
+  }
+
+  /// ✅ التحقق من التطابق بالمعرفات أو بالمحتوى + التوقيت القريب
+  bool matches(NotificationItem other) {
+    // تطابق بأي معرّف مشترك
+    if (associatedIds.intersection(other.associatedIds).isNotEmpty) {
+      return true;
+    }
+    // تطابق بالمحتوى + التوقيت القريب (60 ثانية)
+    if (title.isNotEmpty &&
+        title == other.title &&
+        body == other.body &&
+        (timestamp.difference(other.timestamp).inSeconds.abs() < 60)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// ✅ دمج إشعارين (الاحتفاظ بالأحدث + جمع المعرفات)
+  NotificationItem mergeWith(NotificationItem other) {
+    return NotificationItem(
+      id: id,
+      title: title,
+      body: body,
+      imageUrl: imageUrl ?? other.imageUrl,
+      timestamp:
+          timestamp.isAfter(other.timestamp) ? timestamp : other.timestamp,
+      data: {...other.data, ...data},
+      isRead: isRead && other.isRead,
+      type: type,
+      associatedIds: {...associatedIds, ...other.associatedIds},
     );
   }
 }
 
 /// =========================
-/// NOTIFICATION MANAGER
+/// NOTIFICATION MANAGER - ✅ مُصحّح بالكامل
 /// =========================
 
 class NotificationManager extends ChangeNotifier {
@@ -180,7 +238,10 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
-  final Set<String> _processedInSession = {};
+
+  // ✅ قفل واحد لمنع العمليات المتزامنة
+  bool _isProcessing = false;
+  Completer<void>? _processingCompleter;
 
   List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
@@ -188,6 +249,33 @@ class NotificationManager extends ChangeNotifier {
 
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
+
+  /// ✅ الحصول على القفل
+  Future<void> _acquireLock() async {
+    int waitCount = 0;
+    while (_isProcessing && waitCount < 100) {
+      if (_processingCompleter != null && !_processingCompleter!.isCompleted) {
+        await _processingCompleter!.future.timeout(
+          const Duration(milliseconds: 100),
+          onTimeout: () {},
+        );
+      } else {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      waitCount++;
+    }
+    _isProcessing = true;
+    _processingCompleter = Completer<void>();
+  }
+
+  /// ✅ تحرير القفل
+  void _releaseLock() {
+    _isProcessing = false;
+    if (_processingCompleter != null && !_processingCompleter!.isCompleted) {
+      _processingCompleter!.complete();
+    }
+    _processingCompleter = null;
+  }
 
   Future<void> loadNotifications() async {
     int waitCount = 0;
@@ -203,15 +291,19 @@ class NotificationManager extends ChangeNotifier {
       final jsonStr = prefs.getString(_storageKey);
       final deletedJson = prefs.getString(_deletedIdsKey);
 
-      if (jsonStr != null) {
-        final list = jsonDecode(jsonStr) as List;
-        _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
-        _sortAndCount();
-        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
-      }
-
       if (deletedJson != null) {
         _deletedIds = Set<String>.from(jsonDecode(deletedJson));
+      }
+
+      if (jsonStr != null) {
+        final list = jsonDecode(jsonStr) as List;
+        _notifications =
+            list.map((e) => NotificationItem.fromJson(e)).toList();
+        // ✅ إزالة المحذوفة بجميع معرفاتها
+        _notifications.removeWhere(
+            (n) => n.associatedIds.any((id) => _deletedIds.contains(id)));
+        _deduplicateAndSort();
+        debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       }
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
@@ -220,6 +312,8 @@ class NotificationManager extends ChangeNotifier {
 
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
+
+    await _acquireLock();
     _isSyncing = true;
     Future.microtask(() => notifyListeners());
 
@@ -227,10 +321,9 @@ class NotificationManager extends ChangeNotifier {
       final serverListRaw =
           await NotificationService.getAllNotifications(limit: 100);
 
-      await loadNotifications();
-
       if (serverListRaw.isEmpty) {
         _isSyncing = false;
+        _releaseLock();
         notifyListeners();
         return;
       }
@@ -238,39 +331,29 @@ class NotificationManager extends ChangeNotifier {
       final serverItems =
           serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
-      final Map<String, NotificationItem> localMap = {
-        for (var item in _notifications) item.id: item
-      };
-
       bool hasChanges = false;
 
       for (var serverItem in serverItems) {
-        if (_deletedIds.contains(serverItem.id)) continue;
+        // ✅ تحقق من الحذف بجميع المعرفات
+        if (serverItem.associatedIds.any((id) => _deletedIds.contains(id))) {
+          continue;
+        }
 
-        if (localMap.containsKey(serverItem.id)) {
-          final localItem = localMap[serverItem.id]!;
-          if (serverItem.timestamp.isAfter(localItem.timestamp)) {
-            localMap[serverItem.id] = NotificationItem(
-              id: serverItem.id,
-              title: serverItem.title,
-              body: serverItem.body,
-              imageUrl: serverItem.imageUrl,
-              timestamp: serverItem.timestamp,
-              data: serverItem.data,
-              type: serverItem.type,
-              isRead: localItem.isRead,
-            );
-            hasChanges = true;
-          }
+        // ✅ البحث عن تطابق ذكي
+        final existingIndex =
+            _notifications.indexWhere((n) => n.matches(serverItem));
+
+        if (existingIndex != -1) {
+          final existing = _notifications[existingIndex];
+          _notifications[existingIndex] = existing.mergeWith(serverItem);
+          hasChanges = true;
         } else {
-          localMap[serverItem.id] = serverItem;
+          _notifications.add(serverItem);
           hasChanges = true;
         }
       }
 
-      localMap.removeWhere((id, _) => _deletedIds.contains(id));
-      _notifications = localMap.values.toList();
-      _sortAndCount();
+      _deduplicateAndSort();
 
       if (_notifications.length > 200) {
         _notifications = _notifications.take(200).toList();
@@ -281,135 +364,100 @@ class NotificationManager extends ChangeNotifier {
       }
 
       debugPrint(
-          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
+          '✅ [Manager] MySQL sync: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
       _isSyncing = false;
+      _releaseLock();
       notifyListeners();
     }
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    final messageId = message.messageId ??
-        message.data['id']?.toString() ??
-        'msg_${DateTime.now().millisecondsSinceEpoch}';
+    await _acquireLock();
 
-    // ⛔️ لا تحفظ إذا كان الضغط من الخلفية أو تم وضعه في قائمة التخطي
-    if (_skipSaveIdsOnClick.contains(messageId) ||
-        _skipSaveIdsOnClick.contains(message.data['id']?.toString())) {
-      debugPrint('🚫 [Manager] Skipping save for click message $messageId');
-      return;
-    }
+    try {
+      final item = NotificationItem.fromFirebaseMessage(message);
 
-    if (_processedInSession.contains(messageId)) {
-      debugPrint(
-          '⚠️ [Manager] Message $messageId already processed in session, skipping');
-      return;
-    }
-
-    final item = NotificationItem.fromFirebaseMessage(message);
-
-    if (item.title.isEmpty ||
-        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
-      debugPrint('❌ [Manager] Skipping empty notification');
-      return;
-    }
-
-    if (_deletedIds.contains(item.id)) {
-      debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
-      return;
-    }
-
-    _processedInSession.add(messageId);
-    _handledNotificationIds.add(messageId);
-
-    int waitCount = 0;
-    while (_isSyncing && waitCount < 50) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
-    }
-
-    await loadNotifications();
-
-    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-
-    if (existingIndex != -1) {
-      final existing = _notifications[existingIndex];
-      if (item.timestamp.isAfter(existing.timestamp)) {
-        _notifications[existingIndex] = item;
-        _sortAndCount();
-        await _saveToDisk();
-        notifyListeners();
-        debugPrint('✅ [Manager] Updated existing notification: ${item.id}');
-      } else {
-        debugPrint(
-            '⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
+      if (item.title.isEmpty ||
+          (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+        debugPrint('❌ [Manager] Skipping empty notification');
+        return;
       }
-      return;
-    }
 
-    _notifications.insert(0, item);
-    _sortAndCount();
-    await _saveToDisk();
-    notifyListeners();
-    debugPrint('✅ [Manager] Added new notification: ${item.id}');
+      if (item.associatedIds.any((id) => _deletedIds.contains(id))) {
+        debugPrint('❌ [Manager] Skipping deleted notification');
+        return;
+      }
+
+      // ✅ قراءة أحدث البيانات من القرص
+      await loadNotifications();
+
+      // ✅ البحث عن تطابق ذكي
+      final existingIndex =
+          _notifications.indexWhere((n) => n.matches(item));
+
+      if (existingIndex != -1) {
+        final existing = _notifications[existingIndex];
+        _notifications[existingIndex] = existing.mergeWith(item);
+        debugPrint(
+            '⚠️ [Manager] Merged with existing: ${existing.id}');
+      } else {
+        _notifications.insert(0, item);
+        debugPrint('✅ [Manager] Added new: ${item.id}');
+      }
+
+      _deduplicateAndSort();
+      await _saveToDisk();
+      notifyListeners();
+    } finally {
+      _releaseLock();
+    }
   }
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    final item = NotificationItem.fromJson(data);
+    await _acquireLock();
 
-    // ⛔️ لا تحفظ إذا كان معرّف الإشعار ضمن قائمة التخطي (ضغط خلفية)
-    if (_skipSaveIdsOnClick.contains(item.id)) {
-      debugPrint('🚫 [Manager] Skipping native save for click message ${item.id}');
-      return;
+    try {
+      final item = NotificationItem.fromJson(data);
+
+      if (item.title.isEmpty ||
+          (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+        debugPrint('❌ [Manager] Skipping empty native notification');
+        return;
+      }
+
+      if (item.associatedIds.any((id) => _deletedIds.contains(id))) {
+        debugPrint('❌ [Manager] Skipping deleted native notification');
+        return;
+      }
+
+      await loadNotifications();
+
+      final existingIndex =
+          _notifications.indexWhere((n) => n.matches(item));
+
+      if (existingIndex != -1) {
+        final existing = _notifications[existingIndex];
+        _notifications[existingIndex] = existing.mergeWith(item);
+        debugPrint('⚠️ [Manager] Merged native with existing: ${existing.id}');
+      } else {
+        _notifications.insert(0, item);
+        debugPrint('✅ [Manager] Added native: ${item.id}');
+      }
+
+      _deduplicateAndSort();
+      await _saveToDisk();
+      notifyListeners();
+    } finally {
+      _releaseLock();
     }
-
-    if (_processedInSession.contains(item.id)) {
-      debugPrint(
-          '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
-      return;
-    }
-
-    if (item.title.isEmpty ||
-        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
-      debugPrint('❌ [Manager] Skipping empty notification from native');
-      return;
-    }
-
-    if (_deletedIds.contains(item.id)) {
-      debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
-      return;
-    }
-
-    _processedInSession.add(item.id);
-    _handledNotificationIds.add(item.id);
-
-    int waitCount = 0;
-    while (_isSyncing && waitCount < 50) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
-    }
-
-    await loadNotifications();
-
-    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
-
-    if (existingIndex != -1) {
-      debugPrint(
-          '⚠️ [Manager] Native notification ${item.id} already exists, skipping');
-      return;
-    }
-
-    _notifications.insert(0, item);
-    _sortAndCount();
-    await _saveToDisk();
-    notifyListeners();
-    debugPrint('✅ [Manager] Added native notification: ${item.id}');
   }
 
   Future<void> markAsRead(String id) async {
-    final index = _notifications.indexWhere((n) => n.id == id);
+    final index = _notifications
+        .indexWhere((n) => n.id == id || n.associatedIds.contains(id));
     if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
@@ -434,15 +482,30 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> deleteNotification(String id) async {
-    _notifications.removeWhere((n) => n.id == id);
+    // ✅ إضافة جميع المعرفات المرتبطة للمحذوفات
+    final item = _notifications.firstWhere(
+      (n) => n.id == id || n.associatedIds.contains(id),
+      orElse: () => NotificationItem(
+          id: id,
+          title: '',
+          body: '',
+          timestamp: DateTime.now(),
+          data: {}),
+    );
+    _deletedIds.addAll(item.associatedIds);
     _deletedIds.add(id);
+
+    _notifications.removeWhere(
+        (n) => n.id == id || n.associatedIds.contains(id));
     _updateUnreadCount();
     await _saveToDisk();
     notifyListeners();
   }
 
   Future<void> clearAllNotifications() async {
-    _deletedIds.addAll(_notifications.map((n) => n.id));
+    for (var n in _notifications) {
+      _deletedIds.addAll(n.associatedIds);
+    }
     _notifications.clear();
     _updateUnreadCount();
     await _saveToDisk();
@@ -459,19 +522,27 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
-  void _sortAndCount() {
-    final Map<String, NotificationItem> deduplicatedMap = {};
+  /// ✅ خوارزمية إزالة التكرارات المحسّنة
+  void _deduplicateAndSort() {
+    final List<NotificationItem> deduplicated = [];
+
     for (var notification in _notifications) {
-      if (!deduplicatedMap.containsKey(notification.id)) {
-        deduplicatedMap[notification.id] = notification;
+      if (notification.associatedIds.any((id) => _deletedIds.contains(id))) {
+        continue;
+      }
+
+      final matchIndex =
+          deduplicated.indexWhere((n) => n.matches(notification));
+
+      if (matchIndex != -1) {
+        deduplicated[matchIndex] =
+            deduplicated[matchIndex].mergeWith(notification);
       } else {
-        final existing = deduplicatedMap[notification.id]!;
-        if (notification.timestamp.isAfter(existing.timestamp)) {
-          deduplicatedMap[notification.id] = notification;
-        }
+        deduplicated.add(notification);
       }
     }
-    _notifications = deduplicatedMap.values.toList();
+
+    _notifications = deduplicated;
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
   }
@@ -502,7 +573,7 @@ class NotificationManager extends ChangeNotifier {
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
 
       debugPrint(
-          '💾 [Manager] Saved ${_notifications.length} notifications to disk');
+          '💾 [Manager] Saved ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
@@ -568,7 +639,7 @@ void _navigateToNotifications() {
       MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
   } else {
-    Future.delayed(const Duration(milliseconds: 300), () {
+    Future.delayed(const Duration(milliseconds: 500), () {
       navigatorKey.currentState?.push(
         MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
@@ -577,15 +648,27 @@ void _navigateToNotifications() {
 }
 
 /// =========================
-/// FCM BACKGROUND HANDLER
+/// FCM BACKGROUND HANDLER - ✅ مُصحّح
 /// =========================
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-  // لا يتم حفظ أي إشعار في الخلفية
-  return;
+
+  final item = NotificationItem.fromFirebaseMessage(message);
+
+  if (item.title.isEmpty ||
+      (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+    debugPrint('🌙 [BG] Skipping empty notification');
+    return;
+  }
+
+  // ✅ حفظ مع جميع المعرفات المرتبطة
+  await Future.delayed(const Duration(milliseconds: 500));
+  await NotificationService.saveToLocalDisk(item.toJson());
+  debugPrint('🌙 [BG] Notification Saved: ${item.id}');
 }
 
 /// =========================
@@ -601,12 +684,6 @@ class NotificationMethodChannel {
         debugPrint('📱 [iOS Channel] Received notification from native iOS');
         final Map<String, dynamic> data =
             Map<String, dynamic>.from(call.arguments);
-
-        // إذا كان المعرّف ضمن قائمة التخطي، لا نحفظ
-        if (_skipSaveIdsOnClick.contains(data['id']?.toString())) {
-          debugPrint('🚫 [iOS Channel] Skip save for click message ${data['id']}');
-          return;
-        }
 
         await Future.delayed(const Duration(milliseconds: 200));
         await NotificationManager.instance.addNotificationFromNative(data);
@@ -627,7 +704,7 @@ class NotificationMethodChannel {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// =========================
-/// APP LIFECYCLE HANDLER
+/// APP LIFECYCLE HANDLER - ✅ مُصحّح: مزامنة واحدة فقط مع حماية
 /// =========================
 
 class AppLifecycleHandler extends StatefulWidget {
@@ -640,6 +717,10 @@ class AppLifecycleHandler extends StatefulWidget {
 
 class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
     with WidgetsBindingObserver {
+  // ✅ منع المزامنة المتكررة
+  DateTime? _lastSyncTime;
+  static const _minSyncInterval = Duration(seconds: 5);
+
   @override
   void initState() {
     super.initState();
@@ -655,8 +736,21 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
-      NotificationManager.instance.fetchFromMySQL();
+      final now = DateTime.now();
+      if (_lastSyncTime != null &&
+          now.difference(_lastSyncTime!) < _minSyncInterval) {
+        debugPrint('📱 [AppLifecycle] Skipping sync - too soon');
+        return;
+      }
+      _lastSyncTime = now;
+      debugPrint('📱 [AppLifecycle] App resumed - syncing');
+
+      // ✅ تأخير بسيط ثم مزامنة واحدة فقط
+      Future.delayed(const Duration(milliseconds: 800), () {
+        NotificationManager.instance.loadNotifications().then((_) {
+          NotificationManager.instance.fetchFromMySQL();
+        });
+      });
     }
   }
 
@@ -667,7 +761,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - الحل النهائي ✅
+/// MAIN - ✅ الحل النهائي
 /// =========================
 
 void main() async {
@@ -683,7 +777,6 @@ void main() async {
       alert: true,
       badge: true,
       sound: true,
-      // تم إزالة provisional لأن التوقيع الحالي لـ requestPermission لا يدعمه
     );
 
     LocalNotificationService.initialize();
@@ -698,7 +791,7 @@ void main() async {
       alert: true,
       badge: true,
       sound: true,
-      // provisional غير مدعوم في هذا التوقيع
+      provisional: false,
     );
 
     debugPrint('🔔 Notification permissions: ${settings.authorizationStatus}');
@@ -735,35 +828,34 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 }
 
 /// =========================
-/// ✅ الحل النهائي - القاعدة الذهبية
+/// ✅ القاعدة الذهبية المُصحّحة:
+/// - Foreground: حفظ فقط
+/// - Background Click: تحميل من القرص + انتقال (بدون حفظ جديد!)
+/// - Terminated Launch: تحميل من القرص + انتقال (بدون حفظ جديد!)
 /// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // 1️⃣ عند وصول الإشعار والتطبيق مفتوح (Foreground) - نحفظ فقط
+  // 1️⃣ Foreground: حفظ فقط (الإشعار لم يُحفظ بعد)
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('📱 [Foreground] Saving notification...');
     NotificationManager.instance.addFirebaseMessage(message);
   });
 
-  // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
+  // 2️⃣ Background Click: الإشعار محفوظ مسبقاً من backgroundHandler → فقط نحمّل وننتقل
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    final id = message.messageId ?? message.data['id']?.toString();
-    if (id != null) {
-      _skipSaveIdsOnClick.add(id);
-    }
-    debugPrint('👆 [Background Click] Navigating only (no saving)...');
-    _navigateToNotifications();
+    debugPrint('👆 [Background Click] Load + Navigate only - NO SAVE');
+    NotificationManager.instance.loadNotifications().then((_) {
+      _navigateToNotifications();
+    });
   });
 
-  // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
+  // 3️⃣ Terminated Launch: الإشعار محفوظ مسبقاً من backgroundHandler → فقط نحمّل وننتقل
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
-    final id = initialMessage.messageId ?? initialMessage.data['id']?.toString();
-    if (id != null) {
-      _skipSaveIdsOnClick.add(id);
-    }
-    debugPrint('🚀 [Terminated Launch] Navigating only (no saving)...');
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _navigateToNotifications();
+    debugPrint('🚀 [Terminated Launch] Load + Navigate only - NO SAVE');
+    Future.delayed(const Duration(milliseconds: 800), () {
+      NotificationManager.instance.loadNotifications().then((_) {
+        _navigateToNotifications();
+      });
     });
   }
 }
@@ -805,29 +897,14 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
+class _MyAppState extends State<MyApp> {
+  // ✅ أُزيل WidgetsBindingObserver لمنع المزامنة المزدوجة
+  // AppLifecycleHandler يتولى المهمة بالكامل
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     NotificationManager.instance.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        NotificationManager.instance.loadNotifications().then((_) {
-          NotificationManager.instance.fetchFromMySQL();
-        });
-      });
-    }
   }
 
   @override
@@ -1238,8 +1315,8 @@ class PrivacyPolicyScreen extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            padding:
-                const EdgeInsets.only(top: 60, bottom: 30, left: 20, right: 20),
+            padding: const EdgeInsets.only(
+                top: 60, bottom: 30, left: 20, right: 20),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [
@@ -1286,7 +1363,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                   children: [
                     _buildPrivacySection(
                       '1. المقدمة',
-                      'تحترم الشركة العامة لتعبئة وخدمات الغاز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
+                      'تحترم الشركة العامة لتعبئة وخدمات الغ��ز خصوصية موظفيها وتلتزم بحماية بياناتهم الشخصية. توضح هذه السياسة كيفية جمع واستخدام وحماية المعلومات الخاصة بالموظفين.',
                     ),
                     _buildPrivacySection(
                       '2. البيانات المجمعة',
@@ -1294,7 +1371,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                     ),
                     _buildPrivacySection(
                       '3. استخدام البيانات',
-                      'تُستخدم البيانات لأغراض إدارية ��قط، مثل حساب الرواتب، إدارة الحضور والانصراف، والتواصل مع الموظفين بخصوص الأمور الوظيفية.',
+                      'تُستخدم البيانات لأغراض إدارية فقط، مثل حساب الرواتب، إدارة الحضور والانصراف، والتواصل مع الموظفين بخصوص الأمور الوظيفية.',
                     ),
                     _buildPrivacySection(
                       '4. حماية البيانات',
@@ -1357,7 +1434,8 @@ class PrivacyPolicyScreen extends StatelessWidget {
           children: [
             Container(
               margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
                 color: const Color(0xFFE8F5E9),
                 borderRadius: BorderRadius.circular(5),
@@ -1386,7 +1464,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
 }
 
 /// =========================
-/// NOTIFICATIONS SCREEN
+/// NOTIFICATIONS SCREEN - ✅ مُصحّح
 /// =========================
 
 class NotificationsScreen extends StatefulWidget {
@@ -1397,7 +1475,8 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen>
-    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin {
+  // ✅ أُزيل WidgetsBindingObserver - AppLifecycleHandler يتولى المهمة
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _selectedFilter = 'all';
@@ -1409,13 +1488,13 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _forceRefresh();
     });
 
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    // ✅ تقليل معدل التحديث التلقائي إلى 60 ثانية
+    _refreshTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (mounted) {
         _forceRefresh();
       }
@@ -1424,21 +1503,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) {
-          _forceRefresh();
-        }
-      });
-    }
   }
 
   Future<void> _forceRefresh() async {
@@ -1473,7 +1540,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 case 'clear_all':
                   bool? confirm = await _showDeleteConfirmDialog();
                   if (confirm == true) {
-                    await NotificationManager.instance.clearAllNotifications();
+                    await NotificationManager.instance
+                        .clearAllNotifications();
                   }
                   break;
               }
@@ -1485,7 +1553,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   children: [
                     const Icon(Icons.done_all, color: Color(0xFF00BFA5)),
                     const SizedBox(width: 8),
-                    Text('تحديد الكل كمقروء', style: GoogleFonts.cairo()),
+                    Text('تحديد الكل كمقروء',
+                        style: GoogleFonts.cairo()),
                   ],
                 ),
               ),
@@ -1495,7 +1564,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   children: [
                     const Icon(Icons.delete_sweep, color: Colors.red),
                     const SizedBox(width: 8),
-                    Text('حذف جميع الإشعارات', style: GoogleFonts.cairo()),
+                    Text('حذف جميع الإشعارات',
+                        style: GoogleFonts.cairo()),
                   ],
                 ),
               ),
@@ -1528,9 +1598,10 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   },
                   decoration: InputDecoration(
                     hintText: 'البحث في الإشعارات...',
-                    hintStyle: GoogleFonts.cairo(color: Colors.grey[600]),
-                    prefixIcon:
-                        const Icon(Icons.search, color: Color(0xFF00BFA5)),
+                    hintStyle:
+                        GoogleFonts.cairo(color: Colors.grey[600]),
+                    prefixIcon: const Icon(Icons.search,
+                        color: Color(0xFF00BFA5)),
                     suffixIcon: _searchQuery.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.clear),
@@ -1544,11 +1615,13 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                         : null,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.grey[300]!),
+                      borderSide:
+                          BorderSide(color: Colors.grey[300]!),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF00BFA5)),
+                      borderSide: const BorderSide(
+                          color: Color(0xFF00BFA5)),
                     ),
                   ),
                 ),
@@ -1616,7 +1689,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       label: Text(
         label,
         style: GoogleFonts.cairo(
-          color: isSelected ? Colors.white : const Color(0xFF00BFA5),
+          color:
+              isSelected ? Colors.white : const Color(0xFF00BFA5),
           fontWeight: FontWeight.w500,
         ),
       ),
@@ -1641,15 +1715,20 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         NotificationManager.instance.notifications;
 
     if (_selectedFilter != 'all') {
-      notifications =
-          notifications.where((n) => n.type == _selectedFilter).toList();
+      notifications = notifications
+          .where((n) => n.type == _selectedFilter)
+          .toList();
     }
 
     if (_searchQuery.isNotEmpty) {
       notifications = notifications
           .where((n) =>
-              n.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-              n.body.toLowerCase().contains(_searchQuery.toLowerCase()))
+              n.title
+                  .toLowerCase()
+                  .contains(_searchQuery.toLowerCase()) ||
+              n.body
+                  .toLowerCase()
+                  .contains(_searchQuery.toLowerCase()))
           .toList();
     }
 
@@ -1666,8 +1745,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             height: 120,
             decoration: BoxDecoration(
               color: const Color(0xFF00BFA5).withOpacity(0.1),
-              shape: BoxShape.circle,
-            ),
+              shape: BoxShape.circle              ),
             child: const Icon(
               Icons.notifications_off_outlined,
               size: 60,
@@ -1676,7 +1754,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           ),
           const SizedBox(height: 24),
           Text(
-            _searchQuery.isNotEmpty ? 'لا توجد نتائج للبحث' : 'لا توجد إشعارات',
+            _searchQuery.isNotEmpty
+                ? 'لا توجد نتائج للبحث'
+                : 'لا توجد إشعارات',
             style: GoogleFonts.cairo(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -1714,13 +1794,15 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         child: const Icon(
           Icons.delete,
           color: Colors.white,
-          size: 28),
+          size: 28,
+        ),
       ),
       confirmDismiss: (direction) async {
         return await _showDeleteConfirmDialog(single: true);
       },
       onDismissed: (direction) async {
-        await NotificationManager.instance.deleteNotification(notification.id);
+        await NotificationManager.instance
+            .deleteNotification(notification.id);
       },
       child: Card(
         margin: const EdgeInsets.only(bottom: 8),
@@ -1729,15 +1811,18 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           borderRadius: BorderRadius.circular(16),
           side: notification.isRead
               ? BorderSide.none
-              : const BorderSide(color: Color(0xFF00BFA5), width: 1),
+              : const BorderSide(
+                  color: Color(0xFF00BFA5), width: 1),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: () async {
             if (!notification.isRead) {
-              await NotificationManager.instance.markAsRead(notification.id);
+              await NotificationManager.instance
+                  .markAsRead(notification.id);
             }
 
+            if (!mounted) return;
             Navigator.push(
               context,
               MaterialPageRoute(
@@ -1762,13 +1847,16 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   ),
                   child: Icon(
                     _getNotificationIcon(notification.type),
-                    color: _getNotificationColor(notification.type),
-                    size: 24),
+                    color:
+                        _getNotificationColor(notification.type),
+                    size: 24,
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
@@ -1777,24 +1865,28 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                               notification.title,
                               style: GoogleFonts.cairo(
                                 fontSize: 16,
-                                fontWeight: notification.isRead
-                                    ? FontWeight.w500
-                                    : FontWeight.bold,
+                                fontWeight:
+                                    notification.isRead
+                                        ? FontWeight.w500
+                                        : FontWeight.bold,
                                 color: notification.isRead
                                     ? const Color(0xFF4A5568)
                                     : const Color(0xFF2D3748),
                               ),
                               maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                              overflow:
+                                  TextOverflow.ellipsis,
                             ),
                           ),
                           if (!notification.isRead)
                             Container(
                               width: 8,
                               height: 8,
-                              decoration: const BoxDecoration(
+                              decoration:
+                                  const BoxDecoration(
                                 color: Color(0xFF00BFA5),
-                                shape: BoxShape.circle),
+                                shape: BoxShape.circle,
+                              ),
                             ),
                         ],
                       ),
@@ -1804,56 +1896,79 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                         style: GoogleFonts.cairo(
                           fontSize: 14,
                           color: Colors.grey[600],
-                          height: 1.4),
+                          height: 1.4,
+                        ),
                         maxLines: 3,
-                        overflow: TextOverflow.ellipsis),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       const SizedBox(height: 8),
                       Row(
                         children: [
                           Icon(
                             Icons.access_time,
                             size: 14,
-                            color: Colors.grey[500]),
+                            color: Colors.grey[500],
+                          ),
                           const SizedBox(width: 4),
                           Text(
-                            _formatTimestamp(notification.timestamp),
+                            _formatTimestamp(
+                                notification.timestamp),
                             style: GoogleFonts.cairo(
                               fontSize: 12,
-                              color: Colors.grey[500]),
+                              color: Colors.grey[500],
+                            ),
                           ),
                           const Spacer(),
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
+                            padding:
+                                const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2),
                             decoration: BoxDecoration(
-                              color: _getNotificationColor(notification.type)
-                                  .withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12),
+                              color:
+                                  _getNotificationColor(
+                                          notification
+                                              .type)
+                                      .withOpacity(0.1),
+                              borderRadius:
+                                  BorderRadius.circular(
+                                      12),
                             ),
                             child: Text(
-                              _getNotificationTypeLabel(notification.type),
+                              _getNotificationTypeLabel(
+                                  notification.type),
                               style: GoogleFonts.cairo(
                                 fontSize: 10,
-                                fontWeight: FontWeight.w500,
-                                color: _getNotificationColor(notification.type),
+                                fontWeight:
+                                    FontWeight.w500,
+                                color:
+                                    _getNotificationColor(
+                                        notification
+                                            .type),
                               ),
                             ),
                           ),
                         ],
                       ),
                       if (notification.imageUrl != null &&
-                          notification.imageUrl!.isNotEmpty)
+                          notification
+                              .imageUrl!.isNotEmpty)
                         Container(
-                          margin: const EdgeInsets.only(top: 12),
+                          margin: const EdgeInsets.only(
+                              top: 12),
                           height: 120,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius:
+                                BorderRadius.circular(12),
                             color: Colors.grey[100],
                           ),
                           child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: _buildNotificationImageInList(
-                                notification.imageUrl!),
+                            borderRadius:
+                                BorderRadius.circular(12),
+                            child:
+                                _buildNotificationImageInList(
+                                    notification
+                                        .imageUrl!),
                           ),
                         ),
                     ],
@@ -1883,7 +1998,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             color: Colors.grey[200],
             child: const Center(
               child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation(Color(0xFF00BFA5)),
+                valueColor:
+                    AlwaysStoppedAnimation(Color(0xFF00BFA5)),
               ),
             ),
           ),
@@ -1894,20 +2010,24 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 child: Icon(
                   Icons.broken_image,
                   color: Colors.grey[400],
-                  size: 32),
+                  size: 32,
+                ),
               ),
             );
           },
         );
       }
-    } catch (e) {}
+    } catch (e) {
+      // ignore
+    }
     return Container(
       color: Colors.grey[100],
       child: Center(
         child: Icon(
           Icons.broken_image,
           color: Colors.grey[400],
-          size: 32),
+          size: 32,
+        ),
       ),
     );
   }
@@ -1924,13 +2044,15 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             const Icon(
               Icons.delete_outline,
               color: Colors.red,
-              size: 28),
+              size: 28,
+            ),
             const SizedBox(width: 12),
             Text(
               single ? 'حذف الإشعار' : 'حذف جميع الإشعارات',
               style: GoogleFonts.cairo(
                 fontSize: 18,
-                fontWeight: FontWeight.bold),
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
@@ -1940,7 +2062,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               : 'هل تريد حذف جميع الإشعارات؟ لا يمكن التراجع عن هذا الإجراء.',
           style: GoogleFonts.cairo(
             fontSize: 16,
-            height: 1.5),
+            height: 1.5,
+          ),
         ),
         actions: [
           TextButton(
@@ -1949,7 +2072,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               'إلغاء',
               style: GoogleFonts.cairo(
                 color: Colors.grey[600],
-                fontWeight: FontWeight.w500),
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           ElevatedButton(
@@ -1964,7 +2088,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               'حذف',
               style: GoogleFonts.cairo(
                 color: Colors.white,
-                fontWeight: FontWeight.bold),
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
@@ -2059,7 +2184,8 @@ class NotificationDetailScreen extends StatelessWidget {
           'تفاصيل الإشعار',
           style: GoogleFonts.cairo(
             fontSize: 20,
-            fontWeight: FontWeight.bold),
+            fontWeight: FontWeight.bold,
+          ),
         ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -2076,7 +2202,8 @@ class NotificationDetailScreen extends StatelessWidget {
               style: GoogleFonts.cairo(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF2D3748)),
+                color: const Color(0xFF2D3748),
+              ),
             ),
             const SizedBox(height: 8),
             Row(
@@ -2084,18 +2211,20 @@ class NotificationDetailScreen extends StatelessWidget {
                 Icon(
                   Icons.access_time,
                   size: 16,
-                  color: Colors.grey[600]),
+                  color: Colors.grey[600],
+                ),
                 const SizedBox(width: 4),
                 Text(
                   _formatTimestamp(notification.timestamp),
                   style: GoogleFonts.cairo(
                     fontSize: 14,
-                    color: Colors.grey[600]),
+                    color: Colors.grey[600],
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: _getNotificationColor(notification.type)
                         .withOpacity(0.1),
@@ -2106,7 +2235,8 @@ class NotificationDetailScreen extends StatelessWidget {
                     style: GoogleFonts.cairo(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
-                      color: _getNotificationColor(notification.type),
+                      color:
+                          _getNotificationColor(notification.type),
                     ),
                   ),
                 ),
@@ -2123,7 +2253,8 @@ class NotificationDetailScreen extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                       color: Colors.grey[100],
                     ),
-                    child: _buildNotificationImage(notification.imageUrl!),
+                    child: _buildNotificationImage(
+                        notification.imageUrl!),
                   ),
                   const SizedBox(height: 16),
                 ],
@@ -2134,7 +2265,8 @@ class NotificationDetailScreen extends StatelessWidget {
               style: GoogleFonts.cairo(
                 fontSize: 16,
                 height: 1.6,
-                color: const Color(0xFF4A5568)),
+                color: const Color(0xFF4A5568),
+              ),
             ),
             const SizedBox(height: 32),
             Column(
@@ -2144,7 +2276,8 @@ class NotificationDetailScreen extends StatelessWidget {
                   'الشركة العامة لتعبئة وخدمات الغاز',
                   style: GoogleFonts.cairo(
                     fontSize: 14,
-                    color: const Color(0xFF2D3748)),
+                    color: const Color(0xFF2D3748),
+                  ),
                 ),
               ],
             ),
@@ -2183,22 +2316,27 @@ class NotificationDetailScreen extends StatelessWidget {
                   child: Icon(
                     Icons.image_not_supported_outlined,
                     color: Colors.grey[400],
-                    size: 50),
+                    size: 50,
+                  ),
                 ),
               );
             },
           ),
         );
       }
-    } catch (e) {}
+    } catch (e) {
+      // ignore
+    }
     return Container(
       color: Colors.grey[100],
       child: Center(
         child: Icon(
           Icons.image_not_supported_outlined,
           color: Colors.grey[400],
-          size: 50),
-    ));
+          size: 50,
+        ),
+      ),
+    );
   }
 
   Color _getNotificationColor(String type) {
@@ -2302,14 +2440,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
         ..addJavaScriptChannel(
           'FlutterChannel',
           onMessageReceived: (JavaScriptMessage message) {
-            debugPrint('📨 JavaScript message received: ${message.message}');
+            debugPrint(
+                '📨 JavaScript message received: ${message.message}');
           },
         );
 
       if (Platform.isAndroid) {
         final androidController =
             controller!.platform as AndroidWebViewController;
-        androidController.setMediaPlaybackRequiresUserGesture(false);
+        androidController
+            .setMediaPlaybackRequiresUserGesture(false);
         controller!.enableZoom(true);
       }
 
@@ -2332,7 +2472,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
             }
 
             if (Platform.isAndroid) {
-              Future.delayed(const Duration(milliseconds: 500), () {
+              Future.delayed(const Duration(milliseconds: 500),
+                  () {
                 _injectAndroidFix();
               });
             }
@@ -2375,7 +2516,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
             }
           },
           onWebResourceError: (WebResourceError error) {
-            debugPrint('❌ WebView Error: ${error.description}');
+            debugPrint(
+                '❌ WebView Error: ${error.description}');
 
             if (mounted) {
               setState(() {
@@ -2385,13 +2527,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
               });
             }
           },
-          onNavigationRequest: (NavigationRequest request) {
+          onNavigationRequest:
+              (NavigationRequest request) {
             if (request.url.contains('download=1')) {
-              String cleanUrl =
-                  request.url.replaceAll(RegExp(r'[?&]download=1'), '');
+              String cleanUrl = request.url.replaceAll(
+                  RegExp(r'[?&]download=1'), '');
 
               if (cleanUrl != currentUrl) {
-                controller?.loadRequest(Uri.parse(cleanUrl));
+                controller
+                    ?.loadRequest(Uri.parse(cleanUrl));
                 return NavigationDecision.prevent;
               }
             }
@@ -2548,7 +2692,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<bool> _requestPermissions() async {
     if (Platform.isAndroid) {
       try {
-        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        final androidInfo =
+            await DeviceInfoPlugin().androidInfo;
         final sdkInt = androidInfo.version.sdkInt;
 
         if (sdkInt >= 29) {
@@ -2569,14 +2714,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   Future<Uint8List> _captureWebView() async {
     if (Platform.isIOS) {
-      final bytes = await _channel.invokeMethod('takeSnapshot');
+      final bytes =
+          await _channel.invokeMethod('takeSnapshot');
       return Uint8List.fromList(List<int>.from(bytes));
     }
 
-    RenderRepaintBoundary boundary =
-        _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    RenderRepaintBoundary boundary = _webViewKey
+        .currentContext!
+        .findRenderObject() as RenderRepaintBoundary;
     ui.Image img = await boundary.toImage(pixelRatio: 6.0);
-    ByteData? byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    ByteData? byteData =
+        await img.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
   }
 
@@ -2606,11 +2754,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
       await tempFile.writeAsBytes(screenshot);
 
       try {
-        await Gal.putImage(tempFile.path, album: 'قسائم الرواتب');
+        await Gal.putImage(tempFile.path,
+            album: 'قسائم الرواتب');
         if (mounted) setState(() => isLoading = false);
         _showMessage('تم الحفظ في معرض الصور');
 
-        await Future.delayed(const Duration(seconds: 1), () async {
+        await Future.delayed(const Duration(seconds: 1),
+            () async {
           try {
             await tempFile.delete();
           } catch (e) {}
@@ -2632,7 +2782,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
         content: Text(
           message,
           style: GoogleFonts.cairo(fontSize: 16),
-          textAlign: TextAlign.center),
+          textAlign: TextAlign.center,
+        ),
         backgroundColor: const Color(0xFF00BFA5),
         behavior: SnackBarBehavior.floating,
       ),
@@ -2644,9 +2795,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
       return false;
     }
 
-    if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
-        currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
-        currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
+    if (currentUrl ==
+            'https://gate.scgfs-oil.gov.iq/payslip.html' ||
+        currentUrl ==
+            'https://gate.scgfs-oil.gov.iq/payslips' ||
+        currentUrl ==
+            'https://gate.scgfs-oil.gov.iq/salary' ||
         currentUrl.contains('/dashboard') ||
         currentUrl.contains('/admin') ||
         currentUrl.contains('/info') ||
@@ -2665,7 +2819,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
             currentUrl.split('/').last.length > 15);
 
     bool isDifferentFromMain = currentUrl.contains('.html') &&
-        currentUrl != 'https://gate.scgfs-oil.gov.iq/payslip.html';
+        currentUrl !=
+            'https://gate.scgfs-oil.gov.iq/payslip.html';
 
     return hasParameter || isDifferentFromMain;
   }
@@ -2698,13 +2853,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF00BFA5).withOpacity(0.1),
+                      color: const Color(0xFF00BFA5)
+                          .withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
                       Icons.logout,
                       size: 48,
-                      color: Color(0xFF00BFA5)),
+                      color: Color(0xFF00BFA5),
+                    ),
                   ),
                   const SizedBox(height: 20),
                   Text(
@@ -2712,15 +2869,18 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     style: GoogleFonts.cairo(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black87),
+                      color: Colors.black87,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     'هل تريد الخروج من التطبيق؟',
                     style: GoogleFonts.cairo(
                       fontSize: 16,
-                      color: Colors.black54),
-                    textAlign: TextAlign.center),
+                      color: Colors.black54,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 24),
                   Row(
                     children: [
@@ -2735,11 +2895,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             }
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00BFA5),
+                            backgroundColor:
+                                const Color(0xFF00BFA5),
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            padding:
+                                const EdgeInsets.symmetric(
+                                    vertical: 14),
+                            shape:
+                                RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(
+                                      12),
                             ),
                             elevation: 0,
                           ),
@@ -2747,28 +2913,40 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             'نعم',
                             style: GoogleFonts.cairo(
                               fontSize: 16,
-                              fontWeight: FontWeight.bold),
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(false),
+                          onPressed: () =>
+                              Navigator.of(context)
+                                  .pop(false),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.black54,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            foregroundColor:
+                                Colors.black54,
+                            padding:
+                                const EdgeInsets.symmetric(
+                                    vertical: 14),
+                            shape:
+                                RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(
+                                      12),
                             ),
                             side: BorderSide(
-                                color: Colors.grey.shade300, width: 1.5),
+                                color:
+                                    Colors.grey.shade300,
+                                width: 1.5),
                           ),
                           child: Text(
                             'لا',
                             style: GoogleFonts.cairo(
                               fontSize: 16,
-                              fontWeight: FontWeight.w600),
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
@@ -2796,8 +2974,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
               if (canGoBack && controller != null) {
                 controller!.goBack();
               } else {
-                final shouldExit = await _showExitDialog();
-                if (shouldExit == true) SystemNavigator.pop();
+                final shouldExit =
+                    await _showExitDialog();
+                if (shouldExit == true) {
+                  SystemNavigator.pop();
+                }
               }
             },
           ),
@@ -2805,8 +2986,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
             fit: BoxFit.scaleDown,
             child: Text(
               'الشركة العامة لتعبئة وخدمات الغاز',
-              style:
-                  GoogleFonts.cairo(fontSize: 18, fontWeight: FontWeight.bold),
+              style: GoogleFonts.cairo(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
             ),
           ),
           actions: [
@@ -2816,7 +2998,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (context) => const NotificationsScreen()),
+                        builder: (context) =>
+                            const NotificationsScreen()),
                   );
                 },
               ),
@@ -2829,21 +3012,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 key: _webViewKey,
                 child: Container(
                   color: Colors.white,
-                  child: WebViewWidget(controller: controller!),
+                  child: WebViewWidget(
+                      controller: controller!),
                 ),
               ),
             if (hasError)
               Center(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisAlignment:
+                      MainAxisAlignment.center,
                   children: [
                     const Icon(Icons.error_outline,
                         size: 60, color: Colors.red),
                     const SizedBox(height: 15),
                     Text('خطأ في الاتصال',
-                        style: GoogleFonts.cairo(fontSize: 18)),
+                        style: GoogleFonts.cairo(
+                            fontSize: 18)),
                     Text(errorMessage,
-                        style: GoogleFonts.cairo(fontSize: 12),
+                        style: GoogleFonts.cairo(
+                            fontSize: 12),
                         textAlign: TextAlign.center),
                     const SizedBox(height: 20),
                     ModernButton(
@@ -2852,7 +3039,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         _initializeWebView();
                       },
                       child: Text('إعادة المحاولة',
-                          style: GoogleFonts.cairo(color: Colors.white)),
+                          style: GoogleFonts.cairo(
+                              color: Colors.white)),
                     ),
                   ],
                 ),
@@ -2867,11 +3055,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         LinearProgressIndicator(
-                          value: loadingProgress > 0 ? loadingProgress : null,
+                          value: loadingProgress > 0
+                              ? loadingProgress
+                              : null,
                           color: const Color(0xFF00BFA5),
                         ),
                         const SizedBox(height: 20),
-                        Text('جاري التحميل...', style: GoogleFonts.cairo()),
+                        Text('جاري التحميل...',
+                            style: GoogleFonts.cairo()),
                       ],
                     ),
                   ),
@@ -2882,14 +3073,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
         floatingActionButton: _shouldShowButtons()
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment:
+                    CrossAxisAlignment.end,
                 children: [
                   FloatingActionButton(
                     heroTag: 'zoom_out',
                     mini: true,
                     onPressed: _zoomOut,
                     backgroundColor: Colors.white,
-                    child: const Icon(Icons.remove, color: Color(0xFF00BFA5)),
+                    child: const Icon(Icons.remove,
+                        color: Color(0xFF00BFA5)),
                   ),
                   const SizedBox(width: 10),
                   FloatingActionButton(
@@ -2897,16 +3090,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     mini: true,
                     onPressed: _zoomIn,
                     backgroundColor: Colors.white,
-                    child: const Icon(Icons.add, color: Color(0xFF00BFA5)),
+                    child: const Icon(Icons.add,
+                        color: Color(0xFF00BFA5)),
                   ),
                   const SizedBox(width: 16),
                   FloatingActionButton.extended(
                     heroTag: 'save_image',
                     onPressed: _savePageAsImage,
-                    backgroundColor: const Color(0xFF00BFA5),
-                    icon: const Icon(Icons.save_alt, color: Colors.white),
+                    backgroundColor:
+                        const Color(0xFF00BFA5),
+                    icon: const Icon(Icons.save_alt,
+                        color: Colors.white),
                     label: Text('حفظ كصورة',
-                        style: GoogleFonts.cairo(color: Colors.white)),
+                        style: GoogleFonts.cairo(
+                            color: Colors.white)),
                   ),
                 ],
               )
