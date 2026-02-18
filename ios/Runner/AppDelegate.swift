@@ -58,24 +58,16 @@ import UserNotifications
   
   // CRITICAL FIX: Clean up WebView platform views before Flutter engine teardown
   @objc private func handleAppWillTerminate() {
-    // Remove all platform views (WKWebView) from the view hierarchy
-    // before the Flutter engine starts its teardown sequence.
-    // This prevents the webview_flutter_wkwebview finalizer from
-    // trying to send messages through an already-destroyed engine.
     if let controller = window?.rootViewController as? FlutterViewController {
-      // Notify Flutter side to dispose WebView
       let channel = FlutterMethodChannel(
         name: "webview_cleanup",
         binaryMessenger: controller.binaryMessenger
       )
       channel.invokeMethod("dispose", arguments: nil)
-      
-      // Also forcefully remove WKWebView instances from view hierarchy
       removeWKWebViews(from: controller.view)
     }
   }
   
-  // Recursively find and remove WKWebView instances from view hierarchy
   private func removeWKWebViews(from view: UIView) {
     for subview in view.subviews {
       if NSStringFromClass(type(of: subview)).contains("WKWebView") {
@@ -117,7 +109,6 @@ import UserNotifications
   
   // MARK: - UNUserNotificationCenterDelegate Methods
   
-  // CRITICAL: Called when notification arrives while app is in FOREGROUND
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
@@ -128,10 +119,8 @@ import UserNotifications
     print("📱 [iOS] Foreground notification received")
     print("📱 [iOS] UserInfo: \(userInfo)")
     
-    // Save to local storage via Flutter
     saveNotificationToFlutter(userInfo: userInfo)
     
-    // Show banner, badge, and sound
     if #available(iOS 14.0, *) {
       completionHandler([[.banner, .badge, .sound]])
     } else {
@@ -139,7 +128,6 @@ import UserNotifications
     }
   }
   
-  // Called when user TAPS on notification
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
@@ -150,10 +138,8 @@ import UserNotifications
     print("👆 [iOS] Notification tapped")
     print("👆 [iOS] UserInfo: \(userInfo)")
     
-    // Save to local storage
     saveNotificationToFlutter(userInfo: userInfo)
     
-    // CRITICAL: Navigate to notifications screen
     if let controller = window?.rootViewController as? FlutterViewController {
       let navigationChannel = FlutterMethodChannel(
         name: "notification_handler",
@@ -166,7 +152,6 @@ import UserNotifications
     completionHandler()
   }
   
-  // CRITICAL: Save notification to Flutter's storage system
   private func saveNotificationToFlutter(userInfo: [AnyHashable: Any]) {
     guard let controller = window?.rootViewController as? FlutterViewController else {
       print("❌ [iOS] FlutterViewController not found")
@@ -178,16 +163,13 @@ import UserNotifications
       binaryMessenger: controller.binaryMessenger
     )
     
-    // Convert userInfo to Swift Dictionary
     var notificationData: [String: Any] = [:]
     
-    // CRITICAL: Extract title and body from multiple possible locations, prioritizing data
     var title = ""
     var body = ""
     var imageUrl: String? = nil
     var type = "general"
     
-    // First, try to get from data payload (highest priority)
     if let data = userInfo["data"] as? [String: Any] {
       title = data["title"] as? String ?? title
       body = data["body"] as? String ?? body
@@ -195,7 +177,6 @@ import UserNotifications
       imageUrl = data["image_url"] as? String ?? data["imageUrl"] as? String ?? imageUrl
     }
     
-    // Then try FCM notification structure
     if let fcmTitle = userInfo["gcm.notification.title"] as? String, !fcmTitle.isEmpty {
       title = fcmTitle
     }
@@ -203,7 +184,6 @@ import UserNotifications
       body = fcmBody
     }
     
-    // Try direct keys
     if let directTitle = userInfo["title"] as? String, !directTitle.isEmpty {
       title = directTitle
     }
@@ -211,7 +191,6 @@ import UserNotifications
       body = directBody
     }
     
-    // Try notification object first
     if let aps = userInfo["aps"] as? [String: Any],
        let alert = aps["alert"] as? [String: Any] {
       if let apsTitle = alert["title"] as? String, !apsTitle.isEmpty {
@@ -222,19 +201,16 @@ import UserNotifications
       }
     }
     
-    // Fallback to default if still empty
     if title.isEmpty {
       title = "إشعار جديد"
     }
     
-    // Image URL from various sources
     if imageUrl == nil {
       imageUrl = userInfo["image_url"] as? String
         ?? userInfo["imageUrl"] as? String
         ?? userInfo["gcm.notification.image_url"] as? String
     }
     
-    // Type from various sources
     if let userType = userInfo["type"] as? String {
       type = userType
     }
@@ -257,7 +233,6 @@ import UserNotifications
     print("📱 [iOS] Body: \(body)")
     print("📱 [iOS] Type: \(type)")
     
-    // Send to Flutter
     channel.invokeMethod("saveNotification", arguments: notificationData)
   }
 }
@@ -265,11 +240,9 @@ import UserNotifications
 // MARK: - MessagingDelegate
 extension AppDelegate: MessagingDelegate {
   
-  // Called when FCM token is refreshed
   func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
     print("🔑 [iOS] FCM Token: \(fcmToken ?? "nil")")
     
-    // You can send this token to your server
     if let token = fcmToken {
       let dataDict: [String: String] = ["token": token]
       NotificationCenter.default.post(
