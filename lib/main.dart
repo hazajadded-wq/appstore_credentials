@@ -26,11 +26,11 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'notification_service.dart';
 import 'firebase_options.dart';
 
-// ======== Track handled notifications in current session =============
+// ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
 final Set<String> _handledNotificationIds = {};
 
 /// =========================
-/// DATA MODEL
+/// DATA MODEL - حفظ التوقيت الأصلي
 /// =========================
 
 class NotificationItem {
@@ -82,6 +82,7 @@ class NotificationItem {
     final String mainId = json['id'].toString();
     assocIds.add(mainId);
 
+    // استعادة التوقيت الأصلي المحفوظ
     DateTime ts;
     String? origSentAt = json['originalSentAt'];
     if (origSentAt != null && origSentAt.isNotEmpty) {
@@ -136,6 +137,7 @@ class NotificationItem {
       assocIds.add(message.data['id'].toString());
     }
 
+    // تحديد التوقيت الأصلي من بيانات الرسالة
     DateTime timestamp;
     String? origSentAt;
     try {
@@ -184,6 +186,7 @@ class NotificationItem {
       }
     }
 
+    // حفظ النص الأصلي للتوقيت من السيرفر
     String? origSentAt = map['sent_at']?.toString();
     DateTime timestamp;
     try {
@@ -243,8 +246,10 @@ class NotificationItem {
     return false;
   }
 
+  // الدمج يحافظ دائماً على التوقيت الأقدم (الأصلي)
   NotificationItem mergeWith(NotificationItem other,
       {bool preserveReadState = true}) {
+    // دائماً نأخذ التوقيت الأقدم - وهو التوقيت الأصلي عند الإرسال
     final DateTime earlierTimestamp =
         timestamp.isBefore(other.timestamp) ? timestamp : other.timestamp;
     final String? earlierOrigSentAt = timestamp.isBefore(other.timestamp)
@@ -368,8 +373,10 @@ class NotificationManager extends ChangeNotifier {
 
         if (existingIndex != -1) {
           final localItem = _notifications[existingIndex];
+          // دمج: المحلي هو الأساس - يحافظ على التوقيت الأصلي وحالة القراءة
           final merged =
               localItem.mergeWith(serverItem, preserveReadState: true);
+          // فقط تحديث إذا هناك تغيير حقيقي في المحتوى أو المعرفات
           if (merged.associatedIds.length > localItem.associatedIds.length ||
               (localItem.title.isEmpty && merged.title.isNotEmpty) ||
               (localItem.body.isEmpty && merged.body.isNotEmpty)) {
@@ -377,6 +384,7 @@ class NotificationManager extends ChangeNotifier {
             hasChanges = true;
           }
         } else {
+          // إشعار جديد من السيرفر
           if (_readIds.contains(serverItem.id) ||
               serverItem.associatedIds.any((id) => _readIds.contains(id))) {
             serverItem.isRead = true;
@@ -598,6 +606,7 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _sortAndCount() {
+    // إزالة التكرار مع حفظ التوقيت الأصلي
     final List<NotificationItem> deduped = [];
     for (var notification in _notifications) {
       int existingIndex =
@@ -717,44 +726,37 @@ class LocalNotificationService {
 }
 
 /// =========================
-/// CRITICAL FIX: Safe navigation to notifications
-/// Always pushes ON TOP of WebViewScreen, never removes all routes
+/// Safe navigation to notifications — FIXED: never removes all routes
 /// =========================
 
 void _navigateToNotifications() {
-  // CRITICAL FIX: Use a delayed check to ensure navigator is ready
   void _doNavigate() {
     final navigator = navigatorKey.currentState;
     if (navigator == null) {
-      // Navigator not ready, retry after delay
       Future.delayed(const Duration(milliseconds: 500), _doNavigate);
       return;
     }
 
-    // CRITICAL FIX: Check if we already have routes in the stack
-    // If the navigator has no routes (empty stack), push WebViewScreen first then NotificationsScreen
-    // If it has routes, just push NotificationsScreen on top
+    // Check if navigator has existing routes
     bool hasRoutes = false;
     navigator.popUntil((route) {
       hasRoutes = true;
-      return true; // Don't actually pop, just check
+      return true;
     });
 
     if (!hasRoutes) {
-      // No routes exist — app was launched from terminated state
-      // Push WebViewScreen as base, then NotificationsScreen on top
+      // App was launched from terminated state - push WebView first, then Notifications
       navigator.pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => const WebViewScreen()),
         (route) => false,
       );
-      // Push notifications on top after a small delay to let WebView build
       Future.delayed(const Duration(milliseconds: 300), () {
         navigatorKey.currentState?.push(
           MaterialPageRoute(builder: (context) => const NotificationsScreen()),
         );
       });
     } else {
-      // Routes exist — just push NotificationsScreen on top
+      // Routes exist - just push on top
       navigator.push(
         MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
@@ -804,7 +806,6 @@ class NotificationMethodChannel {
         await NotificationManager.instance.addNotificationFromNative(data);
       } else if (call.method == 'navigateToNotifications') {
         debugPrint('📱 [iOS Channel] Navigation command received');
-        // CRITICAL FIX: Use safe navigation instead of pushAndRemoveUntil
         Future.delayed(const Duration(milliseconds: 300), () {
           _navigateToNotifications();
         });
@@ -930,14 +931,12 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     debugPrint('👆 [Background Click] Navigating...');
-    // CRITICAL FIX: Use safe navigation
     _navigateToNotifications();
   });
 
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
     debugPrint('🚀 [Terminated Launch] Navigating...');
-    // CRITICAL FIX: Longer delay for terminated launch to ensure app is fully built
     Future.delayed(const Duration(milliseconds: 1500), () {
       _navigateToNotifications();
     });
@@ -1018,8 +1017,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           child: child!,
         );
       },
-      // CRITICAL FIX: Start with SplashScreen which goes to PrivacyPolicy then WebView
-      // The WebViewScreen is always the base route after splash
       home: const SplashScreen(),
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
@@ -1100,39 +1097,40 @@ class ModernButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: Ink(
-            height: height,
-            padding: padding,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(borderRadius),
-              gradient: isGradient
-                  ? LinearGradient(
-                      colors: [
-                        color ?? const Color(0xFF00BFA5),
-                        color != null
-                            ? color!.withOpacity(0.8)
-                            : const Color(0xFF00A896),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    )
-                  : null,
-              color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
-              boxShadow: [
-                BoxShadow(
-                  color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Center(child: child),
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: Ink(
+          height: height,
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(borderRadius),
+            gradient: isGradient
+                ? LinearGradient(
+                    colors: [
+                      color ?? const Color(0xFF00BFA5),
+                      color != null
+                          ? color!.withOpacity(0.8)
+                          : const Color(0xFF00A896),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: isGradient ? null : (color ?? const Color(0xFF00BFA5)),
+            boxShadow: [
+              BoxShadow(
+                color: (color ?? const Color(0xFF00BFA5)).withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ));
+          child: Center(child: child),
+        ),
+      ),
+    );
   }
 }
 
@@ -1509,34 +1507,35 @@ class PrivacyPolicyScreen extends StatelessWidget {
 
   Widget _buildPrivacySection(String title, String content) {
     return Padding(
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5E9),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(title,
-                  style: GoogleFonts.cairo(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF00BFA5))),
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(5),
             ),
-            Text(content,
+            child: Text(title,
                 style: GoogleFonts.cairo(
-                    fontSize: 15, height: 1.6, color: const Color(0xFF4A5568)),
-                textAlign: TextAlign.right),
-          ],
-        ));
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF00BFA5))),
+          ),
+          Text(content,
+              style: GoogleFonts.cairo(
+                  fontSize: 15, height: 1.6, color: const Color(0xFF4A5568)),
+              textAlign: TextAlign.right),
+        ],
+      ),
+    );
   }
 }
 
 /// =========================
-/// NOTIFICATIONS SCREEN - CRITICAL FIX: Back button always goes to WebViewScreen
+/// NOTIFICATIONS SCREEN — FIXED: Back button safe navigation
 /// =========================
 
 class NotificationsScreen extends StatefulWidget {
@@ -1591,14 +1590,11 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     if (mounted) setState(() {});
   }
 
-  /// CRITICAL FIX: Safe back navigation
-  /// If there's a previous route, just pop. Otherwise navigate to WebViewScreen.
+  /// FIXED: Safe back navigation
   void _handleBack() {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     } else {
-      // No route to go back to (opened from notification when app was killed)
-      // Replace with WebViewScreen as the base
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const WebViewScreen()),
       );
@@ -1608,11 +1604,10 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // CRITICAL FIX: Wrap with WillPopScope to handle system back button
     return WillPopScope(
       onWillPop: () async {
         _handleBack();
-        return false; // We handle navigation ourselves
+        return false;
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF7FAFC),
@@ -2250,7 +2245,7 @@ class NotificationDetailScreen extends StatelessWidget {
 }
 
 /// =========================
-/// WEBVIEW SCREEN - CRITICAL FIXES: Login + Lifecycle
+/// WEBVIEW SCREEN — FIXED: No JS on login, no reload icon, proper disposal
 /// =========================
 
 class WebViewScreen extends StatefulWidget {
@@ -2285,15 +2280,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // Listen for native cleanup requests during app termination
     _cleanupChannel.setMethodCallHandler((call) async {
-      if (call.method == 'dispose') {
-        debugPrint('🧹 [WebView] Received cleanup command from native');
-        _disposeWebView();
-      }
+      if (call.method == 'dispose') _disposeWebView();
     });
-
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted && !_isDisposed) _initializeWebView();
     });
@@ -2301,7 +2290,6 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   @override
   void dispose() {
-    debugPrint('🧹 [WebView] dispose() called');
     WidgetsBinding.instance.removeObserver(this);
     _disposeWebView();
     super.dispose();
@@ -2310,36 +2298,28 @@ class _WebViewScreenState extends State<WebViewScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.detached) {
-      debugPrint('🧹 [WebView] App detached - disposing WebView');
       _disposeWebView();
     }
   }
 
+  /// FIXED: Proper WebView disposal to prevent crash on app termination
   void _disposeWebView() {
     if (_isDisposed) return;
     _isDisposed = true;
-
     if (controller != null) {
       try {
         controller!.loadRequest(Uri.parse('about:blank'));
-        debugPrint('🧹 [WebView] Loaded about:blank for cleanup');
-      } catch (e) {
-        debugPrint('⚠️ [WebView] Error during cleanup: $e');
-      }
+      } catch (_) {}
       controller = null;
-      debugPrint('🧹 [WebView] Controller set to null');
     }
   }
 
   void _initializeWebView() {
     if (_isDisposed) return;
-
     try {
-      // CRITICAL FIX FOR LOGIN: Platform-specific WebView configuration
+      // Platform-specific params for proper cookie/session handling
       late final PlatformWebViewControllerCreationParams params;
-
       if (Platform.isIOS) {
-        // iOS: Use WKWebView with proper cookie/data store configuration
         params = WebKitWebViewControllerCreationParams(
           allowsInlineMediaPlayback: true,
           mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
@@ -2360,16 +2340,12 @@ class _WebViewScreenState extends State<WebViewScreen>
         final androidController =
             controller!.platform as AndroidWebViewController;
         androidController.setMediaPlaybackRequiresUserGesture(false);
-        // CRITICAL FIX FOR LOGIN: Enable DOM storage for session/cookie persistence
-        AndroidWebViewController.enableDebugging(false);
         controller!.enableZoom(true);
       }
 
       if (Platform.isIOS) {
-        final webkitController =
-            controller!.platform as WebKitWebViewController;
-        // CRITICAL FIX FOR LOGIN: Allow navigation gestures on iOS
-        webkitController.setAllowsBackForwardNavigationGestures(true);
+        final wkController = controller!.platform as WebKitWebViewController;
+        wkController.setAllowsBackForwardNavigationGestures(true);
       }
 
       controller!.setNavigationDelegate(NavigationDelegate(
@@ -2388,7 +2364,8 @@ class _WebViewScreenState extends State<WebViewScreen>
               isLoggedIn = !url.contains('/login');
             });
           }
-          if (Platform.isAndroid) {
+          // CRITICAL: Only inject Android fix on non-login pages
+          if (Platform.isAndroid && !url.contains('/login')) {
             Future.delayed(const Duration(milliseconds: 500), () {
               if (!_isDisposed) _injectAndroidFix();
             });
@@ -2413,23 +2390,20 @@ class _WebViewScreenState extends State<WebViewScreen>
           }
           _updateCanGoBack();
 
-          // CRITICAL FIX FOR LOGIN: Inject login helper on login page
-          if (url.contains('/login')) {
-            _hideNotificationsOnLoginPage();
-            _injectLoginFixes();
+          // CRITICAL: Do NOT inject any JavaScript on login page
+          // This prevents triggering rate limiting on the server
+          if (!url.contains('/login')) {
+            if (url.contains('.html')) {
+              setState(() => zoomLevel = 1.0);
+              _autoFitPageToScreen();
+            }
+            if (Platform.isAndroid) _injectAndroidFix();
           }
-
-          if (url.contains('.html')) {
-            if (mounted) setState(() => zoomLevel = 1.0);
-            _autoFitPageToScreen();
-          }
-          if (Platform.isAndroid) _injectAndroidFix();
         },
         onWebResourceError: (WebResourceError error) {
           if (_isDisposed) return;
           debugPrint('❌ WebView Error: ${error.description}');
-          // CRITICAL FIX: Don't show error for sub-resource failures
-          // Only show error if it's the main frame
+          // Only show error for main frame failures
           if (error.isForMainFrame ?? true) {
             if (mounted)
               setState(() {
@@ -2441,8 +2415,6 @@ class _WebViewScreenState extends State<WebViewScreen>
         },
         onNavigationRequest: (NavigationRequest request) {
           if (_isDisposed) return NavigationDecision.prevent;
-          debugPrint('🔗 Navigation request: ${request.url}');
-
           if (request.url.contains('download=1')) {
             String cleanUrl =
                 request.url.replaceAll(RegExp(r'[?&]download=1'), '');
@@ -2458,13 +2430,11 @@ class _WebViewScreenState extends State<WebViewScreen>
             lastNavigatedUrl = request.url;
             navigationCount = 1;
           }
-
-          // CRITICAL FIX FOR LOGIN: Always allow navigation to same domain
           return NavigationDecision.navigate;
         },
       ));
 
-      // CRITICAL FIX FOR LOGIN: Set user agent to look like a real mobile browser
+      // Set a proper mobile browser User-Agent so the server doesn't block us
       controller!.setUserAgent(
         Platform.isIOS
             ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
@@ -2483,79 +2453,12 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  /// CRITICAL FIX FOR LOGIN: Inject JavaScript to fix common login issues
-  Future<void> _injectLoginFixes() async {
-    if (_isDisposed || controller == null) return;
-    try {
-      await controller!.runJavaScript('''
-        (function() {
-          // 1. Fix viewport for proper form rendering
-          var existingViewports = document.querySelectorAll('meta[name="viewport"]');
-          existingViewports.forEach(function(viewport) { viewport.remove(); });
-          var meta = document.createElement('meta');
-          meta.name = 'viewport';
-          meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-          document.getElementsByTagName('head')[0].appendChild(meta);
-
-          // 2. Fix CSRF token issues - ensure the token is fresh
-          var csrfMeta = document.querySelector('meta[name="csrf-token"]');
-          if (csrfMeta) {
-            var token = csrfMeta.getAttribute('content');
-            var csrfInputs = document.querySelectorAll('input[name="_token"]');
-            csrfInputs.forEach(function(input) {
-              input.value = token;
-            });
-          }
-
-          // 3. Fix form submission - ensure forms submit normally
-          var forms = document.querySelectorAll('form');
-          forms.forEach(function(form) {
-            // Remove any duplicate event listeners by cloning
-            var newForm = form.cloneNode(true);
-            form.parentNode.replaceChild(newForm, form);
-          });
-
-          // 4. Enable autocomplete on login fields
-          var inputs = document.querySelectorAll('input[type="text"], input[type="email"], input[type="password"]');
-          inputs.forEach(function(input) {
-            input.setAttribute('autocomplete', 'on');
-            input.setAttribute('autocorrect', 'off');
-            input.setAttribute('autocapitalize', 'off');
-          });
-
-          // 5. Fix any JavaScript errors that prevent form submission
-          window.onerror = function(msg, url, lineNo, columnNo, error) {
-            console.log('JS Error caught: ' + msg);
-            return false; // Don't prevent default error handling
-          };
-
-          // 6. Fix fetch/XMLHttpRequest to include credentials
-          if (window.fetch) {
-            var originalFetch = window.fetch;
-            window.fetch = function(url, options) {
-              options = options || {};
-              options.credentials = options.credentials || 'same-origin';
-              return originalFetch.call(this, url, options);
-            };
-          }
-
-          console.log('✅ Login fixes injected');
-        })();
-      ''');
-      debugPrint('✅ Login fixes injected successfully');
-    } catch (e) {
-      debugPrint('⚠️ Error injecting login fixes: $e');
-    }
-  }
-
   Future<void> _updateCanGoBack() async {
     if (_isDisposed || controller == null) return;
     try {
       final canNavigateBack = await controller!.canGoBack();
       if (mounted) setState(() => canGoBack = canNavigateBack);
-    } catch (e) {
-      debugPrint('⚠️ Error checking canGoBack: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _autoFitPageToScreen() async {
@@ -2582,19 +2485,15 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   void _zoomIn() {
-    if (_isDisposed) return;
-    if (zoomLevel < 3.0) {
-      setState(() => zoomLevel += 0.2);
-      _applyZoom();
-    }
+    if (_isDisposed || zoomLevel >= 3.0) return;
+    setState(() => zoomLevel += 0.2);
+    _applyZoom();
   }
 
   void _zoomOut() {
-    if (_isDisposed) return;
-    if (zoomLevel > 0.5) {
-      setState(() => zoomLevel -= 0.2);
-      _applyZoom();
-    }
+    if (_isDisposed || zoomLevel <= 0.5) return;
+    setState(() => zoomLevel -= 0.2);
+    _applyZoom();
   }
 
   Future<void> _applyZoom() async {
@@ -2612,20 +2511,6 @@ class _WebViewScreenState extends State<WebViewScreen>
       ''');
     } catch (e) {
       debugPrint('❌ Error applying zoom: $e');
-    }
-  }
-
-  Future<void> _hideNotificationsOnLoginPage() async {
-    if (_isDisposed || controller == null) return;
-    try {
-      await controller!.runJavaScript('''
-        (function() {
-          var notifications = document.querySelectorAll('.alert, .notification, .toast, [role="alert"], .flash-message');
-          notifications.forEach(function(notif) { notif.style.display = 'none'; });
-        })();
-      ''');
-    } catch (e) {
-      debugPrint('⚠️ Error hiding notifications: $e');
     }
   }
 
@@ -2872,6 +2757,8 @@ class _WebViewScreenState extends State<WebViewScreen>
                     fontSize: 18, fontWeight: FontWeight.bold)),
           ),
           actions: [
+            // Only show notification icon when NOT on login page
+            // No reload icon at all
             if (!isOnLoginPage)
               NotificationIcon(onTap: () {
                 Navigator.push(
@@ -2879,17 +2766,6 @@ class _WebViewScreenState extends State<WebViewScreen>
                     MaterialPageRoute(
                         builder: (context) => const NotificationsScreen()));
               }),
-            // CRITICAL FIX FOR LOGIN: Add reload button
-            //  if (isOnLoginPage)
-            //  IconButton(
-            //   icon: const Icon(Icons.refresh),
-            // tooltip: 'إعادة تحميل',
-            //  onPressed: () {
-            //    if (controller != null && !_isDisposed) {
-            //   controller!.reload();
-            //  }
-            //   },
-            // ),
           ],
         ),
         body: Stack(children: [
