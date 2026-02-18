@@ -23,6 +23,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 import 'notification_service.dart';
+import 'firebase_options.dart';
+
+// ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
+final Set<String> _handledNotificationIds = {};
 
 /// =========================
 /// DATA MODEL
@@ -37,8 +41,6 @@ class NotificationItem {
   final Map<String, dynamic> data;
   bool isRead;
   final String type;
-  bool isDeleted;
-  final String source; // Track source: 'fcm', 'mysql', 'local'
 
   NotificationItem({
     required this.id,
@@ -49,8 +51,6 @@ class NotificationItem {
     required this.data,
     this.isRead = false,
     this.type = 'general',
-    this.isDeleted = false,
-    this.source = 'unknown',
   });
 
   Map<String, dynamic> toJson() {
@@ -63,8 +63,6 @@ class NotificationItem {
       'data': data,
       'isRead': isRead,
       'type': type,
-      'isDeleted': isDeleted,
-      'source': source,
     };
   }
 
@@ -75,12 +73,11 @@ class NotificationItem {
       body: json['body'] ?? '',
       imageUrl: json['imageUrl'],
       timestamp: DateTime.fromMillisecondsSinceEpoch(
-          json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch),
+              json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch)
+          .toUtc(),
       data: json['data'] != null ? Map<String, dynamic>.from(json['data']) : {},
       isRead: json['isRead'] ?? false,
       type: json['type'] ?? 'general',
-      isDeleted: json['isDeleted'] ?? false,
-      source: json['source'] ?? 'unknown',
     );
   }
 
@@ -90,54 +87,79 @@ class NotificationItem {
         message.notification?.apple?.imageUrl ??
         message.data['image'];
 
-    String title = message.data['title']?.toString() ?? '';
-    String body = message.data['body']?.toString() ?? '';
+    String title =
+        message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
+    String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    if (title.isEmpty) {
-      title = message.notification?.title ?? '';
-    }
-    if (body.isEmpty) {
-      body = message.notification?.body ?? '';
+    String id = message.data['id']?.toString() ??
+        message.messageId ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    DateTime timestamp;
+    try {
+      if (message.data['sent_at'] != null) {
+        timestamp = DateTime.parse(message.data['sent_at']).toUtc();
+      } else if (message.data['timestamp'] != null) {
+        timestamp = DateTime.parse(message.data['timestamp']).toUtc();
+      } else if (message.sentTime != null) {
+        timestamp = DateTime.fromMillisecondsSinceEpoch(
+                message.sentTime!.millisecondsSinceEpoch)
+            .toUtc();
+      } else {
+        timestamp = DateTime.now().toUtc();
+      }
+    } catch (e) {
+      timestamp = DateTime.now().toUtc();
     }
 
     return NotificationItem(
-      id: message.messageId ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}',
-      title: title.isNotEmpty ? title : 'إشعار جديد',
+      id: id,
+      title: title,
       body: body,
       imageUrl: imageUrl,
-      timestamp: DateTime.now(),
+      timestamp: timestamp,
       data: message.data,
-      isRead: false,
+      isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
       type: message.data['type'] ?? 'general',
-      source: 'fcm',
     );
   }
 
   factory NotificationItem.fromMySQL(Map<String, dynamic> map) {
+    // استخدم firebase_message_id إن وجد، وإلا الرقم التسلسلي كحل أخير
+    final String id = (map['message_id']?.toString().isNotEmpty ?? false)
+        ? map['message_id'].toString()
+        : map['id'].toString();
+
     Map<String, dynamic> payload = {};
     if (map['data_payload'] != null) {
       if (map['data_payload'] is String &&
           map['data_payload'].toString().isNotEmpty) {
         try {
           payload = jsonDecode(map['data_payload']);
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       } else if (map['data_payload'] is Map) {
         payload = Map<String, dynamic>.from(map['data_payload']);
       }
     }
 
+    DateTime timestamp;
+    try {
+      timestamp = map['sent_at'] != null
+          ? DateTime.parse(map['sent_at']).toUtc()
+          : DateTime.now().toUtc();
+    } catch (e) {
+      timestamp = DateTime.now().toUtc();
+    }
+
     return NotificationItem(
-      id: map['id'].toString(),
+      id: id,
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       imageUrl: map['image_url'],
-      timestamp: DateTime.tryParse(map['sent_at'] ?? '') ?? DateTime.now(),
+      timestamp: timestamp,
       data: payload,
       isRead: false,
       type: map['type'] ?? 'general',
-      source: 'mysql',
     );
   }
 }
@@ -157,85 +179,47 @@ class NotificationManager extends ChangeNotifier {
   int _unreadCount = 0;
   bool _isSyncing = false;
   Set<String> _deletedIds = {};
-  Set<String> _processedMessageIds = {}; // Track processed FCM message IDs
-  Set<String> _processedMySQLIds = {}; // Track processed MySQL IDs
-  DateTime _lastSyncTime = DateTime.now().subtract(const Duration(minutes: 5));
+  final Set<String> _processedInSession = {};
 
-  List<NotificationItem> get notifications =>
-      List.unmodifiable(_notifications.where((n) => !n.isDeleted).toList());
+  List<NotificationItem> get notifications => List.unmodifiable(_notifications);
   int get unreadCount => _unreadCount;
   bool get isSyncing => _isSyncing;
 
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
-  static const String _processedMessageIdsKey = 'processed_fcm_ids';
-  static const String _processedMySQLIdsKey = 'processed_mysql_ids';
 
-  /// FORCE LOAD FROM DISK
   Future<void> loadNotifications() async {
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
-      // Load deleted IDs
-      final deletedIdsStr = prefs.getString(_deletedIdsKey);
-      if (deletedIdsStr != null) {
-        _deletedIds = Set<String>.from(jsonDecode(deletedIdsStr));
-      }
-
-      // Load processed FCM IDs
-      final processedFcmStr = prefs.getString(_processedMessageIdsKey);
-      if (processedFcmStr != null) {
-        _processedMessageIds = Set<String>.from(jsonDecode(processedFcmStr));
-        // Keep only last 500 to prevent memory issues
-        if (_processedMessageIds.length > 500) {
-          _processedMessageIds = _processedMessageIds.skip(300).toSet();
-        }
-      }
-
-      // Load processed MySQL IDs
-      final processedMySqlStr = prefs.getString(_processedMySQLIdsKey);
-      if (processedMySqlStr != null) {
-        _processedMySQLIds = Set<String>.from(jsonDecode(processedMySqlStr));
-        if (_processedMySQLIds.length > 500) {
-          _processedMySQLIds = _processedMySQLIds.skip(300).toSet();
-        }
-      }
-
-      // Load notifications
       final jsonStr = prefs.getString(_storageKey);
+      final deletedJson = prefs.getString(_deletedIdsKey);
 
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
         _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
-
-        // Mark notifications as deleted if in deletedIds
-        for (var notification in _notifications) {
-          if (_deletedIds.contains(notification.id)) {
-            notification.isDeleted = true;
-          }
-        }
-
         _sortAndCount();
-        notifyListeners();
         debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
+      }
+
+      if (deletedJson != null) {
+        _deletedIds = Set<String>.from(jsonDecode(deletedJson));
       }
     } catch (e) {
       debugPrint('❌ [Manager] Load Error: $e');
     }
   }
 
-  /// SYNC FROM SERVER AND DISK - COMPLETELY FIXED to prevent duplicates
   Future<void> fetchFromMySQL() async {
-    // Prevent too frequent syncs
-    if (DateTime.now().difference(_lastSyncTime).inSeconds < 30) {
-      debugPrint('⏱️ [Manager] Skipping sync - too frequent');
-      return;
-    }
-
     if (_isSyncing) return;
     _isSyncing = true;
-    _lastSyncTime = DateTime.now();
     Future.microtask(() => notifyListeners());
 
     try {
@@ -258,26 +242,13 @@ class NotificationManager extends ChangeNotifier {
       };
 
       bool hasChanges = false;
-      int newItemsCount = 0;
 
       for (var serverItem in serverItems) {
-        // Skip if this ID is deleted locally
-        if (_deletedIds.contains(serverItem.id)) {
-          continue;
-        }
-
-        // Skip if we've already processed this MySQL ID recently
-        if (_processedMySQLIds.contains(serverItem.id)) {
-          debugPrint(
-              '⏭️ [Manager] Skipping already processed MySQL ID: ${serverItem.id}');
-          continue;
-        }
+        if (_deletedIds.contains(serverItem.id)) continue;
 
         if (localMap.containsKey(serverItem.id)) {
           final localItem = localMap[serverItem.id]!;
-          // Update only if server item is newer and not deleted
-          if (serverItem.timestamp.isAfter(localItem.timestamp) &&
-              !localItem.isDeleted) {
+          if (serverItem.timestamp.isAfter(localItem.timestamp)) {
             localMap[serverItem.id] = NotificationItem(
               id: serverItem.id,
               title: serverItem.title,
@@ -287,57 +258,29 @@ class NotificationManager extends ChangeNotifier {
               data: serverItem.data,
               type: serverItem.type,
               isRead: localItem.isRead,
-              isDeleted: false,
-              source: 'mysql',
             );
             hasChanges = true;
-            debugPrint(
-                '🔄 [Manager] Updated existing notification: ${serverItem.id}');
           }
         } else {
-          // Check if this is a duplicate of an FCM notification
-          bool isDuplicate = _notifications.any((n) =>
-              n.title == serverItem.title &&
-              n.body == serverItem.body &&
-              (n.timestamp.difference(serverItem.timestamp).inSeconds < 10));
-
-          if (!isDuplicate) {
-            // New notification from server
-            localMap[serverItem.id] = serverItem;
-            _processedMySQLIds.add(serverItem.id);
-            newItemsCount++;
-            hasChanges = true;
-            debugPrint('✅ [Manager] New MySQL notification: ${serverItem.id}');
-          } else {
-            debugPrint(
-                '⏭️ [Manager] Skipping duplicate MySQL notification: ${serverItem.id}');
-          }
+          localMap[serverItem.id] = serverItem;
+          hasChanges = true;
         }
       }
 
+      localMap.removeWhere((id, _) => _deletedIds.contains(id));
       _notifications = localMap.values.toList();
-
-      // Filter out deleted ones for sorting
-      final activeNotifications =
-          _notifications.where((n) => !n.isDeleted).toList();
-      activeNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
-      // Rebuild list with active first, then deleted
-      final deletedNotifications =
-          _notifications.where((n) => n.isDeleted).toList();
-      _notifications = [...activeNotifications, ...deletedNotifications];
+      _sortAndCount();
 
       if (_notifications.length > 200) {
         _notifications = _notifications.take(200).toList();
       }
 
-      _updateUnreadCount();
-
       if (hasChanges) {
         await _saveToDisk();
-        debugPrint(
-            '📦 [Manager] Saved ${newItemsCount} new notifications to disk');
       }
+
+      debugPrint(
+          '✅ [Manager] MySQL sync completed: ${_notifications.length} notifications');
     } catch (e) {
       debugPrint('❌ [Manager] Sync Error: $e');
     } finally {
@@ -346,114 +289,125 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// ADD FIREBASE MESSAGE - COMPLETELY FIXED to prevent duplicates
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    final messageId =
-        message.messageId ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}';
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
+        'msg_${DateTime.now().millisecondsSinceEpoch}';
 
-    // Check if we already processed this exact message ID
-    if (_processedMessageIds.contains(messageId)) {
-      debugPrint('⚠️ [Manager] Duplicate FCM message skipped (ID): $messageId');
+    if (_processedInSession.contains(messageId)) {
+      debugPrint(
+          '⚠️ [Manager] Message $messageId already processed in session, skipping');
       return;
     }
 
     final item = NotificationItem.fromFirebaseMessage(message);
 
-    // Skip if this ID is deleted
-    if (_deletedIds.contains(item.id)) {
-      debugPrint('⚠️ [Manager] Skipping deleted notification: ${item.id}');
-      _processedMessageIds.add(messageId);
-      await _saveProcessedIds();
-      return;
-    }
-
-    // Skip empty notifications
     if (item.title.isEmpty ||
         (item.title == 'إشعار جديد' && item.body.isEmpty)) {
       debugPrint('❌ [Manager] Skipping empty notification');
-      _processedMessageIds.add(messageId);
-      await _saveProcessedIds();
       return;
+    }
+
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
+      return;
+    }
+
+    _processedInSession.add(messageId);
+    _handledNotificationIds.add(messageId);
+
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
     }
 
     await loadNotifications();
 
-    // Check for duplicates based on content similarity (not just ID)
-    bool isDuplicate = false;
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
 
-    // Check by exact ID first
-    final existingById =
-        _notifications.any((n) => n.id == item.id && !n.isDeleted);
-    if (existingById) {
-      isDuplicate = true;
-      debugPrint('⚠️ [Manager] Duplicate by ID: ${item.id}');
-    }
-
-    // Check by content similarity (for cases where ID might be different)
-    if (!isDuplicate) {
-      for (var existing in _notifications) {
-        if (!existing.isDeleted) {
-          // Check if same title and body within 10 seconds
-          if (existing.title == item.title &&
-              existing.body == item.body &&
-              existing.timestamp.difference(item.timestamp).inSeconds.abs() <
-                  10) {
-            isDuplicate = true;
-            debugPrint('⚠️ [Manager] Duplicate by content: ${item.title}');
-            break;
-          }
-
-          // Check if same ID pattern (FCM sometimes changes ID)
-          if (existing.id
-                  .contains(item.id.substring(0, min(20, item.id.length))) ||
-              item.id.contains(
-                  existing.id.substring(0, min(20, existing.id.length)))) {
-            isDuplicate = true;
-            debugPrint('⚠️ [Manager] Duplicate by ID pattern');
-            break;
-          }
-        }
+    if (existingIndex != -1) {
+      final existing = _notifications[existingIndex];
+      if (item.timestamp.isAfter(existing.timestamp)) {
+        _notifications[existingIndex] = item;
+        _sortAndCount();
+        await _saveToDisk();
+        notifyListeners();
+        debugPrint('✅ [Manager] Updated existing notification: ${item.id}');
+      } else {
+        debugPrint(
+            '⚠️ [Manager] Notification ${item.id} already exists and is newer, skipping');
       }
-    }
-
-    if (isDuplicate) {
-      _processedMessageIds.add(messageId);
-      await _saveProcessedIds();
       return;
     }
 
-    // Add new notification
     _notifications.insert(0, item);
-    _processedMessageIds.add(messageId);
-    _processedMySQLIds.add(item.id);
-
-    debugPrint('✅ [Manager] Added new notification: ${item.title}');
-
     _sortAndCount();
     await _saveToDisk();
-    await _saveProcessedIds();
     notifyListeners();
+    debugPrint('✅ [Manager] Added new notification: ${item.id}');
   }
 
-  int min(int a, int b) => a < b ? a : b;
+  Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
+    final item = NotificationItem.fromJson(data);
+
+    if (_processedInSession.contains(item.id)) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
+      return;
+    }
+
+    if (item.title.isEmpty ||
+        (item.title == 'إشعار جديد' && item.body.isEmpty)) {
+      debugPrint('❌ [Manager] Skipping empty notification from native');
+      return;
+    }
+
+    if (_deletedIds.contains(item.id)) {
+      debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
+      return;
+    }
+
+    _processedInSession.add(item.id);
+    _handledNotificationIds.add(item.id);
+
+    int waitCount = 0;
+    while (_isSyncing && waitCount < 50) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    await loadNotifications();
+
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
+
+    if (existingIndex != -1) {
+      debugPrint(
+          '⚠️ [Manager] Native notification ${item.id} already exists, skipping');
+      return;
+    }
+
+    _notifications.insert(0, item);
+    _sortAndCount();
+    await _saveToDisk();
+    notifyListeners();
+    debugPrint('✅ [Manager] Added native notification: ${item.id}');
+  }
 
   Future<void> markAsRead(String id) async {
     final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1 &&
-        !_notifications[index].isRead &&
-        !_notifications[index].isDeleted) {
+    if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
       await _saveToDisk();
       notifyListeners();
-      NotificationService.markAsRead(id);
     }
   }
 
   Future<void> markAllAsRead() async {
     bool changed = false;
     for (var n in _notifications) {
-      if (!n.isRead && !n.isDeleted) {
+      if (!n.isRead) {
         n.isRead = true;
         changed = true;
       }
@@ -465,37 +419,26 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
-  /// DELETE NOTIFICATION
   Future<void> deleteNotification(String id) async {
-    final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1) {
-      _notifications[index].isDeleted = true;
-      _deletedIds.add(id);
-
-      _updateUnreadCount();
-      await _saveToDisk();
-      notifyListeners();
-      debugPrint('🗑️ [Manager] Notification marked as deleted: $id');
-    }
-  }
-
-  Future<void> clearAllNotifications() async {
-    for (var notification in _notifications) {
-      if (!notification.isDeleted) {
-        notification.isDeleted = true;
-        _deletedIds.add(notification.id);
-      }
-    }
+    _notifications.removeWhere((n) => n.id == id);
+    _deletedIds.add(id);
     _updateUnreadCount();
     await _saveToDisk();
     notifyListeners();
-    debugPrint('🗑️ [Manager] All notifications cleared');
+  }
+
+  Future<void> clearAllNotifications() async {
+    _deletedIds.addAll(_notifications.map((n) => n.id));
+    _notifications.clear();
+    _updateUnreadCount();
+    await _saveToDisk();
+    notifyListeners();
   }
 
   List<NotificationItem> searchNotifications(String query) {
-    if (query.isEmpty) return notifications;
+    if (query.isEmpty) return _notifications;
     final q = query.toLowerCase();
-    return notifications
+    return _notifications
         .where((n) =>
             n.title.toLowerCase().contains(q) ||
             n.body.toLowerCase().contains(q))
@@ -503,23 +446,38 @@ class NotificationManager extends ChangeNotifier {
   }
 
   void _sortAndCount() {
-    final activeNotifications =
-        _notifications.where((n) => !n.isDeleted).toList();
-    activeNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
-    final deletedNotifications =
-        _notifications.where((n) => n.isDeleted).toList();
-    _notifications = [...activeNotifications, ...deletedNotifications];
-
+    final Map<String, NotificationItem> deduplicatedMap = {};
+    for (var notification in _notifications) {
+      if (!deduplicatedMap.containsKey(notification.id)) {
+        deduplicatedMap[notification.id] = notification;
+      } else {
+        final existing = deduplicatedMap[notification.id]!;
+        if (notification.timestamp.isAfter(existing.timestamp)) {
+          deduplicatedMap[notification.id] = notification;
+        }
+      }
+    }
+    _notifications = deduplicatedMap.values.toList();
+    _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     _updateUnreadCount();
   }
 
   void _updateUnreadCount() {
-    _unreadCount =
-        _notifications.where((n) => !n.isRead && !n.isDeleted).length;
+    _unreadCount = _notifications.where((n) => !n.isRead).length;
   }
 
   Future<void> _saveToDisk() async {
+    int waitCount = 0;
+    while (NotificationService.isWriting && waitCount < 100) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Manager] Lock timeout - skipping save');
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
@@ -527,63 +485,32 @@ class NotificationManager extends ChangeNotifier {
       final jsonStr =
           jsonEncode(_notifications.map((e) => e.toJson()).toList());
       await prefs.setString(_storageKey, jsonStr);
-
       await prefs.setString(_deletedIdsKey, jsonEncode(_deletedIds.toList()));
+
+      debugPrint(
+          '💾 [Manager] Saved ${_notifications.length} notifications to disk');
     } catch (e) {
       debugPrint('❌ [Manager] Save Error: $e');
     }
   }
-
-  Future<void> _saveProcessedIds() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-
-      await prefs.setString(
-          _processedMessageIdsKey, jsonEncode(_processedMessageIds.toList()));
-
-      await prefs.setString(
-          _processedMySQLIdsKey, jsonEncode(_processedMySQLIds.toList()));
-    } catch (e) {
-      debugPrint('❌ [Manager] Save Processed IDs Error: $e');
-    }
-  }
-
-  void cleanOldProcessedIds() {
-    if (_processedMessageIds.length > 500) {
-      _processedMessageIds = _processedMessageIds.skip(300).toSet();
-    }
-    if (_processedMySQLIds.length > 500) {
-      _processedMySQLIds = _processedMySQLIds.skip(300).toSet();
-    }
-    _saveProcessedIds();
-  }
 }
 
 /// =========================
-/// LOCAL NOTIFICATION SERVICE (ANDROID + iOS)
+/// LOCAL NOTIFICATION SERVICE
 /// =========================
+
 class LocalNotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  static Future<void> initialize() async {
+  static void initialize() {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const DarwinInitializationSettings initializationSettingsIOS =
-        DarwinInitializationSettings(
-      requestAlertPermission: false,
-      requestBadgePermission: false,
-      requestSoundPermission: false,
-    );
-
     const InitializationSettings initializationSettings =
-        InitializationSettings(
-      android: initializationSettingsAndroid,
-      iOS: initializationSettingsIOS,
-    );
+        InitializationSettings(android: initializationSettingsAndroid);
 
-    await _notificationsPlugin.initialize(
+    _notificationsPlugin.initialize(
       settings: initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse details) {
         debugPrint('🔔 Local Notification Tapped');
@@ -592,10 +519,11 @@ class LocalNotificationService {
     );
   }
 
-  static Future<void> showNotification(RemoteMessage message) async {
+  static void showNotification(RemoteMessage message) async {
+    if (!Platform.isAndroid) return;
+
     try {
       final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
         'high_importance_channel',
@@ -604,24 +532,13 @@ class LocalNotificationService {
         priority: Priority.high,
         showWhen: true,
       );
-
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      );
-
-      const NotificationDetails platformChannelSpecifics = NotificationDetails(
-        android: androidPlatformChannelSpecifics,
-        iOS: iosDetails,
-      );
+      const NotificationDetails platformChannelSpecifics =
+          NotificationDetails(android: androidPlatformChannelSpecifics);
 
       await _notificationsPlugin.show(
         id: id,
-        title: message.notification?.title ??
-            (message.data['title']?.toString() ?? 'إشعار جديد'),
-        body: message.notification?.body ??
-            (message.data['body']?.toString() ?? ''),
+        title: message.notification?.title ?? 'إشعار جديد',
+        body: message.notification?.body ?? '',
         notificationDetails: platformChannelSpecifics,
         payload: jsonEncode(message.data),
       );
@@ -631,15 +548,13 @@ class LocalNotificationService {
   }
 }
 
-void _navigateToNotifications() async {
-  await NotificationManager.instance.loadNotifications();
-
+void _navigateToNotifications() {
   if (navigatorKey.currentState != null) {
     navigatorKey.currentState!.push(
       MaterialPageRoute(builder: (context) => const NotificationsScreen()),
     );
   } else {
-    Future.delayed(const Duration(milliseconds: 500), () {
+    Future.delayed(const Duration(milliseconds: 300), () {
       navigatorKey.currentState?.push(
         MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
@@ -653,18 +568,9 @@ void _navigateToNotifications() async {
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   debugPrint('🌙 [BG] Message Received: ${message.messageId}');
-
-  final hasTitle = (message.data['title']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.title ?? '').isNotEmpty;
-  final hasBody = (message.data['body']?.toString() ?? '').isNotEmpty ||
-      (message.notification?.body ?? '').isNotEmpty;
-
-  if (!hasTitle && !hasBody) {
-    debugPrint('🌙 [BG] Skipping empty notification - no title or body');
-    return;
-  }
 
   final item = NotificationItem.fromFirebaseMessage(message);
 
@@ -673,35 +579,85 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  final prefs = await SharedPreferences.getInstance();
-
-  final deletedIdsStr = prefs.getString('deleted_notification_ids');
-  if (deletedIdsStr != null) {
-    final deletedIds = Set<String>.from(jsonDecode(deletedIdsStr));
-    if (deletedIds.contains(item.id)) {
-      debugPrint('🌙 [BG] Skipping deleted notification: ${item.id}');
-      return;
-    }
-  }
-
-  final processedFcmStr = prefs.getString('processed_fcm_ids');
-  if (processedFcmStr != null) {
-    final processedIds = Set<String>.from(jsonDecode(processedFcmStr));
-    final msgId = message.messageId;
-    if (msgId != null && processedIds.contains(msgId)) {
-      debugPrint('🌙 [BG] Skipping already processed FCM message: $msgId');
-      return;
-    }
-  }
-
+  await Future.delayed(const Duration(milliseconds: 500));
   await NotificationService.saveToLocalDisk(item.toJson());
-  debugPrint('🌙 [BG] Notification Saved to Disk: ${item.title}');
+  debugPrint('🌙 [BG] Notification Saved: ${item.id}');
+}
+
+/// =========================
+/// METHOD CHANNEL FOR iOS NOTIFICATIONS
+/// =========================
+
+class NotificationMethodChannel {
+  static const MethodChannel _channel = MethodChannel('notification_handler');
+
+  static void setupListener() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'saveNotification') {
+        debugPrint('📱 [iOS Channel] Received notification from native iOS');
+        final Map<String, dynamic> data =
+            Map<String, dynamic>.from(call.arguments);
+
+        await Future.delayed(const Duration(milliseconds: 200));
+        await NotificationManager.instance.addNotificationFromNative(data);
+      } else if (call.method == 'navigateToNotifications') {
+        debugPrint('📱 [iOS Channel] Navigation command received');
+        Future.delayed(const Duration(milliseconds: 300), () {
+          navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(
+                builder: (context) => const NotificationsScreen()),
+            (route) => false,
+          );
+        });
+      }
+    });
+  }
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// =========================
-/// MAIN
+/// APP LIFECYCLE HANDLER
+/// =========================
+
+class AppLifecycleHandler extends StatefulWidget {
+  final Widget child;
+  const AppLifecycleHandler({required this.child, Key? key}) : super(key: key);
+
+  @override
+  State<AppLifecycleHandler> createState() => _AppLifecycleHandlerState();
+}
+
+class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('📱 [AppLifecycle] App resumed - syncing notifications');
+      NotificationManager.instance.fetchFromMySQL();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
+  }
+}
+
+/// =========================
+/// MAIN - الحل النهائي ✅
 /// =========================
 
 void main() async {
@@ -709,9 +665,9 @@ void main() async {
   await initializeDateFormatting('ar_IQ', null);
 
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform);
 
-    // iOS foreground presentation (to behave like Android)
     await FirebaseMessaging.instance
         .setForegroundNotificationPresentationOptions(
       alert: true,
@@ -719,30 +675,41 @@ void main() async {
       sound: true,
     );
 
-    await LocalNotificationService.initialize();
+    LocalNotificationService.initialize();
+    NotificationMethodChannel.setupListener();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
     await NotificationManager.instance.loadNotifications();
 
     final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission(alert: true, badge: true, sound: true);
 
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+
+    debugPrint('🔔 Notification permissions: ${settings.authorizationStatus}');
     await messaging.subscribeToTopic('all_employees');
+
+    final token = await messaging.getToken();
+    debugPrint('🔑 FCM Token: $token');
 
     if (Platform.isAndroid) {
       await _requestIgnoreBatteryOptimizations();
     }
 
     await _setupNotificationNavigation(messaging);
-
-    Timer.periodic(const Duration(hours: 1), (_) {
-      NotificationManager.instance.cleanOldProcessedIds();
-    });
   } catch (e) {
     debugPrint('❌ Init Error: $e');
   }
 
-  runApp(const MyApp());
+  runApp(
+    AppLifecycleHandler(
+      child: const MyApp(),
+    ),
+  );
 }
 
 Future<void> _requestIgnoreBatteryOptimizations() async {
@@ -756,33 +723,30 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
   }
 }
 
+/// =========================
+/// ✅ الحل النهائي - القاعدة الذهبية
+/// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  try {
-    final initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint('🚀 [Launch] App opened from Terminated via Notification');
-      await NotificationManager.instance.addFirebaseMessage(initialMessage);
-      Future.delayed(const Duration(seconds: 1), () {
-        _navigateToNotifications();
-      });
-    }
-  } catch (e) {
-    debugPrint('Error getting initial message: $e');
-  }
+  // 1️⃣ عند وصول الإشعار والتطبيق مفتوح (Foreground) - نحفظ فقط
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    debugPrint('📱 [Foreground] Saving notification...');
+    NotificationManager.instance.addFirebaseMessage(message);
+  });
 
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
-    debugPrint('👆 [Click] App opened from Background via Notification');
-    await NotificationManager.instance.addFirebaseMessage(message);
+  // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    debugPrint('👆 [Background Click] Navigating only...');
     _navigateToNotifications();
   });
 
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('🌞 [FG] Notification received while app is open');
-    NotificationManager.instance.addFirebaseMessage(message);
-
-    // show on iOS too (same as Android)
-    LocalNotificationService.showNotification(message);
-  });
+  // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
+  final initialMessage = await messaging.getInitialMessage();
+  if (initialMessage != null) {
+    debugPrint('🚀 [Terminated Launch] Navigating only...');
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _navigateToNotifications();
+    });
+  }
 }
 
 /// =========================
@@ -832,14 +796,18 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    NotificationManager.instance.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [Lifecycle] App Resumed - Syncing notifications...');
-      NotificationManager.instance.loadNotifications();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        NotificationManager.instance.loadNotifications().then((_) {
+          NotificationManager.instance.fetchFromMySQL();
+        });
+      });
     }
   }
 
@@ -862,9 +830,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 }
 
-// --------------------------------------------------------
-// UI COMPONENTS
-// --------------------------------------------------------
+/// =========================
+/// UI COMPONENTS
+/// =========================
 
 class ModernCard extends StatelessWidget {
   final Widget child;
@@ -1033,222 +1001,9 @@ class NotificationIcon extends StatelessWidget {
   }
 }
 
-// --------------------------------------------------------
-// SCREENS
-// --------------------------------------------------------
-
-class NotificationDetailScreen extends StatelessWidget {
-  final NotificationItem notification;
-
-  const NotificationDetailScreen({Key? key, required this.notification})
-      : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: Text(
-          'تفاصيل الإشعار',
-          style: GoogleFonts.cairo(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              notification.title,
-              style: GoogleFonts.cairo(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF2D3748),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  Icons.access_time,
-                  size: 16,
-                  color: Colors.grey[600],
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  _formatTimestamp(notification.timestamp),
-                  style: GoogleFonts.cairo(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _getNotificationColor(notification.type)
-                        .withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _getNotificationTypeLabel(notification.type),
-                    style: GoogleFonts.cairo(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: _getNotificationColor(notification.type),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 32),
-            if (notification.imageUrl != null &&
-                notification.imageUrl!.isNotEmpty)
-              Column(
-                children: [
-                  Container(
-                    height: 250,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: Colors.grey[100],
-                    ),
-                    child: _buildNotificationImage(notification.imageUrl!),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ),
-            Text(
-              notification.body,
-              textAlign: TextAlign.justify,
-              style: GoogleFonts.cairo(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                height: 1.6,
-                color: const Color(0xFF4A5568),
-              ),
-            ),
-            const SizedBox(height: 32),
-            Text(
-              'الشركة العامة لتعبئة وخدمات الغاز',
-              style: GoogleFonts.cairo(
-                fontSize: 10,
-                color: const Color(0xFF2D3748),
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotificationImage(String imageUrl) {
-    try {
-      Uri uri = Uri.parse(imageUrl);
-
-      if (!uri.hasScheme) {
-        uri = Uri.parse('https://$imageUrl');
-      }
-
-      if (uri.scheme == 'http' || uri.scheme == 'https') {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: CachedNetworkImage(
-            imageUrl: uri.toString(),
-            width: double.infinity,
-            height: 250,
-            fit: BoxFit.cover,
-            placeholder: (context, url) => Container(
-              color: Colors.grey[200],
-              child: const Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF00BFA5),
-                ),
-              ),
-            ),
-            errorWidget: (context, url, error) {
-              return Container(
-                color: Colors.grey[100],
-                child: Center(
-                  child: Icon(
-                    Icons.image_not_supported_outlined,
-                    color: Colors.grey[400],
-                    size: 50,
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      } else {
-        return _buildFallbackImage();
-      }
-    } catch (e) {
-      return _buildFallbackImage();
-    }
-  }
-
-  Widget _buildFallbackImage() {
-    return Container(
-      color: Colors.grey[100],
-      child: Center(
-        child: Icon(
-          Icons.image_not_supported_outlined,
-          color: Colors.grey[400],
-          size: 50,
-        ),
-      ),
-    );
-  }
-
-  Color _getNotificationColor(String type) {
-    switch (type) {
-      case 'salary':
-        return Colors.green;
-      case 'announcement':
-        return Colors.blue;
-      case 'department':
-        return Colors.orange;
-      case 'test':
-        return Colors.purple;
-      default:
-        return const Color(0xFF00BFA5);
-    }
-  }
-
-  String _getNotificationTypeLabel(String type) {
-    switch (type) {
-      case 'salary':
-        return 'راتب';
-      case 'announcement':
-        return 'إعلان';
-      case 'department':
-        return 'قسم';
-      case 'test':
-        return 'اختبار';
-      default:
-        return 'عام';
-    }
-  }
-
-  String _formatTimestamp(DateTime timestamp) {
-    try {
-      final dateFormat = DateFormat('yyyy-MM-dd HH:mm', 'ar_IQ');
-      return dateFormat.format(timestamp);
-    } catch (e) {
-      return '${timestamp.year}-${timestamp.month}-${timestamp.day} ${timestamp.hour}:${timestamp.minute}';
-    }
-  }
-}
+/// =========================
+/// SPLASH SCREEN
+/// =========================
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
@@ -1449,6 +1204,10 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
+/// =========================
+/// PRIVACY POLICY SCREEN
+/// =========================
+
 class PrivacyPolicyScreen extends StatelessWidget {
   const PrivacyPolicyScreen({Key? key}) : super(key: key);
 
@@ -1607,7 +1366,10 @@ class PrivacyPolicyScreen extends StatelessWidget {
   }
 }
 
-// Notifications Screen - FIXED
+/// =========================
+/// NOTIFICATIONS SCREEN
+/// =========================
+
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({Key? key}) : super(key: key);
 
@@ -1616,11 +1378,14 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _selectedFilter = 'all';
-  bool _isRefreshing = false;
+  Timer? _refreshTimer;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -1628,13 +1393,20 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await NotificationManager.instance.loadNotifications();
+      await _forceRefresh();
+    });
+
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _forceRefresh();
+      }
     });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -1642,25 +1414,27 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔄 [UI] Resumed Notifications Screen - Refreshing');
-      NotificationManager.instance.loadNotifications();
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          _forceRefresh();
+        }
+      });
     }
   }
 
-  Future<void> _refreshNotifications() async {
-    setState(() {
-      _isRefreshing = true;
-    });
-
+  Future<void> _forceRefresh() async {
+    await NotificationManager.instance.loadNotifications();
     await NotificationManager.instance.fetchFromMySQL();
 
-    setState(() {
-      _isRefreshing = false;
-    });
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
+
     return Scaffold(
       backgroundColor: const Color(0xFFF7FAFC),
       appBar: AppBar(
@@ -1692,7 +1466,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   children: [
                     const Icon(Icons.done_all, color: Color(0xFF00BFA5)),
                     const SizedBox(width: 8),
-                    Text('تحديد الكل ��مقروء', style: GoogleFonts.cairo()),
+                    Text('تحديد الكل كمقروء', style: GoogleFonts.cairo()),
                   ],
                 ),
               ),
@@ -1779,9 +1553,11 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ],
             ),
           ),
-          if (_isRefreshing)
+          if (NotificationManager.instance.isSyncing)
             const LinearProgressIndicator(
-                color: Color(0xFF00BFA5), minHeight: 2),
+              color: Color(0xFF00BFA5),
+              minHeight: 2,
+            ),
           Expanded(
             child: AnimatedBuilder(
               animation: NotificationManager.instance,
@@ -1794,7 +1570,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 }
 
                 return RefreshIndicator(
-                  onRefresh: _refreshNotifications,
+                  onRefresh: _forceRefresh,
                   color: const Color(0xFF00BFA5),
                   child: ListView.builder(
                     padding: const EdgeInsets.all(16),
@@ -1851,12 +1627,11 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     }
 
     if (_searchQuery.isNotEmpty) {
-      notifications =
-          NotificationManager.instance.searchNotifications(_searchQuery);
-      if (_selectedFilter != 'all') {
-        notifications =
-            notifications.where((n) => n.type == _selectedFilter).toList();
-      }
+      notifications = notifications
+          .where((n) =>
+              n.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+              n.body.toLowerCase().contains(_searchQuery.toLowerCase()))
+          .toList();
     }
 
     return notifications;
@@ -2083,11 +1858,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   Widget _buildNotificationImageInList(String imageUrl) {
     try {
       Uri uri = Uri.parse(imageUrl);
-
       if (!uri.hasScheme) {
         uri = Uri.parse('https://$imageUrl');
       }
-
       if (uri.scheme == 'http' || uri.scheme == 'https') {
         return CachedNetworkImage(
           imageUrl: uri.toString(),
@@ -2115,30 +1888,18 @@ class _NotificationsScreenState extends State<NotificationsScreen>
             );
           },
         );
-      } else {
-        return Container(
-          color: Colors.grey[100],
-          child: Center(
-            child: Icon(
-              Icons.image_not_supported_outlined,
-              color: Colors.grey[400],
-              size: 32,
-            ),
-          ),
-        );
       }
-    } catch (e) {
-      return Container(
-        color: Colors.grey[100],
-        child: Center(
-          child: Icon(
-            Icons.broken_image,
-            color: Colors.grey[400],
-            size: 32,
-          ),
+    } catch (e) {}
+    return Container(
+      color: Colors.grey[100],
+      child: Center(
+        child: Icon(
+          Icons.broken_image,
+          color: Colors.grey[400],
+          size: 32,
         ),
-      );
-    }
+      ),
+    );
   }
 
   Future<bool?> _showDeleteConfirmDialog({bool single = false}) {
@@ -2253,26 +2014,253 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   String _formatTimestamp(DateTime timestamp) {
     try {
-      DateTime now = DateTime.now();
+      DateTime now = DateTime.now().toUtc();
       Duration difference = now.difference(timestamp);
 
       if (difference.inMinutes < 1) {
         return 'الآن';
-      } else if (difference.inHours < 1) {
+      } else if (difference.inMinutes < 60) {
         return 'منذ ${difference.inMinutes} دقيقة';
-      } else if (difference.inDays < 1) {
+      } else if (difference.inHours < 24) {
         return 'منذ ${difference.inHours} ساعة';
       } else if (difference.inDays < 7) {
         return 'منذ ${difference.inDays} يوم';
       } else {
         final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
-        return dateFormat.format(timestamp);
+        return dateFormat.format(timestamp.toLocal());
       }
     } catch (e) {
       return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
     }
   }
 }
+
+/// =========================
+/// NOTIFICATION DETAIL SCREEN
+/// =========================
+
+class NotificationDetailScreen extends StatelessWidget {
+  final NotificationItem notification;
+
+  const NotificationDetailScreen({Key? key, required this.notification})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: Text(
+          'تفاصيل الإشعار',
+          style: GoogleFonts.cairo(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              notification.title,
+              style: GoogleFonts.cairo(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF2D3748),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  Icons.access_time,
+                  size: 16,
+                  color: Colors.grey[600],
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _formatTimestamp(notification.timestamp),
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _getNotificationColor(notification.type)
+                        .withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _getNotificationTypeLabel(notification.type),
+                    style: GoogleFonts.cairo(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: _getNotificationColor(notification.type),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 32),
+            if (notification.imageUrl != null &&
+                notification.imageUrl!.isNotEmpty)
+              Column(
+                children: [
+                  Container(
+                    height: 250,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.grey[100],
+                    ),
+                    child: _buildNotificationImage(notification.imageUrl!),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            Text(
+              notification.body,
+              textAlign: TextAlign.justify,
+              style: GoogleFonts.cairo(
+                fontSize: 16,
+                height: 1.6,
+                color: const Color(0xFF4A5568),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'الشركة العامة لتعبئة وخدمات الغاز',
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    color: const Color(0xFF2D3748),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationImage(String imageUrl) {
+    try {
+      Uri uri = Uri.parse(imageUrl);
+      if (!uri.hasScheme) {
+        uri = Uri.parse('https://$imageUrl');
+      }
+      if (uri.scheme == 'http' || uri.scheme == 'https') {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: CachedNetworkImage(
+            imageUrl: uri.toString(),
+            width: double.infinity,
+            height: 250,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00BFA5),
+                ),
+              ),
+            ),
+            errorWidget: (context, url, error) {
+              return Container(
+                color: Colors.grey[100],
+                child: Center(
+                  child: Icon(
+                    Icons.image_not_supported_outlined,
+                    color: Colors.grey[400],
+                    size: 50,
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      }
+    } catch (e) {}
+    return Container(
+      color: Colors.grey[100],
+      child: Center(
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          color: Colors.grey[400],
+          size: 50,
+        ),
+      ),
+    );
+  }
+
+  Color _getNotificationColor(String type) {
+    switch (type) {
+      case 'salary':
+        return Colors.green;
+      case 'announcement':
+        return Colors.blue;
+      case 'department':
+        return Colors.orange;
+      case 'test':
+        return Colors.purple;
+      default:
+        return const Color(0xFF00BFA5);
+    }
+  }
+
+  String _getNotificationTypeLabel(String type) {
+    switch (type) {
+      case 'salary':
+        return 'راتب';
+      case 'announcement':
+        return 'إعلان';
+      case 'department':
+        return 'قسم';
+      case 'test':
+        return 'اختبار';
+      default:
+        return 'عام';
+    }
+  }
+
+  String _formatTimestamp(DateTime timestamp) {
+    try {
+      DateTime now = DateTime.now().toUtc();
+      Duration difference = now.difference(timestamp);
+
+      if (difference.inMinutes < 1) {
+        return 'الآن';
+      } else if (difference.inMinutes < 60) {
+        return 'منذ ${difference.inMinutes} دقيقة';
+      } else if (difference.inHours < 24) {
+        return 'منذ ${difference.inHours} ساعة';
+      } else if (difference.inDays < 7) {
+        return 'منذ ${difference.inDays} يوم';
+      } else {
+        final dateFormat = DateFormat('dd/MM/yyyy', 'ar_IQ');
+        return dateFormat.format(timestamp.toLocal());
+      }
+    } catch (e) {
+      return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
+    }
+  }
+}
+
+/// =========================
+/// WEBVIEW SCREEN
+/// =========================
 
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({Key? key}) : super(key: key);
@@ -2303,7 +2291,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
-
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         _initializeWebView();
@@ -2333,8 +2320,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
       controller!.setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
-            debugPrint('🔄 Page started loading: $url');
-
             if (!url.contains('download=1')) {
               navigationCount = 0;
               lastNavigatedUrl = '';
@@ -2449,9 +2434,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _updateCanGoBack() async {
     if (controller != null) {
       final canNavigateBack = await controller!.canGoBack();
-      setState(() {
-        canGoBack = canNavigateBack;
-      });
+      if (mounted) {
+        setState(() {
+          canGoBack = canNavigateBack;
+        });
+      }
     }
   }
 
@@ -2581,8 +2568,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         return false;
       }
     }
-
-    // iOS: Gal will request Photos permission via Info.plist keys
     return true;
   }
 
@@ -2603,7 +2588,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     try {
       bool hasPermission = await _requestPermissions();
       if (!hasPermission) {
-        _showMessage('الرجاء منح صلاحة الوصول للصور');
+        _showMessage('الرجاء منح صلاحية الوصول للصور');
         return;
       }
 
@@ -2615,7 +2600,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         screenshot = await _captureWebView();
       } catch (e) {
         if (mounted) setState(() => isLoading = false);
-        _showMessage('فشل التقاط الصورة');
         return;
       }
 
@@ -2661,6 +2645,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   bool _shouldShowButtons() {
+    if (isOnLoginPage) {
+      return false;
+    }
+
     if (currentUrl == 'https://gate.scgfs-oil.gov.iq/payslip.html' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/payslips' ||
         currentUrl == 'https://gate.scgfs-oil.gov.iq/salary' ||
@@ -2863,7 +2851,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     const Icon(Icons.error_outline,
                         size: 60, color: Colors.red),
                     const SizedBox(height: 15),
-                    Text('خطأ في الاتصال',
+                    Text('خطأ في ال��تصال',
                         style: GoogleFonts.cairo(fontSize: 18)),
                     Text(errorMessage,
                         style: GoogleFonts.cairo(fontSize: 12),
