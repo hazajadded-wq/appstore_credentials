@@ -28,14 +28,6 @@ import 'firebase_options.dart';
 // ======== تتبع الإشعارات التي تمت معالجتها في الجلسة الحالية =============
 final Set<String> _handledNotificationIds = {};
 
-// Helper: normalize any Map to Map<String, dynamic>
-Map<String, dynamic> _asStringKeyedMap(dynamic source) {
-  if (source is Map) {
-    return source.map((key, value) => MapEntry(key.toString(), value));
-  }
-  return <String, dynamic>{};
-}
-
 /// =========================
 /// DATA MODEL
 /// =========================
@@ -71,76 +63,44 @@ class NotificationItem {
       'data': data,
       'isRead': isRead,
       'type': type,
-      'message_id': data['message_id'] ?? data['firebase_message_id'] ?? id,
     };
   }
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
-    // يدعم كل من milliseconds و ISO8601
-    DateTime ts;
-    final rawTs = json['timestamp'];
-    if (rawTs is int) {
-      ts = DateTime.fromMillisecondsSinceEpoch(rawTs).toUtc();
-    } else if (rawTs is String && rawTs.isNotEmpty) {
-      try {
-        ts = DateTime.parse(rawTs).toUtc();
-      } catch (_) {
-        ts = DateTime.now().toUtc();
-      }
-    } else {
-      ts = DateTime.now().toUtc();
-    }
-
-    final Map<String, dynamic> dataMap = _asStringKeyedMap(json['data']);
-
-    final unifiedId = json['message_id']?.toString() ??
-        dataMap['message_id']?.toString() ??
-        dataMap['firebase_message_id']?.toString() ??
-        json['id']?.toString() ??
-        '';
-
-    if (!(dataMap.containsKey('message_id') ||
-        dataMap.containsKey('firebase_message_id'))) {
-      dataMap['message_id'] = unifiedId;
-    }
-
     return NotificationItem(
-      id: (json['id'] ?? unifiedId).toString(),
+      id: json['id'].toString(),
       title: json['title'] ?? '',
       body: json['body'] ?? '',
       imageUrl: json['imageUrl'],
-      timestamp: ts,
-      data: dataMap,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(
+              json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch)
+          .toUtc(),
+      data: json['data'] != null ? Map<String, dynamic>.from(json['data']) : {},
       isRead: json['isRead'] ?? false,
       type: json['type'] ?? 'general',
     );
   }
 
   factory NotificationItem.fromFirebaseMessage(RemoteMessage message) {
-    final normalizedData = _asStringKeyedMap(message.data);
-
-    final imageUrl = normalizedData['image_url'] ??
+    final imageUrl = message.data['image_url'] ??
         message.notification?.android?.imageUrl ??
         message.notification?.apple?.imageUrl ??
-        normalizedData['image'];
+        message.data['image'];
 
     String title =
-        message.notification?.title ?? normalizedData['title'] ?? 'إشعار جديد';
-    String body = message.notification?.body ?? normalizedData['body'] ?? '';
+        message.notification?.title ?? message.data['title'] ?? 'إشعار جديد';
+    String body = message.notification?.body ?? message.data['body'] ?? '';
 
-    // توحيد المعرّف: نفضّل message_id/firebase_message_id أولاً
-    String id = normalizedData['message_id']?.toString() ??
-        normalizedData['firebase_message_id']?.toString() ??
-        normalizedData['id']?.toString() ??
+    String id = message.data['id']?.toString() ??
         message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
     DateTime timestamp;
     try {
-      if (normalizedData['sent_at'] != null) {
-        timestamp = DateTime.parse(normalizedData['sent_at']).toUtc();
-      } else if (normalizedData['timestamp'] != null) {
-        timestamp = DateTime.parse(normalizedData['timestamp']).toUtc();
+      if (message.data['sent_at'] != null) {
+        timestamp = DateTime.parse(message.data['sent_at']).toUtc();
+      } else if (message.data['timestamp'] != null) {
+        timestamp = DateTime.parse(message.data['timestamp']).toUtc();
       } else if (message.sentTime != null) {
         timestamp = DateTime.fromMillisecondsSinceEpoch(
                 message.sentTime!.millisecondsSinceEpoch)
@@ -158,15 +118,9 @@ class NotificationItem {
       body: body,
       imageUrl: imageUrl,
       timestamp: timestamp,
-      data: {
-        ...normalizedData,
-        if (!(normalizedData.containsKey('message_id') ||
-            normalizedData.containsKey('firebase_message_id')))
-          'message_id': id,
-      },
-      isRead:
-          normalizedData['is_read'] == '1' || normalizedData['is_read'] == 1,
-      type: normalizedData['type'] ?? 'general',
+      data: message.data,
+      isRead: message.data['is_read'] == '1' || message.data['is_read'] == 1,
+      type: message.data['type'] ?? 'general',
     );
   }
 
@@ -176,44 +130,29 @@ class NotificationItem {
       if (map['data_payload'] is String &&
           map['data_payload'].toString().isNotEmpty) {
         try {
-          final decoded = jsonDecode(map['data_payload']);
-          payload = _asStringKeyedMap(decoded);
+          payload = jsonDecode(map['data_payload']);
         } catch (e) {}
       } else if (map['data_payload'] is Map) {
-        payload = _asStringKeyedMap(map['data_payload']);
+        payload = Map<String, dynamic>.from(map['data_payload']);
       }
     }
 
-    // توحيد المعرّف باستخدام firebase_message_id/message_id
-    final unifiedId = (map['message_id']?.toString() ??
-            map['firebase_message_id']?.toString() ??
-            map['id']?.toString() ??
-            '')
-        .trim();
-
     DateTime timestamp;
     try {
-      if (map['sent_at'] != null && map['sent_at'].toString().isNotEmpty) {
-        timestamp = DateTime.parse(map['sent_at'].toString()).toUtc();
-      } else {
-        timestamp = DateTime.now().toUtc();
-      }
+      timestamp = map['sent_at'] != null
+          ? DateTime.parse(map['sent_at']).toUtc()
+          : DateTime.now().toUtc();
     } catch (e) {
       timestamp = DateTime.now().toUtc();
     }
 
     return NotificationItem(
-      id: unifiedId,
+      id: map['id'].toString(),
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       imageUrl: map['image_url'],
       timestamp: timestamp,
-      data: {
-        ...payload,
-        if (!(payload.containsKey('message_id') ||
-            payload.containsKey('firebase_message_id')))
-          'message_id': unifiedId,
-      },
+      data: payload,
       isRead: false,
       type: map['type'] ?? 'general',
     );
@@ -244,14 +183,6 @@ class NotificationManager extends ChangeNotifier {
   static const String _storageKey = 'stored_notifications_final';
   static const String _deletedIdsKey = 'deleted_notification_ids';
 
-  // مفتاح موحّد لإزالة التكرارات: يفضّل message_id ثم id
-  String _dedupKey(NotificationItem n) {
-    final mid = (n.data['message_id']?.toString() ??
-        n.data['firebase_message_id']?.toString());
-    if (mid != null && mid.isNotEmpty) return mid;
-    return n.id;
-  }
-
   Future<void> loadNotifications() async {
     int waitCount = 0;
     while (NotificationService.isWriting && waitCount < 50) {
@@ -268,9 +199,7 @@ class NotificationManager extends ChangeNotifier {
 
       if (jsonStr != null) {
         final list = jsonDecode(jsonStr) as List;
-        _notifications = list
-            .map((e) => NotificationItem.fromJson(_asStringKeyedMap(e)))
-            .toList();
+        _notifications = list.map((e) => NotificationItem.fromJson(e)).toList();
         _sortAndCount();
         debugPrint('📂 [Manager] Loaded ${_notifications.length} from disk');
       }
@@ -300,27 +229,22 @@ class NotificationManager extends ChangeNotifier {
         return;
       }
 
-      final serverItems = serverListRaw
-          .map((m) => NotificationItem.fromMySQL(_asStringKeyedMap(m)))
-          .toList();
+      final serverItems =
+          serverListRaw.map((m) => NotificationItem.fromMySQL(m)).toList();
 
       final Map<String, NotificationItem> localMap = {
-        for (var item in _notifications) _dedupKey(item): item
+        for (var item in _notifications) item.id: item
       };
 
       bool hasChanges = false;
 
       for (var serverItem in serverItems) {
-        final key = _dedupKey(serverItem);
+        if (_deletedIds.contains(serverItem.id)) continue;
 
-        if (_deletedIds.contains(serverItem.id) || _deletedIds.contains(key)) {
-          continue;
-        }
-
-        if (localMap.containsKey(key)) {
-          final localItem = localMap[key]!;
+        if (localMap.containsKey(serverItem.id)) {
+          final localItem = localMap[serverItem.id]!;
           if (serverItem.timestamp.isAfter(localItem.timestamp)) {
-            localMap[key] = NotificationItem(
+            localMap[serverItem.id] = NotificationItem(
               id: serverItem.id,
               title: serverItem.title,
               body: serverItem.body,
@@ -333,15 +257,12 @@ class NotificationManager extends ChangeNotifier {
             hasChanges = true;
           }
         } else {
-          localMap[key] = serverItem;
+          localMap[serverItem.id] = serverItem;
           hasChanges = true;
         }
       }
 
-      // إزالة أي عناصر محذوفة
-      localMap.removeWhere((key, item) =>
-          _deletedIds.contains(item.id) || _deletedIds.contains(key));
-
+      localMap.removeWhere((id, _) => _deletedIds.contains(id));
       _notifications = localMap.values.toList();
       _sortAndCount();
 
@@ -364,11 +285,8 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addFirebaseMessage(RemoteMessage message) async {
-    final normalizedData = _asStringKeyedMap(message.data);
-    final messageId = normalizedData['message_id']?.toString() ??
-        normalizedData['firebase_message_id']?.toString() ??
-        message.messageId ??
-        normalizedData['id']?.toString() ??
+    final messageId = message.messageId ??
+        message.data['id']?.toString() ??
         'msg_${DateTime.now().millisecondsSinceEpoch}';
 
     if (_processedInSession.contains(messageId)) {
@@ -385,8 +303,7 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
-    if (_deletedIds.contains(item.id) ||
-        _deletedIds.contains(_dedupKey(item))) {
+    if (_deletedIds.contains(item.id)) {
       debugPrint('❌ [Manager] Skipping deleted notification ${item.id}');
       return;
     }
@@ -402,8 +319,7 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex =
-        _notifications.indexWhere((n) => _dedupKey(n) == _dedupKey(item));
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
 
     if (existingIndex != -1) {
       final existing = _notifications[existingIndex];
@@ -428,11 +344,9 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
-    final Map<String, dynamic> normalized = _asStringKeyedMap(data);
-    final item = NotificationItem.fromJson(normalized);
+    final item = NotificationItem.fromJson(data);
 
-    if (_processedInSession.contains(item.id) ||
-        _processedInSession.contains(_dedupKey(item))) {
+    if (_processedInSession.contains(item.id)) {
       debugPrint(
           '⚠️ [Manager] Native notification ${item.id} already processed, skipping');
       return;
@@ -444,8 +358,7 @@ class NotificationManager extends ChangeNotifier {
       return;
     }
 
-    if (_deletedIds.contains(item.id) ||
-        _deletedIds.contains(_dedupKey(item))) {
+    if (_deletedIds.contains(item.id)) {
       debugPrint('❌ [Manager] Skipping deleted native notification ${item.id}');
       return;
     }
@@ -461,8 +374,7 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex =
-        _notifications.indexWhere((n) => _dedupKey(n) == _dedupKey(item));
+    final existingIndex = _notifications.indexWhere((n) => n.id == item.id);
 
     if (existingIndex != -1) {
       debugPrint(
@@ -478,8 +390,7 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> markAsRead(String id) async {
-    final index =
-        _notifications.indexWhere((n) => n.id == id || _dedupKey(n) == id);
+    final index = _notifications.indexWhere((n) => n.id == id);
     if (index != -1 && !_notifications[index].isRead) {
       _notifications[index].isRead = true;
       _updateUnreadCount();
@@ -504,7 +415,7 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> deleteNotification(String id) async {
-    _notifications.removeWhere((n) => n.id == id || _dedupKey(n) == id);
+    _notifications.removeWhere((n) => n.id == id);
     _deletedIds.add(id);
     _updateUnreadCount();
     await _saveToDisk();
@@ -512,7 +423,7 @@ class NotificationManager extends ChangeNotifier {
   }
 
   Future<void> clearAllNotifications() async {
-    _deletedIds.addAll(_notifications.map((n) => _dedupKey(n)));
+    _deletedIds.addAll(_notifications.map((n) => n.id));
     _notifications.clear();
     _updateUnreadCount();
     await _saveToDisk();
@@ -532,13 +443,12 @@ class NotificationManager extends ChangeNotifier {
   void _sortAndCount() {
     final Map<String, NotificationItem> deduplicatedMap = {};
     for (var notification in _notifications) {
-      final key = _dedupKey(notification);
-      if (!deduplicatedMap.containsKey(key)) {
-        deduplicatedMap[key] = notification;
+      if (!deduplicatedMap.containsKey(notification.id)) {
+        deduplicatedMap[notification.id] = notification;
       } else {
-        final existing = deduplicatedMap[key]!;
+        final existing = deduplicatedMap[notification.id]!;
         if (notification.timestamp.isAfter(existing.timestamp)) {
-          deduplicatedMap[key] = notification;
+          deduplicatedMap[notification.id] = notification;
         }
       }
     }
@@ -581,7 +491,7 @@ class NotificationManager extends ChangeNotifier {
 }
 
 /// =========================
-/// LOCAL NOTIFICATION SERVICE
+/// LOCAL NOTIFICATION SERVICE - ✅ FIXED
 /// =========================
 
 class LocalNotificationService {
@@ -595,15 +505,12 @@ class LocalNotificationService {
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
 
-    // Named parameters per current plugin signature
     _notificationsPlugin.initialize(
       settings: initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse details) {
         debugPrint('🔔 Local Notification Tapped');
         _navigateToNotifications();
       },
-      // Optionally add background response if needed:
-      // onDidReceiveBackgroundNotificationResponse: (NotificationResponse details) { ... },
     );
   }
 
@@ -623,18 +530,12 @@ class LocalNotificationService {
       const NotificationDetails platformChannelSpecifics =
           NotificationDetails(android: androidPlatformChannelSpecifics);
 
-      // Named parameters per current plugin signature
       await _notificationsPlugin.show(
         id: id,
         title: message.notification?.title ?? 'إشعار جديد',
         body: message.notification?.body ?? '',
         notificationDetails: platformChannelSpecifics,
-        payload: jsonEncode({
-          ..._asStringKeyedMap(message.data),
-          'message_id': message.data['message_id'] ??
-              message.data['firebase_message_id'] ??
-              message.messageId
-        }),
+        payload: jsonEncode(message.data),
       );
     } catch (e) {
       debugPrint('❌ Error showing local notification: $e');
@@ -689,7 +590,8 @@ class NotificationMethodChannel {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'saveNotification') {
         debugPrint('📱 [iOS Channel] Received notification from native iOS');
-        final Map<String, dynamic> data = _asStringKeyedMap(call.arguments);
+        final Map<String, dynamic> data =
+            Map<String, dynamic>.from(call.arguments);
 
         await Future.delayed(const Duration(milliseconds: 200));
         await NotificationManager.instance.addNotificationFromNative(data);
@@ -750,7 +652,7 @@ class _AppLifecycleHandlerState extends State<AppLifecycleHandler>
 }
 
 /// =========================
-/// MAIN - الحل النهائي ✅
+/// MAIN - ✅ COMPLETE FIX
 /// =========================
 
 void main() async {
@@ -780,7 +682,7 @@ void main() async {
       alert: true,
       badge: true,
       sound: true,
-      // provisional: false, // REMOVE: not supported in your version
+      provisional: false,
     );
 
     debugPrint('🔔 Notification permissions: ${settings.authorizationStatus}');
@@ -817,25 +719,57 @@ Future<void> _requestIgnoreBatteryOptimizations() async {
 }
 
 /// =========================
-/// ✅ الحل النهائي - القاعدة الذهبية
+/// ✅ THE GOLDEN RULE - COMPLETE FIX
 /// =========================
 Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
-  // 1️⃣ عند وصول الإشعار والتطبيق مفتوح (Foreground) - نحفظ فقط
+  
+  // ✅ Rule 1: Foreground - SAVE ONLY, show local notification
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('📱 [Foreground] Saving notification...');
+    debugPrint('📱 [Foreground] Notification received - saving...');
+    debugPrint('📱 [Foreground] Message ID: ${message.messageId}');
+    debugPrint('📱 [Foreground] Title: ${message.notification?.title}');
+    
+    // Save the notification (fromClick defaults to false)
     NotificationManager.instance.addFirebaseMessage(message);
+    
+    // Show local notification
+    LocalNotificationService.showNotification(message);
   });
 
-  // 2️⃣ عند النقر على الإشعار (Background) - ننتقل فقط ولا نحفظ
+  // ✅ Rule 2: Background Click - NAVIGATE ONLY, never save
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('👆 [Background Click] Navigating only...');
+    debugPrint('👆 [Background Click] User tapped notification');
+    debugPrint('👆 [Background Click] Message ID: ${message.messageId}');
+    debugPrint('👆 [Background Click] Title: ${message.notification?.title}');
+    debugPrint('👆 [Background Click] Navigating ONLY - NOT saving');
+    
+    // Mark this notification as clicked to prevent future saves
+    final messageId = message.messageId ?? message.data['id']?.toString();
+    if (messageId != null) {
+      NotificationService.markAsClicked(messageId);
+      _handledNotificationIds.add(messageId);
+    }
+    
+    // Navigate to notifications page ONLY
     _navigateToNotifications();
   });
 
-  // 3️⃣ عند فتح التطبيق من الصفر (Terminated) - ننتقل فقط ولا نحفظ
+  // ✅ Rule 3: Terminated Launch - NAVIGATE ONLY, never save
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
-    debugPrint('🚀 [Terminated Launch] Navigating only...');
+    debugPrint('🚀 [Terminated Launch] App opened from notification');
+    debugPrint('🚀 [Terminated Launch] Message ID: ${initialMessage.messageId}');
+    debugPrint('🚀 [Terminated Launch] Title: ${initialMessage.notification?.title}');
+    debugPrint('🚀 [Terminated Launch] Navigating ONLY - NOT saving');
+    
+    // Mark this notification as clicked to prevent future saves
+    final messageId = initialMessage.messageId ?? initialMessage.data['id']?.toString();
+    if (messageId != null) {
+      NotificationService.markAsClicked(messageId);
+      _handledNotificationIds.add(messageId);
+    }
+    
+    // Navigate to notifications page ONLY after delay
     Future.delayed(const Duration(milliseconds: 500), () {
       _navigateToNotifications();
     });
@@ -1635,7 +1569,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                       const SizedBox(width: 8),
                       _buildFilterChip('salary', 'الرواتب'),
                       const SizedBox(width: 8),
-                      _buildFilterChip('announcement', 'ال��علانات'),
+                      _buildFilterChip('announcement', 'الإعلانات'),
                       const SizedBox(width: 8),
                       _buildFilterChip('department', 'الأقسام'),
                       const SizedBox(width: 8),
