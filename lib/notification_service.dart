@@ -9,10 +9,6 @@ class NotificationService {
   static const String storageKey = 'stored_notifications_final';
 
   static bool _isWriting = false;
-  static final Set<String> _processedIds = {};
-
-  // تتبع الإشعارات المحفوظة في الجلسة الحالية
-  static final Set<String> _savedInSession = {};
 
   // =========================================================
   // Get All Notifications From MySQL
@@ -40,13 +36,13 @@ class NotificationService {
   }
 
   // =========================================================
-  // Save To Local Disk - ✅ الحفظ فقط عند الاستقبال وليس عند الضغط
+  // ✅ Save To Local Disk - مُصحّح مع دعم associatedIds والمطابقة الذكية
   // =========================================================
   static Future<void> saveToLocalDisk(Map<String, dynamic> newNotificationJson,
       {bool fromClick = false}) async {
     // ❌ لا نحفظ أبداً إذا كان من الضغط
     if (fromClick) {
-      debugPrint('🚫 Skipping save from click event');
+      debugPrint('🚫 [Service] Skipping save from click event');
       return;
     }
 
@@ -54,69 +50,187 @@ class NotificationService {
     final body = newNotificationJson['body']?.toString() ?? '';
 
     if (title.isEmpty && body.isEmpty) {
-      debugPrint('⚠️ Empty notification skipped');
+      debugPrint('⚠️ [Service] Empty notification skipped');
       return;
     }
 
-    // ✅ نستخدم ID المستلم من السيرفر فقط
-    final String? incomingId = newNotificationJson['id']?.toString() ??
-        newNotificationJson['message_id']?.toString();
+    // ✅ جمع كل المعرفات الممكنة من الإشعار الوارد
+    final Set<String> incomingIds = {};
 
-    if (incomingId == null || incomingId.isEmpty) {
-      debugPrint('🚫 No valid ID found - skipping save');
+    final String? mainId = newNotificationJson['id']?.toString();
+    final String? messageId = newNotificationJson['message_id']?.toString();
+
+    if (mainId != null && mainId.isNotEmpty) incomingIds.add(mainId);
+    if (messageId != null && messageId.isNotEmpty) incomingIds.add(messageId);
+
+    // ✅ إضافة associatedIds إذا كانت موجودة
+    if (newNotificationJson['associatedIds'] != null) {
+      final List<dynamic> assocList = newNotificationJson['associatedIds'] is String
+          ? jsonDecode(newNotificationJson['associatedIds'])
+          : newNotificationJson['associatedIds'];
+      for (var id in assocList) {
+        if (id != null && id.toString().isNotEmpty) {
+          incomingIds.add(id.toString());
+        }
+      }
+    }
+
+    if (incomingIds.isEmpty) {
+      debugPrint('🚫 [Service] No valid ID found - skipping save');
       return;
     }
 
-    final String newId = incomingId;
-
-    // ✅ منع التكرار في نفس الجلسة
-    if (_processedIds.contains(newId)) {
-      debugPrint('🚫 Already processed in session: $newId');
-      return;
-    }
-
-    if (_savedInSession.contains(newId)) {
-      debugPrint('🚫 Already saved in session: $newId');
-      return;
-    }
+    // ✅ ID رئيسي
+    final String primaryId = mainId ?? incomingIds.first;
 
     // ✅ انتظار القفل
-    while (_isWriting) {
+    int waitCount = 0;
+    while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 50));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Service] Lock timeout - skipping save');
+      return;
     }
 
     _isWriting = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       final jsonStr = prefs.getString(storageKey);
 
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      // 🔥 منع التكرار نهائياً في التخزين
-      bool alreadyExists = list.any((item) => item['id']?.toString() == newId);
+      // ✅ المطابقة الذكية: بحث بالمعرفات + المحتوى
+      int existingIndex = -1;
+      for (int i = 0; i < list.length; i++) {
+        final item = list[i];
+        final String itemId = item['id']?.toString() ?? '';
 
-      if (alreadyExists) {
-        debugPrint('🚫 Duplicate detected in storage: $newId');
-        _processedIds.add(newId);
-        _savedInSession.add(newId);
+        // ✅ 1. مطابقة بالمعرفات
+        bool idMatch = false;
+
+        // تحقق من ID الرئيسي
+        if (incomingIds.contains(itemId)) {
+          idMatch = true;
+        }
+
+        // تحقق من associatedIds المخزنة
+        if (!idMatch && item['associatedIds'] != null) {
+          try {
+            final List<dynamic> storedAssocIds = item['associatedIds'] is String
+                ? jsonDecode(item['associatedIds'])
+                : item['associatedIds'];
+            final Set<String> storedIdSet =
+                storedAssocIds.map((e) => e.toString()).toSet();
+            if (storedIdSet.intersection(incomingIds).isNotEmpty) {
+              idMatch = true;
+            }
+          } catch (e) {
+            // ignore parsing errors
+          }
+        }
+
+        // تحقق من message_id المخزن
+        if (!idMatch) {
+          final String? storedMsgId = item['message_id']?.toString();
+          if (storedMsgId != null && incomingIds.contains(storedMsgId)) {
+            idMatch = true;
+          }
+        }
+
+        // ✅ 2. مطابقة بالمحتوى + التوقيت القريب
+        if (!idMatch) {
+          final String itemTitle = item['title']?.toString() ?? '';
+          final String itemBody = item['body']?.toString() ?? '';
+
+          if (title.isNotEmpty &&
+              title == itemTitle &&
+              body == itemBody) {
+            // تحقق من التوقيت القريب (60 ثانية)
+            try {
+              DateTime? itemTime;
+              if (item['timestamp'] != null) {
+                if (item['timestamp'] is int) {
+                  itemTime =
+                      DateTime.fromMillisecondsSinceEpoch(item['timestamp']);
+                } else {
+                  itemTime = DateTime.parse(item['timestamp'].toString());
+                }
+              }
+
+              DateTime? newTime;
+              if (newNotificationJson['timestamp'] != null) {
+                if (newNotificationJson['timestamp'] is int) {
+                  newTime = DateTime.fromMillisecondsSinceEpoch(
+                      newNotificationJson['timestamp']);
+                } else {
+                  newTime = DateTime.parse(
+                      newNotificationJson['timestamp'].toString());
+                }
+              }
+
+              if (itemTime != null && newTime != null) {
+                if (itemTime.difference(newTime).inSeconds.abs() < 60) {
+                  idMatch = true;
+                }
+              }
+            } catch (e) {
+              // ignore time parsing errors
+            }
+          }
+        }
+
+        if (idMatch) {
+          existingIndex = i;
+          break;
+        }
+      }
+
+      if (existingIndex != -1) {
+        // ✅ موجود مسبقاً - دمج المعرفات فقط
+        final existing = list[existingIndex];
+
+        Set<String> mergedIds = {...incomingIds};
+        if (existing['associatedIds'] != null) {
+          try {
+            final List<dynamic> existingAssocIds =
+                existing['associatedIds'] is String
+                    ? jsonDecode(existing['associatedIds'])
+                    : existing['associatedIds'];
+            mergedIds.addAll(existingAssocIds.map((e) => e.toString()));
+          } catch (e) {
+            // ignore
+          }
+        }
+        final existingId = existing['id']?.toString();
+        if (existingId != null && existingId.isNotEmpty) {
+          mergedIds.add(existingId);
+        }
+
+        list[existingIndex]['associatedIds'] = mergedIds.toList();
+
+        await prefs.setString(storageKey, jsonEncode(list));
+        debugPrint(
+            '🔄 [Service] Merged IDs for existing notification: $primaryId');
         return;
       }
 
-      // ✅ تجهيز الإشعار للحفظ
+      // ✅ إشعار جديد - إضافة
       final Map<String, dynamic> finalNotification =
-          Map.from(newNotificationJson);
+          Map<String, dynamic>.from(newNotificationJson);
 
-      finalNotification['id'] = newId;
+      finalNotification['id'] = primaryId;
+      finalNotification['associatedIds'] = incomingIds.toList();
 
       // إضافة timestamp إذا لم يكن موجوداً
-      if (!finalNotification.containsKey('timestamp')) {
-        finalNotification['timestamp'] = DateTime.now().toIso8601String();
-      }
-
-      // إضافة معرف الرسالة إذا كان موجوداً
-      if (newNotificationJson['message_id'] != null) {
-        finalNotification['message_id'] = newNotificationJson['message_id'];
+      if (!finalNotification.containsKey('timestamp') ||
+          finalNotification['timestamp'] == null) {
+        finalNotification['timestamp'] =
+            DateTime.now().millisecondsSinceEpoch;
       }
 
       // إدراج في البداية (الأحدث أولاً)
@@ -130,14 +244,10 @@ class NotificationService {
       // حفظ في SharedPreferences
       await prefs.setString(storageKey, jsonEncode(list));
 
-      // تحديث التتبع
-      _processedIds.add(newId);
-      _savedInSession.add(newId);
-
-      debugPrint('💾 Saved successfully: $newId');
-      debugPrint('📊 Total notifications: ${list.length}');
+      debugPrint('💾 [Service] Saved new notification: $primaryId');
+      debugPrint('📊 [Service] Total notifications: ${list.length}');
     } catch (e) {
-      debugPrint('❌ Save Failed: $e');
+      debugPrint('❌ [Service] Save Failed: $e');
     } finally {
       _isWriting = false;
     }
@@ -148,6 +258,7 @@ class NotificationService {
   // =========================================================
   static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final jsonStr = prefs.getString(storageKey);
 
     if (jsonStr == null) return [];
@@ -155,23 +266,31 @@ class NotificationService {
     try {
       return List<Map<String, dynamic>>.from(jsonDecode(jsonStr));
     } catch (e) {
-      debugPrint('❌ Error parsing local notifications: $e');
+      debugPrint('❌ [Service] Error parsing local notifications: $e');
       return [];
     }
   }
 
   // =========================================================
-  // Delete Notification by ID
+  // Delete Notification by ID - ✅ مُحسّن مع associatedIds
   // =========================================================
   static Future<bool> deleteNotification(String id) async {
-    while (_isWriting) {
+    int waitCount = 0;
+    while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 50));
+      waitCount++;
+    }
+
+    if (waitCount >= 100) {
+      debugPrint('⚠️ [Service] Lock timeout on delete');
+      return false;
     }
 
     _isWriting = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       final jsonStr = prefs.getString(storageKey);
 
       if (jsonStr == null) return false;
@@ -179,17 +298,32 @@ class NotificationService {
       List<dynamic> list = jsonDecode(jsonStr);
       int initialLength = list.length;
 
-      list.removeWhere((item) => item['id']?.toString() == id);
+      // ✅ حذف بناءً على ID الرئيسي أو أي من associatedIds
+      list.removeWhere((item) {
+        if (item['id']?.toString() == id) return true;
+
+        if (item['associatedIds'] != null) {
+          try {
+            final List<dynamic> assocIds = item['associatedIds'] is String
+                ? jsonDecode(item['associatedIds'])
+                : item['associatedIds'];
+            return assocIds.any((assocId) => assocId.toString() == id);
+          } catch (e) {
+            // ignore
+          }
+        }
+        return false;
+      });
 
       if (list.length < initialLength) {
         await prefs.setString(storageKey, jsonEncode(list));
-        debugPrint('🗑️ Deleted notification: $id');
+        debugPrint('🗑️ [Service] Deleted notification: $id');
         return true;
       }
 
       return false;
     } catch (e) {
-      debugPrint('❌ Delete Failed: $e');
+      debugPrint('❌ [Service] Delete Failed: $e');
       return false;
     } finally {
       _isWriting = false;
@@ -200,8 +334,10 @@ class NotificationService {
   // Clear All Notifications
   // =========================================================
   static Future<void> clearAllNotifications() async {
-    while (_isWriting) {
+    int waitCount = 0;
+    while (_isWriting && waitCount < 100) {
       await Future.delayed(const Duration(milliseconds: 50));
+      waitCount++;
     }
 
     _isWriting = true;
@@ -209,21 +345,12 @@ class NotificationService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(storageKey);
-      debugPrint('🗑️ All notifications cleared');
+      debugPrint('🗑️ [Service] All notifications cleared');
     } catch (e) {
-      debugPrint('❌ Clear Failed: $e');
+      debugPrint('❌ [Service] Clear Failed: $e');
     } finally {
       _isWriting = false;
     }
-  }
-
-  // =========================================================
-  // Clear Session Cache
-  // =========================================================
-  static void clearSessionCache() {
-    _processedIds.clear();
-    _savedInSession.clear();
-    debugPrint('🧹 Session cache cleared');
   }
 
   // =========================================================
