@@ -3,148 +3,231 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// NotificationService - Client for PHP/MySQL notifications API.
 class NotificationService {
   static const String baseUrl = 'https://lpggaspro.org/scgfs_notifications';
   static const String apiEndpoint = '$baseUrl/notifications_api.php';
   static const String storageKey = 'stored_notifications_final';
 
+  static bool _isWriting = false;
+  static final Set<String> _processedIds = {};
+
+  // تتبع الإشعارات المحفوظة في الجلسة الحالية
+  static final Set<String> _savedInSession = {};
+
   // =========================================================
-  // Get all notifications from MySQL
+  // Get All Notifications From MySQL
   // =========================================================
-  static Future<List<Map<String, dynamic>>> getAllNotifications({
-    int limit = 100,
-  }) async {
+  static Future<List<Map<String, dynamic>>> getAllNotifications(
+      {int limit = 100}) async {
     final uri = Uri.parse('$apiEndpoint?action=get_all&limit=$limit');
 
     try {
       final response = await http.get(uri, headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       }).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data is Map &&
-            data['success'] == true &&
-            data['notifications'] != null) {
+        if (data['success'] == true && data['notifications'] != null) {
           return List<Map<String, dynamic>>.from(data['notifications']);
         }
       }
     } catch (e) {
-      debugPrint('❌ [NotificationService] Network Error: $e');
+      debugPrint('❌ Network Error: $e');
     }
 
     return [];
   }
 
   // =========================================================
-  // CRITICAL: Save to Local Disk (Safe for Background)
+  // Save To Local Disk - ✅ الحفظ فقط عند الاستقبال وليس عند الضغط
   // =========================================================
-  static Future<void> saveToLocalDisk(
-    Map<String, dynamic> newNotificationJson,
-  ) async {
+  static Future<void> saveToLocalDisk(Map<String, dynamic> newNotificationJson,
+      {bool fromClick = false}) async {
+    // ❌ لا نحفظ أبداً إذا كان من الضغط
+    if (fromClick) {
+      debugPrint('🚫 Skipping save from click event');
+      return;
+    }
+
+    final title = newNotificationJson['title']?.toString() ?? '';
+    final body = newNotificationJson['body']?.toString() ?? '';
+
+    if (title.isEmpty && body.isEmpty) {
+      debugPrint('⚠️ Empty notification skipped');
+      return;
+    }
+
+    // ✅ نستخدم ID المستلم من السيرفر فقط
+    final String? incomingId = newNotificationJson['id']?.toString() ??
+        newNotificationJson['message_id']?.toString();
+
+    if (incomingId == null || incomingId.isEmpty) {
+      debugPrint('🚫 No valid ID found - skipping save');
+      return;
+    }
+
+    final String newId = incomingId;
+
+    // ✅ منع التكرار في نفس الجلسة
+    if (_processedIds.contains(newId)) {
+      debugPrint('🚫 Already processed in session: $newId');
+      return;
+    }
+
+    if (_savedInSession.contains(newId)) {
+      debugPrint('🚫 Already saved in session: $newId');
+      return;
+    }
+
+    // ✅ انتظار القفل
+    while (_isWriting) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    _isWriting = true;
+
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // FORCE RELOAD: Ensure we are seeing the latest data on disk
-      await prefs.reload();
-
-      // Get existing list
       final jsonStr = prefs.getString(storageKey);
+
       List<dynamic> list = jsonStr != null ? jsonDecode(jsonStr) : [];
 
-      final newId = newNotificationJson['id'].toString();
+      // 🔥 منع التكرار نهائياً في التخزين
+      bool alreadyExists = list.any((item) => item['id']?.toString() == newId);
 
-      // Remove if exists (deduplicate)
-      list.removeWhere((item) => item['id'].toString() == newId);
+      if (alreadyExists) {
+        debugPrint('🚫 Duplicate detected in storage: $newId');
+        _processedIds.add(newId);
+        _savedInSession.add(newId);
+        return;
+      }
 
-      // Insert at top
-      list.insert(0, newNotificationJson);
+      // ✅ تجهيز الإشعار للحفظ
+      final Map<String, dynamic> finalNotification =
+          Map.from(newNotificationJson);
 
-      // Limit to 200
+      finalNotification['id'] = newId;
+
+      // إضافة timestamp إذا لم يكن موجوداً
+      if (!finalNotification.containsKey('timestamp')) {
+        finalNotification['timestamp'] = DateTime.now().toIso8601String();
+      }
+
+      // إضافة معرف الرسالة إذا كان موجوداً
+      if (newNotificationJson['message_id'] != null) {
+        finalNotification['message_id'] = newNotificationJson['message_id'];
+      }
+
+      // إدراج في البداية (الأحدث أولاً)
+      list.insert(0, finalNotification);
+
+      // الحد الأقصى 200 إشعار
       if (list.length > 200) {
         list = list.sublist(0, 200);
       }
 
+      // حفظ في SharedPreferences
       await prefs.setString(storageKey, jsonEncode(list));
-      debugPrint('💾 [BG-Service] Saved notification $newId to disk.');
+
+      // تحديث التتبع
+      _processedIds.add(newId);
+      _savedInSession.add(newId);
+
+      debugPrint('💾 Saved successfully: $newId');
+      debugPrint('📊 Total notifications: ${list.length}');
     } catch (e) {
-      debugPrint('❌ [BG-Service] Save Failed: $e');
+      debugPrint('❌ Save Failed: $e');
+    } finally {
+      _isWriting = false;
     }
   }
 
   // =========================================================
-  // Save notification to server
+  // Get Local Notifications
   // =========================================================
-  static Future<bool> saveNotificationToServer(
-    Map<String, dynamic> notification,
-  ) async {
+  static Future<List<Map<String, dynamic>>> getLocalNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(storageKey);
+
+    if (jsonStr == null) return [];
+
     try {
-      final uri = Uri.parse('$apiEndpoint?action=save_notification');
-
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(notification),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data is Map && data['success'] == true;
-      }
-      return false;
+      return List<Map<String, dynamic>>.from(jsonDecode(jsonStr));
     } catch (e) {
-      return false;
+      debugPrint('❌ Error parsing local notifications: $e');
+      return [];
     }
   }
 
   // =========================================================
-  // Mark as read
-  // =========================================================
-  static Future<bool> markAsRead(String id) async {
-    try {
-      final uri = Uri.parse('$apiEndpoint?action=mark_as_read');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data is Map && data['success'] == true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // =========================================================
-  // Delete notification
+  // Delete Notification by ID
   // =========================================================
   static Future<bool> deleteNotification(String id) async {
-    try {
-      final uri = Uri.parse('$apiEndpoint?action=delete_notification');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'id': id}),
-          )
-          .timeout(const Duration(seconds: 10));
+    while (_isWriting) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data is Map && data['success'] == true;
+    _isWriting = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(storageKey);
+
+      if (jsonStr == null) return false;
+
+      List<dynamic> list = jsonDecode(jsonStr);
+      int initialLength = list.length;
+
+      list.removeWhere((item) => item['id']?.toString() == id);
+
+      if (list.length < initialLength) {
+        await prefs.setString(storageKey, jsonEncode(list));
+        debugPrint('🗑️ Deleted notification: $id');
+        return true;
       }
+
       return false;
     } catch (e) {
+      debugPrint('❌ Delete Failed: $e');
       return false;
+    } finally {
+      _isWriting = false;
     }
   }
+
+  // =========================================================
+  // Clear All Notifications
+  // =========================================================
+  static Future<void> clearAllNotifications() async {
+    while (_isWriting) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    _isWriting = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(storageKey);
+      debugPrint('🗑️ All notifications cleared');
+    } catch (e) {
+      debugPrint('❌ Clear Failed: $e');
+    } finally {
+      _isWriting = false;
+    }
+  }
+
+  // =========================================================
+  // Clear Session Cache
+  // =========================================================
+  static void clearSessionCache() {
+    _processedIds.clear();
+    _savedInSession.clear();
+    debugPrint('🧹 Session cache cleared');
+  }
+
+  // =========================================================
+  // Get Writing Status
+  // =========================================================
+  static bool get isWriting => _isWriting;
 }
