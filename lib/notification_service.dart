@@ -36,7 +36,7 @@ class NotificationService {
   }
 
   // =========================================================
-  // ✅ Save To Local Disk - مُصحّح مع دعم associatedIds والمطابقة الذكية
+  // ✅ Save To Local Disk - FIXED: Content-based matching without time limit
   // =========================================================
   static Future<void> saveToLocalDisk(Map<String, dynamic> newNotificationJson,
       {bool fromClick = false}) async {
@@ -65,9 +65,10 @@ class NotificationService {
 
     // ✅ إضافة associatedIds إذا كانت موجودة
     if (newNotificationJson['associatedIds'] != null) {
-      final List<dynamic> assocList = newNotificationJson['associatedIds'] is String
-          ? jsonDecode(newNotificationJson['associatedIds'])
-          : newNotificationJson['associatedIds'];
+      final List<dynamic> assocList =
+          newNotificationJson['associatedIds'] is String
+              ? jsonDecode(newNotificationJson['associatedIds'])
+              : newNotificationJson['associatedIds'];
       for (var id in assocList) {
         if (id != null && id.toString().isNotEmpty) {
           incomingIds.add(id.toString());
@@ -142,45 +143,18 @@ class NotificationService {
           }
         }
 
-        // ✅ 2. مطابقة بالمحتوى + التوقيت القريب
+        // ✅ 2. FIX: مطابقة بالمحتوى بدون قيد زمني
+        // نفس العنوان + نفس المحتوى = نفس الإشعار
         if (!idMatch) {
           final String itemTitle = item['title']?.toString() ?? '';
           final String itemBody = item['body']?.toString() ?? '';
 
           if (title.isNotEmpty &&
+              body.isNotEmpty &&
               title == itemTitle &&
               body == itemBody) {
-            // تحقق من التوقيت القريب (60 ثانية)
-            try {
-              DateTime? itemTime;
-              if (item['timestamp'] != null) {
-                if (item['timestamp'] is int) {
-                  itemTime =
-                      DateTime.fromMillisecondsSinceEpoch(item['timestamp']);
-                } else {
-                  itemTime = DateTime.parse(item['timestamp'].toString());
-                }
-              }
-
-              DateTime? newTime;
-              if (newNotificationJson['timestamp'] != null) {
-                if (newNotificationJson['timestamp'] is int) {
-                  newTime = DateTime.fromMillisecondsSinceEpoch(
-                      newNotificationJson['timestamp']);
-                } else {
-                  newTime = DateTime.parse(
-                      newNotificationJson['timestamp'].toString());
-                }
-              }
-
-              if (itemTime != null && newTime != null) {
-                if (itemTime.difference(newTime).inSeconds.abs() < 60) {
-                  idMatch = true;
-                }
-              }
-            } catch (e) {
-              // ignore time parsing errors
-            }
+            idMatch = true;
+            debugPrint('🔍 [Service] Content match found for: $title');
           }
         }
 
@@ -229,8 +203,7 @@ class NotificationService {
       // إضافة timestamp إذا لم يكن موجوداً
       if (!finalNotification.containsKey('timestamp') ||
           finalNotification['timestamp'] == null) {
-        finalNotification['timestamp'] =
-            DateTime.now().millisecondsSinceEpoch;
+        finalNotification['timestamp'] = DateTime.now().millisecondsSinceEpoch;
       }
 
       // إدراج في البداية (الأحدث أولاً)
