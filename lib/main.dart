@@ -230,14 +230,18 @@ class NotificationItem {
     return id == otherId || associatedIds.contains(otherId);
   }
 
+  // ✅ FIX: Content-based matching without time limit
   bool matchesNotification(NotificationItem other) {
+    // First check: ID-based matching (most reliable)
     if (associatedIds.intersection(other.associatedIds).isNotEmpty) {
       return true;
     }
+    // Second check: Content-based matching — no time limit
+    // Same title + same body = same notification regardless of when it was received
     if (title.isNotEmpty &&
         title == other.title &&
-        body == other.body &&
-        timestamp.difference(other.timestamp).inSeconds.abs() < 120) {
+        body.isNotEmpty &&
+        body == other.body) {
       return true;
     }
     return false;
@@ -335,6 +339,7 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
+  // ✅ FIX: fetchFromMySQL with content-based fallback matching
   Future<void> fetchFromMySQL() async {
     if (_isSyncing) return;
     _isSyncing = true;
@@ -363,8 +368,18 @@ class NotificationManager extends ChangeNotifier {
           continue;
         }
 
+        // ✅ FIX: matchesNotification now includes content-based matching
         int existingIndex =
             _notifications.indexWhere((n) => n.matchesNotification(serverItem));
+
+        // ✅ FIX: Additional fallback — content match without time limit
+        if (existingIndex == -1) {
+          existingIndex = _notifications.indexWhere((n) =>
+              n.title.isNotEmpty &&
+              n.title == serverItem.title &&
+              n.body.isNotEmpty &&
+              n.body == serverItem.body);
+        }
 
         if (existingIndex != -1) {
           final localItem = _notifications[existingIndex];
@@ -410,6 +425,7 @@ class NotificationManager extends ChangeNotifier {
     }
   }
 
+  // ✅ FIX: addFirebaseMessage with content-based fallback matching
   Future<void> addFirebaseMessage(RemoteMessage message) async {
     final messageId = message.messageId ??
         message.data['id']?.toString() ??
@@ -445,8 +461,18 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex =
+    // ✅ FIX: matchesNotification now includes content-based matching
+    int existingIndex =
         _notifications.indexWhere((n) => n.matchesNotification(item));
+
+    // ✅ FIX: Additional fallback — content match without time limit
+    if (existingIndex == -1) {
+      existingIndex = _notifications.indexWhere((n) =>
+          n.title.isNotEmpty &&
+          n.title == item.title &&
+          n.body.isNotEmpty &&
+          n.body == item.body);
+    }
 
     if (existingIndex != -1) {
       final existing = _notifications[existingIndex];
@@ -471,6 +497,7 @@ class NotificationManager extends ChangeNotifier {
     debugPrint('✅ [Manager] Added new Firebase notification: ${item.id}');
   }
 
+  // ✅ FIX: addNotificationFromNative with content-based fallback matching
   Future<void> addNotificationFromNative(Map<String, dynamic> data) async {
     final item = NotificationItem.fromJson(data);
 
@@ -502,8 +529,18 @@ class NotificationManager extends ChangeNotifier {
 
     await loadNotifications();
 
-    final existingIndex =
+    // ✅ FIX: matchesNotification now includes content-based matching
+    int existingIndex =
         _notifications.indexWhere((n) => n.matchesNotification(item));
+
+    // ✅ FIX: Additional fallback — content match without time limit
+    if (existingIndex == -1) {
+      existingIndex = _notifications.indexWhere((n) =>
+          n.title.isNotEmpty &&
+          n.title == item.title &&
+          n.body.isNotEmpty &&
+          n.body == item.body);
+    }
 
     if (existingIndex != -1) {
       debugPrint(
@@ -597,11 +634,23 @@ class NotificationManager extends ChangeNotifier {
         .toList();
   }
 
+  // ✅ FIX: _sortAndCount with content-based fallback dedup
   void _sortAndCount() {
     final List<NotificationItem> deduped = [];
     for (var notification in _notifications) {
+      // ✅ FIX: matchesNotification now includes content-based matching
       int existingIndex =
           deduped.indexWhere((n) => n.matchesNotification(notification));
+
+      // ✅ FIX: Additional fallback — content match for dedup
+      if (existingIndex == -1) {
+        existingIndex = deduped.indexWhere((n) =>
+            n.title.isNotEmpty &&
+            n.title == notification.title &&
+            n.body.isNotEmpty &&
+            n.body == notification.body);
+      }
+
       if (existingIndex == -1) {
         deduped.add(notification);
       } else {
@@ -718,43 +767,33 @@ class LocalNotificationService {
 
 /// =========================
 /// CRITICAL FIX: Safe navigation to notifications
-/// Always pushes ON TOP of WebViewScreen, never removes all routes
 /// =========================
 
 void _navigateToNotifications() {
-  // CRITICAL FIX: Use a delayed check to ensure navigator is ready
   void _doNavigate() {
     final navigator = navigatorKey.currentState;
     if (navigator == null) {
-      // Navigator not ready, retry after delay
       Future.delayed(const Duration(milliseconds: 500), _doNavigate);
       return;
     }
 
-    // CRITICAL FIX: Check if we already have routes in the stack
-    // If the navigator has no routes (empty stack), push WebViewScreen first then NotificationsScreen
-    // If it has routes, just push NotificationsScreen on top
     bool hasRoutes = false;
     navigator.popUntil((route) {
       hasRoutes = true;
-      return true; // Don't actually pop, just check
+      return true;
     });
 
     if (!hasRoutes) {
-      // No routes exist — app was launched from terminated state
-      // Push WebViewScreen as base, then NotificationsScreen on top
       navigator.pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => const WebViewScreen()),
         (route) => false,
       );
-      // Push notifications on top after a small delay to let WebView build
       Future.delayed(const Duration(milliseconds: 300), () {
         navigatorKey.currentState?.push(
           MaterialPageRoute(builder: (context) => const NotificationsScreen()),
         );
       });
     } else {
-      // Routes exist — just push NotificationsScreen on top
       navigator.push(
         MaterialPageRoute(builder: (context) => const NotificationsScreen()),
       );
@@ -804,7 +843,6 @@ class NotificationMethodChannel {
         await NotificationManager.instance.addNotificationFromNative(data);
       } else if (call.method == 'navigateToNotifications') {
         debugPrint('📱 [iOS Channel] Navigation command received');
-        // CRITICAL FIX: Use safe navigation instead of pushAndRemoveUntil
         Future.delayed(const Duration(milliseconds: 300), () {
           _navigateToNotifications();
         });
@@ -930,14 +968,12 @@ Future<void> _setupNotificationNavigation(FirebaseMessaging messaging) async {
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     debugPrint('👆 [Background Click] Navigating...');
-    // CRITICAL FIX: Use safe navigation
     _navigateToNotifications();
   });
 
   final initialMessage = await messaging.getInitialMessage();
   if (initialMessage != null) {
     debugPrint('🚀 [Terminated Launch] Navigating...');
-    // CRITICAL FIX: Longer delay for terminated launch to ensure app is fully built
     Future.delayed(const Duration(milliseconds: 1500), () {
       _navigateToNotifications();
     });
@@ -1018,8 +1054,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           child: child!,
         );
       },
-      // CRITICAL FIX: Start with SplashScreen which goes to PrivacyPolicy then WebView
-      // The WebViewScreen is always the base route after splash
       home: const SplashScreen(),
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
@@ -1536,7 +1570,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
 }
 
 /// =========================
-/// NOTIFICATIONS SCREEN - CRITICAL FIX: Back button always goes to WebViewScreen
+/// NOTIFICATIONS SCREEN
 /// =========================
 
 class NotificationsScreen extends StatefulWidget {
@@ -1591,14 +1625,10 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     if (mounted) setState(() {});
   }
 
-  /// CRITICAL FIX: Safe back navigation
-  /// If there's a previous route, just pop. Otherwise navigate to WebViewScreen.
   void _handleBack() {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     } else {
-      // No route to go back to (opened from notification when app was killed)
-      // Replace with WebViewScreen as the base
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const WebViewScreen()),
       );
@@ -1608,11 +1638,10 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // CRITICAL FIX: Wrap with WillPopScope to handle system back button
     return WillPopScope(
       onWillPop: () async {
         _handleBack();
-        return false; // We handle navigation ourselves
+        return false;
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF7FAFC),
@@ -2250,7 +2279,7 @@ class NotificationDetailScreen extends StatelessWidget {
 }
 
 /// =========================
-/// WEBVIEW SCREEN - CRITICAL FIXES: Login + Lifecycle
+/// WEBVIEW SCREEN
 /// =========================
 
 class WebViewScreen extends StatefulWidget {
@@ -2286,7 +2315,6 @@ class _WebViewScreenState extends State<WebViewScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // Listen for native cleanup requests during app termination
     _cleanupChannel.setMethodCallHandler((call) async {
       if (call.method == 'dispose') {
         debugPrint('🧹 [WebView] Received cleanup command from native');
@@ -2335,11 +2363,9 @@ class _WebViewScreenState extends State<WebViewScreen>
     if (_isDisposed) return;
 
     try {
-      // CRITICAL FIX FOR LOGIN: Platform-specific WebView configuration
       late final PlatformWebViewControllerCreationParams params;
 
       if (Platform.isIOS) {
-        // iOS: Use WKWebView with proper cookie/data store configuration
         params = WebKitWebViewControllerCreationParams(
           allowsInlineMediaPlayback: true,
           mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
@@ -2360,7 +2386,6 @@ class _WebViewScreenState extends State<WebViewScreen>
         final androidController =
             controller!.platform as AndroidWebViewController;
         androidController.setMediaPlaybackRequiresUserGesture(false);
-        // CRITICAL FIX FOR LOGIN: Enable DOM storage for session/cookie persistence
         AndroidWebViewController.enableDebugging(false);
         controller!.enableZoom(true);
       }
@@ -2368,7 +2393,6 @@ class _WebViewScreenState extends State<WebViewScreen>
       if (Platform.isIOS) {
         final webkitController =
             controller!.platform as WebKitWebViewController;
-        // CRITICAL FIX FOR LOGIN: Allow navigation gestures on iOS
         webkitController.setAllowsBackForwardNavigationGestures(true);
       }
 
@@ -2413,7 +2437,6 @@ class _WebViewScreenState extends State<WebViewScreen>
           }
           _updateCanGoBack();
 
-          // CRITICAL FIX FOR LOGIN: Inject login helper on login page
           if (url.contains('/login')) {
             _hideNotificationsOnLoginPage();
             _injectLoginFixes();
@@ -2428,8 +2451,6 @@ class _WebViewScreenState extends State<WebViewScreen>
         onWebResourceError: (WebResourceError error) {
           if (_isDisposed) return;
           debugPrint('❌ WebView Error: ${error.description}');
-          // CRITICAL FIX: Don't show error for sub-resource failures
-          // Only show error if it's the main frame
           if (error.isForMainFrame ?? true) {
             if (mounted)
               setState(() {
@@ -2459,12 +2480,10 @@ class _WebViewScreenState extends State<WebViewScreen>
             navigationCount = 1;
           }
 
-          // CRITICAL FIX FOR LOGIN: Always allow navigation to same domain
           return NavigationDecision.navigate;
         },
       ));
 
-      // CRITICAL FIX FOR LOGIN: Set user agent to look like a real mobile browser
       controller!.setUserAgent(
         Platform.isIOS
             ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
@@ -2483,7 +2502,6 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  /// CRITICAL FIX FOR LOGIN: Inject JavaScript to fix common login issues
   Future<void> _injectLoginFixes() async {
     if (_isDisposed || controller == null) return;
     try {
@@ -2492,7 +2510,6 @@ class _WebViewScreenState extends State<WebViewScreen>
           if (window.loginFixesApplied) return;
           window.loginFixesApplied = true;
 
-          // 1. Fix viewport for proper form rendering
           var existingViewports = document.querySelectorAll('meta[name="viewport"]');
           existingViewports.forEach(function(viewport) { viewport.remove(); });
           var meta = document.createElement('meta');
@@ -2500,7 +2517,6 @@ class _WebViewScreenState extends State<WebViewScreen>
           meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
           document.getElementsByTagName('head')[0].appendChild(meta);
 
-          // 2. Fix CSRF token issues - ensure the token is fresh
           var csrfMeta = document.querySelector('meta[name="csrf-token"]');
           if (csrfMeta) {
             var token = csrfMeta.getAttribute('content');
@@ -2510,7 +2526,6 @@ class _WebViewScreenState extends State<WebViewScreen>
             });
           }
 
-          // 3. Prevent duplicate form submissions
           var forms = document.querySelectorAll('form');
           forms.forEach(function(form) {
             form.addEventListener('submit', function(e) {
@@ -2525,7 +2540,6 @@ class _WebViewScreenState extends State<WebViewScreen>
             });
           });
 
-          // 4. Enable autocomplete on login fields
           var inputs = document.querySelectorAll('input[type="text"], input[type="email"], input[type="password"]');
           inputs.forEach(function(input) {
             input.setAttribute('autocomplete', 'on');
@@ -2873,17 +2887,6 @@ class _WebViewScreenState extends State<WebViewScreen>
                     MaterialPageRoute(
                         builder: (context) => const NotificationsScreen()));
               }),
-            // CRITICAL FIX FOR LOGIN: Add reload button
-            //  if (isOnLoginPage)
-            //  IconButton(
-            //   icon: const Icon(Icons.refresh),
-            // tooltip: 'إعادة تحميل',
-            //  onPressed: () {
-            //    if (controller != null && !_isDisposed) {
-            //   controller!.reload();
-            //  }
-            //   },
-            // ),
           ],
         ),
         body: Stack(children: [
