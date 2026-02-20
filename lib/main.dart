@@ -2450,8 +2450,8 @@ class _WebViewScreenState extends State<WebViewScreen>
         },
         onWebResourceError: (WebResourceError error) {
           if (_isDisposed) return;
-          debugPrint('❌ WebView Error: ${error.description}');
-          if (error.isForMainFrame ?? true) {
+          debugPrint('❌ WebView Error: ${error.description} | isForMainFrame: ${error.isForMainFrame}');
+          if (error.isForMainFrame ?? false) {
             if (mounted)
               setState(() {
                 isLoading = false;
