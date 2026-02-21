@@ -3,7 +3,6 @@ description: بوابة الموظف الرقمية - الشركة العامة 
 publish_to: "none"
 
 version: 1.0.16+29
-
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
@@ -16,13 +15,13 @@ dependencies:
   firebase_messaging: ^16.1.1
   http: ^1.1.0
 
-  # 🌐 WebView - CRITICAL: Updated versions for login fix + termination crash fix
-  webview_flutter: ^4.10.0
-  webview_flutter_android: ^4.3.0
-  webview_flutter_wkwebview: ^3.17.0
+  # 🌐 WebView - ✅ REPLACED with flutter_inappwebview for iOS SSL trust support
+  flutter_inappwebview: ^6.1.5
 
   # 🎨 UI
-  google_fonts: 8.0.1
+  # ⚠️ IMPORTANT: Removed '^' to lock exact version
+  # This prevents auto-upgrading which breaks the build
+  google_fonts: ^8.0.2
 
   # 💾 Storage
   shared_preferences: ^2.2.2
@@ -41,6 +40,7 @@ dependencies:
   connectivity_plus: ^7.0.0
   mysql1: ^0.20.0
   timeago: ^3.7.1
+  webview_flutter: ^4.13.1
 
 flutter:
   uses-material-design: true
