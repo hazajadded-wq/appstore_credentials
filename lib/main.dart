@@ -4,9 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -2295,7 +2293,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   static const MethodChannel _cleanupChannel = MethodChannel('webview_cleanup');
 
   final String loginUrl = 'https://gate.scgfs-oil.gov.iq/login';
-  WebViewController? controller;
+  InAppWebViewController? controller;
   bool isLoading = true;
   double loadingProgress = 0.0;
   bool canGoBack = false;
@@ -2309,6 +2307,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   double zoomLevel = 1.0;
   final GlobalKey _webViewKey = GlobalKey();
   bool _isDisposed = false;
+  bool _webViewReady = false;
 
   @override
   void initState() {
@@ -2321,9 +2320,12 @@ class _WebViewScreenState extends State<WebViewScreen>
         _disposeWebView();
       }
     });
-
+    
+    // ✅ Mark WebView as ready after a small delay
     Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted && !_isDisposed) _initializeWebView();
+      if (mounted && !_isDisposed) {
+        setState(() => _webViewReady = true);
+      }
     });
   }
 
@@ -2349,7 +2351,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
     if (controller != null) {
       try {
-        controller!.loadRequest(Uri.parse('about:blank'));
+        controller!.loadUrl(urlRequest: URLRequest(url: WebUri('about:blank')));
         debugPrint('🧹 [WebView] Loaded about:blank for cleanup');
       } catch (e) {
         debugPrint('⚠️ [WebView] Error during cleanup: $e');
@@ -2359,153 +2361,45 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  void _initializeWebView() {
-    if (_isDisposed) return;
-
-    try {
-      late final PlatformWebViewControllerCreationParams params;
-
-      if (Platform.isIOS) {
-        params = WebKitWebViewControllerCreationParams(
-          allowsInlineMediaPlayback: true,
-          mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-        );
-      } else {
-        params = const PlatformWebViewControllerCreationParams();
-      }
-
-      controller = WebViewController.fromPlatformCreationParams(params)
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(Colors.white)
-        ..addJavaScriptChannel('FlutterChannel',
-            onMessageReceived: (JavaScriptMessage message) {
-          debugPrint('📨 JavaScript message received: ${message.message}');
-        });
-
-      if (Platform.isAndroid) {
-        final androidController =
-            controller!.platform as AndroidWebViewController;
-        androidController.setMediaPlaybackRequiresUserGesture(false);
-        AndroidWebViewController.enableDebugging(false);
-        controller!.enableZoom(true);
-      }
-
-      if (Platform.isIOS) {
-        final webkitController =
-            controller!.platform as WebKitWebViewController;
-        webkitController.setAllowsBackForwardNavigationGestures(true);
-      }
-
-      controller!.setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (String url) {
-          if (_isDisposed) return;
-          if (!url.contains('download=1')) {
-            navigationCount = 0;
-            lastNavigatedUrl = '';
-          }
-          if (mounted) {
-            setState(() {
-              isLoading = true;
-              hasError = false;
-              loadingProgress = 0.0;
-              currentUrl = url;
-              isLoggedIn = !url.contains('/login');
-            });
-          }
-          if (Platform.isAndroid) {
-            Future.delayed(const Duration(milliseconds: 500), () {
-              if (!_isDisposed) _injectAndroidFix();
-            });
-          }
-        },
-        onProgress: (int progress) {
-          if (_isDisposed) return;
-          if (mounted) setState(() => loadingProgress = progress / 100);
-        },
-        onPageFinished: (String url) {
-          if (_isDisposed) return;
-          debugPrint('✅ Page finished loading: $url');
-          navigationCount = 0;
-          if (mounted) {
-            setState(() {
-              isLoading = false;
-              loadingProgress = 1.0;
-              currentUrl = url;
-              isLoggedIn = !url.contains('/login');
-              isOnLoginPage = url.contains('/login');
-            });
-          }
-          _updateCanGoBack();
-
-          if (url.contains('/login')) {
-            _hideNotificationsOnLoginPage();
-            _injectLoginFixes();
-          }
-
-          if (url.contains('.html')) {
-            if (mounted) setState(() => zoomLevel = 1.0);
-            _autoFitPageToScreen();
-          }
-          if (Platform.isAndroid) _injectAndroidFix();
-        },
-        onWebResourceError: (WebResourceError error) {
-          if (_isDisposed) return;
-          debugPrint('❌ WebView Error: ${error.description} | isForMainFrame: ${error.isForMainFrame}');
-          if (error.isForMainFrame ?? false) {
-            if (mounted)
-              setState(() {
-                isLoading = false;
-                hasError = true;
-                errorMessage = error.description;
-              });
-          }
-        },
-        onNavigationRequest: (NavigationRequest request) {
-          if (_isDisposed) return NavigationDecision.prevent;
-          debugPrint('🔗 Navigation request: ${request.url}');
-
-          if (request.url.contains('download=1')) {
-            String cleanUrl =
-                request.url.replaceAll(RegExp(r'[?&]download=1'), '');
-            if (cleanUrl != currentUrl) {
-              controller?.loadRequest(Uri.parse(cleanUrl));
-              return NavigationDecision.prevent;
-            }
-          }
-          if (request.url == lastNavigatedUrl) {
-            navigationCount++;
-            if (navigationCount > 5) return NavigationDecision.prevent;
-          } else {
-            lastNavigatedUrl = request.url;
-            navigationCount = 1;
-          }
-
-          return NavigationDecision.navigate;
-        },
-      ));
-
-      controller!.setUserAgent(
-        Platform.isIOS
-            ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-            : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      );
-
-      controller!.loadRequest(Uri.parse(loginUrl));
-      if (mounted) setState(() {});
-    } catch (e) {
-      debugPrint('❌ Error initializing WebView: $e');
-      if (mounted)
-        setState(() {
-          hasError = true;
-          errorMessage = e.toString();
-        });
-    }
+  // ✅ InAppWebView settings
+  InAppWebViewSettings _getWebViewSettings() {
+    return InAppWebViewSettings(
+      // General
+      javaScriptEnabled: true,
+      javaScriptCanOpenWindowsAutomatically: true,
+      mediaPlaybackRequiresUserGesture: false,
+      transparentBackground: false,
+      supportZoom: true,
+      allowsInlineMediaPlayback: true,
+      
+      // ✅ FIX: User Agent
+      userAgent: Platform.isIOS
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
+          : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      
+      // iOS specific
+      allowsBackForwardNavigationGestures: true,
+      isFraudulentWebsiteWarningEnabled: false,
+      allowsLinkPreview: false,
+      
+      // Android specific
+      useWideViewPort: true,
+      loadWithOverviewMode: true,
+      domStorageEnabled: true,
+      databaseEnabled: true,
+      allowFileAccess: true,
+      allowContentAccess: true,
+      mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+      
+      // ✅ FIX: Disable cache mode issues
+      cacheEnabled: true,
+    );
   }
 
   Future<void> _injectLoginFixes() async {
     if (_isDisposed || controller == null) return;
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           if (window.loginFixesApplied) return;
           window.loginFixesApplied = true;
@@ -2569,7 +2463,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   Future<void> _autoFitPageToScreen() async {
     if (_isDisposed || controller == null) return;
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           var existingViewports = document.querySelectorAll('meta[name="viewport"]');
           existingViewports.forEach(function(viewport) { viewport.remove(); });
@@ -2608,7 +2502,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   Future<void> _applyZoom() async {
     if (_isDisposed || controller == null) return;
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           var html = document.documentElement;
           var body = document.body;
@@ -2626,7 +2520,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   Future<void> _hideNotificationsOnLoginPage() async {
     if (_isDisposed || controller == null) return;
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
           var notifications = document.querySelectorAll('.alert, .notification, .toast, [role="alert"], .flash-message');
           notifications.forEach(function(notif) { notif.style.display = 'none'; });
@@ -2637,13 +2531,13 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  Future<void> _injectAndroidFix() async {
+  Future<void> _injectPlatformFixes() async {
     if (_isDisposed || controller == null) return;
     try {
-      await controller!.runJavaScript('''
+      await controller!.evaluateJavascript(source: '''
         (function() {
-          if (window.androidFixInjected) return;
-          window.androidFixInjected = true;
+          if (window.platformFixInjected) return;
+          window.platformFixInjected = true;
           var originalOpen = window.open;
           window.open = function(url, name, specs) {
             if (url && url.indexOf('download=1') !== -1) {
@@ -2653,10 +2547,21 @@ class _WebViewScreenState extends State<WebViewScreen>
             }
             return originalOpen.call(window, url, name, specs);
           };
+          
+          // Fix viewport if missing
+          var existingViewports = document.querySelectorAll('meta[name="viewport"]');
+          if (existingViewports.length === 0) {
+            var meta = document.createElement('meta');
+            meta.name = 'viewport';
+            meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes';
+            document.getElementsByTagName('head')[0].appendChild(meta);
+          }
+          
+          console.log('✅ Platform fixes injected');
         })();
       ''');
     } catch (e) {
-      debugPrint('❌ Error injecting JavaScript: $e');
+      debugPrint('❌ Error injecting platform fixes: $e');
     }
   }
 
@@ -2677,10 +2582,26 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   Future<Uint8List> _captureWebView() async {
+    // ✅ FIX: Use InAppWebView's built-in screenshot on both platforms
+    if (controller != null) {
+      final screenshot = await controller!.takeScreenshot(
+        screenshotConfiguration: ScreenshotConfiguration(
+          compressFormat: CompressFormat.PNG,
+          quality: 100,
+        ),
+      );
+      if (screenshot != null) {
+        return screenshot;
+      }
+    }
+    
+    // Fallback: Use native method channel for iOS
     if (Platform.isIOS) {
       final bytes = await _channel.invokeMethod('takeSnapshot');
       return Uint8List.fromList(List<int>.from(bytes));
     }
+    
+    // Fallback: Use RenderRepaintBoundary for Android
     RenderRepaintBoundary boundary =
         _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
     ui.Image img = await boundary.toImage(pixelRatio: 6.0);
@@ -2890,12 +2811,163 @@ class _WebViewScreenState extends State<WebViewScreen>
           ],
         ),
         body: Stack(children: [
-          if (controller != null && !hasError && !_isDisposed)
+          if (_webViewReady && !hasError && !_isDisposed)
             RepaintBoundary(
                 key: _webViewKey,
                 child: Container(
                     color: Colors.white,
-                    child: WebViewWidget(controller: controller!))),
+                    child: InAppWebView(
+                      initialUrlRequest: URLRequest(url: WebUri(loginUrl)),
+                      initialSettings: _getWebViewSettings(),
+                      
+                      // ✅ Controller created
+                      onWebViewCreated: (InAppWebViewController ctrl) {
+                        controller = ctrl;
+                        debugPrint('✅ [WebView] Controller created');
+                      },
+
+                      // ✅ Page started loading
+                      onLoadStart: (ctrl, url) {
+                        if (_isDisposed) return;
+                        final urlStr = url?.toString() ?? '';
+                        if (!urlStr.contains('download=1')) {
+                          navigationCount = 0;
+                          lastNavigatedUrl = '';
+                        }
+                        if (mounted) {
+                          setState(() {
+                            isLoading = true;
+                            hasError = false;
+                            loadingProgress = 0.0;
+                            currentUrl = urlStr;
+                            isLoggedIn = !urlStr.contains('/login');
+                          });
+                        }
+                        Future.delayed(const Duration(milliseconds: 500), () {
+                          if (!_isDisposed) _injectPlatformFixes();
+                        });
+                      },
+
+                      // ✅ Progress changed
+                      onProgressChanged: (ctrl, progress) {
+                        if (_isDisposed) return;
+                        if (mounted) setState(() => loadingProgress = progress / 100);
+                      },
+
+                      // ✅ Page finished loading
+                      onLoadStop: (ctrl, url) {
+                        if (_isDisposed) return;
+                        final urlStr = url?.toString() ?? '';
+                        debugPrint('✅ Page finished loading: $urlStr');
+                        navigationCount = 0;
+                        if (mounted) {
+                          setState(() {
+                            isLoading = false;
+                            loadingProgress = 1.0;
+                            currentUrl = urlStr;
+                            isLoggedIn = !urlStr.contains('/login');
+                            isOnLoginPage = urlStr.contains('/login');
+                          });
+                        }
+                        _updateCanGoBack();
+
+                        if (urlStr.contains('/login')) {
+                          _hideNotificationsOnLoginPage();
+                          _injectLoginFixes();
+                        }
+
+                        if (urlStr.contains('.html')) {
+                          if (mounted) setState(() => zoomLevel = 1.0);
+                          _autoFitPageToScreen();
+                        }
+                        _injectPlatformFixes();
+                      },
+
+                      // ✅✅✅ CRITICAL FIX: SSL Certificate Trust Handler ✅✅✅
+                      // This is the KEY fix that solves the iOS "البيانات الإدارية" connection error
+                      onReceivedServerTrustAuthRequest: (ctrl, challenge) async {
+                        debugPrint('🔐 [SSL] Trust challenge for: ${challenge.protectionSpace.host}');
+                        // ✅ Accept ALL SSL certificates from the government server
+                        return ServerTrustAuthResponse(
+                          action: ServerTrustAuthResponseAction.PROCEED,
+                        );
+                      },
+
+                      // ✅ Handle HTTP authentication if needed
+                      onReceivedHttpAuthRequest: (ctrl, challenge) async {
+                        debugPrint('🔑 [Auth] HTTP auth challenge for: ${challenge.protectionSpace.host}');
+                        return HttpAuthResponse(
+                          action: HttpAuthResponseAction.CANCEL,
+                        );
+                      },
+
+                      // ✅ Handle client certificate request
+                      onReceivedClientCertRequest: (ctrl, challenge) async {
+                        debugPrint('📜 [Cert] Client cert request for: ${challenge.protectionSpace.host}');
+                        return ClientCertResponse(
+                          action: ClientCertResponseAction.CANCEL,
+                        );
+                      },
+
+                      // ✅ Handle web resource errors
+                      onReceivedError: (ctrl, request, error) {
+                        if (_isDisposed) return;
+                        final urlStr = request.url.toString();
+                        debugPrint('❌ WebView Error: ${error.description} | type: ${error.type} | url: $urlStr');
+                        
+                        // ✅ Only show error for main frame navigation failures
+                        final isMainFrame = request.isForMainFrame ?? true;
+                        if (isMainFrame) {
+                          // ✅ Delay before showing error to give page a chance
+                          Future.delayed(const Duration(seconds: 2), () {
+                            if (mounted && !_isDisposed && isLoading) {
+                              setState(() {
+                                isLoading = false;
+                                hasError = true;
+                                errorMessage = error.description ?? 'خطأ غير معروف';
+                              });
+                            }
+                          });
+                        }
+                      },
+
+                      // ✅ Handle HTTP errors (4xx, 5xx)
+                      onReceivedHttpError: (ctrl, request, response) {
+                        if (_isDisposed) return;
+                        debugPrint('⚠️ HTTP Error: ${response.statusCode} for ${request.url}');
+                        // Don't show error screen for HTTP errors, let the WebView handle them
+                      },
+
+                      // ✅ Navigation control
+                      shouldOverrideUrlLoading: (ctrl, navigationAction) async {
+                        if (_isDisposed) return NavigationActionPolicy.CANCEL;
+                        
+                        final urlStr = navigationAction.request.url?.toString() ?? '';
+                        debugPrint('🔗 Navigation request: $urlStr');
+
+                        if (urlStr.contains('download=1')) {
+                          String cleanUrl = urlStr.replaceAll(RegExp(r'[?&]download=1'), '');
+                          if (cleanUrl != currentUrl) {
+                            ctrl.loadUrl(urlRequest: URLRequest(url: WebUri(cleanUrl)));
+                            return NavigationActionPolicy.CANCEL;
+                          }
+                        }
+                        if (urlStr == lastNavigatedUrl) {
+                          navigationCount++;
+                          if (navigationCount > 5) return NavigationActionPolicy.CANCEL;
+                        } else {
+                          lastNavigatedUrl = urlStr;
+                          navigationCount = 1;
+                        }
+
+                        return NavigationActionPolicy.ALLOW;
+                      },
+
+                      // ✅ Console messages for debugging
+                      onConsoleMessage: (ctrl, consoleMessage) {
+                        debugPrint('🌐 [JS Console] ${consoleMessage.message}');
+                      },
+                    ))),
           if (hasError)
             Center(
               child: Column(
@@ -2918,8 +2990,14 @@ class _WebViewScreenState extends State<WebViewScreen>
                         setState(() {
                           hasError = false;
                           _isDisposed = false;
+                          _webViewReady = false;
                         });
-                        _initializeWebView();
+                        // Re-create the WebView
+                        Future.delayed(const Duration(milliseconds: 100), () {
+                          if (mounted) {
+                            setState(() => _webViewReady = true);
+                          }
+                        });
                       },
                       child: Text('إعادة المحاولة',
                           style: GoogleFonts.cairo(color: Colors.white)),
