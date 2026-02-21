@@ -2320,7 +2320,7 @@ class _WebViewScreenState extends State<WebViewScreen>
         _disposeWebView();
       }
     });
-    
+
     // ✅ Mark WebView as ready after a small delay
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted && !_isDisposed) {
@@ -2371,17 +2371,17 @@ class _WebViewScreenState extends State<WebViewScreen>
       transparentBackground: false,
       supportZoom: true,
       allowsInlineMediaPlayback: true,
-      
+
       // ✅ FIX: User Agent
       userAgent: Platform.isIOS
           ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
           : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      
+
       // iOS specific
       allowsBackForwardNavigationGestures: true,
       isFraudulentWebsiteWarningEnabled: false,
       allowsLinkPreview: false,
-      
+
       // Android specific
       useWideViewPort: true,
       loadWithOverviewMode: true,
@@ -2390,7 +2390,7 @@ class _WebViewScreenState extends State<WebViewScreen>
       allowFileAccess: true,
       allowContentAccess: true,
       mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-      
+
       // ✅ FIX: Disable cache mode issues
       cacheEnabled: true,
     );
@@ -2594,13 +2594,13 @@ class _WebViewScreenState extends State<WebViewScreen>
         return screenshot;
       }
     }
-    
+
     // Fallback: Use native method channel for iOS
     if (Platform.isIOS) {
       final bytes = await _channel.invokeMethod('takeSnapshot');
       return Uint8List.fromList(List<int>.from(bytes));
     }
-    
+
     // Fallback: Use RenderRepaintBoundary for Android
     RenderRepaintBoundary boundary =
         _webViewKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
@@ -2819,7 +2819,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                     child: InAppWebView(
                       initialUrlRequest: URLRequest(url: WebUri(loginUrl)),
                       initialSettings: _getWebViewSettings(),
-                      
+
                       // ✅ Controller created
                       onWebViewCreated: (InAppWebViewController ctrl) {
                         controller = ctrl;
@@ -2851,7 +2851,8 @@ class _WebViewScreenState extends State<WebViewScreen>
                       // ✅ Progress changed
                       onProgressChanged: (ctrl, progress) {
                         if (_isDisposed) return;
-                        if (mounted) setState(() => loadingProgress = progress / 100);
+                        if (mounted)
+                          setState(() => loadingProgress = progress / 100);
                       },
 
                       // ✅ Page finished loading
@@ -2885,36 +2886,37 @@ class _WebViewScreenState extends State<WebViewScreen>
 
                       // ✅✅✅ CRITICAL FIX: SSL Certificate Trust Handler ✅✅✅
                       // This is the KEY fix that solves the iOS "البيانات الإدارية" connection error
-                      onReceivedServerTrustAuthRequest: (ctrl, challenge) async {
-                        debugPrint('🔐 [SSL] Trust challenge for: ${challenge.protectionSpace.host}');
+                      onReceivedServerTrustAuthRequest:
+                          (ctrl, challenge) async {
+                        debugPrint(
+                            '🔐 [SSL] Trust challenge for: ${challenge.protectionSpace.host}');
                         // ✅ Accept ALL SSL certificates from the government server
                         return ServerTrustAuthResponse(
                           action: ServerTrustAuthResponseAction.PROCEED,
                         );
                       },
 
-                      // ✅ Handle HTTP authentication if needed
+                      // ✅ Handle HTTP authentication — just ignore
                       onReceivedHttpAuthRequest: (ctrl, challenge) async {
-                        debugPrint('🔑 [Auth] HTTP auth challenge for: ${challenge.protectionSpace.host}');
-                        return HttpAuthResponse(
-                          action: HttpAuthResponseAction.CANCEL,
-                        );
+                        debugPrint(
+                            '🔑 [Auth] HTTP auth challenge for: ${challenge.protectionSpace.host}');
+                        return null;
                       },
 
-                      // ✅ Handle client certificate request
+                      // ✅ Handle client certificate request — just ignore
                       onReceivedClientCertRequest: (ctrl, challenge) async {
-                        debugPrint('📜 [Cert] Client cert request for: ${challenge.protectionSpace.host}');
-                        return ClientCertResponse(
-                          action: ClientCertResponseAction.CANCEL,
-                        );
+                        debugPrint(
+                            '📜 [Cert] Client cert request for: ${challenge.protectionSpace.host}');
+                        return null;
                       },
 
                       // ✅ Handle web resource errors
                       onReceivedError: (ctrl, request, error) {
                         if (_isDisposed) return;
                         final urlStr = request.url.toString();
-                        debugPrint('❌ WebView Error: ${error.description} | type: ${error.type} | url: $urlStr');
-                        
+                        debugPrint(
+                            '❌ WebView Error: ${error.description} | type: ${error.type} | url: $urlStr');
+
                         // ✅ Only show error for main frame navigation failures
                         final isMainFrame = request.isForMainFrame ?? true;
                         if (isMainFrame) {
@@ -2924,7 +2926,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                               setState(() {
                                 isLoading = false;
                                 hasError = true;
-                                errorMessage = error.description ?? 'خطأ غير معروف';
+                                errorMessage = error.description;
                               });
                             }
                           });
@@ -2934,27 +2936,32 @@ class _WebViewScreenState extends State<WebViewScreen>
                       // ✅ Handle HTTP errors (4xx, 5xx)
                       onReceivedHttpError: (ctrl, request, response) {
                         if (_isDisposed) return;
-                        debugPrint('⚠️ HTTP Error: ${response.statusCode} for ${request.url}');
+                        debugPrint(
+                            '⚠️ HTTP Error: ${response.statusCode} for ${request.url}');
                         // Don't show error screen for HTTP errors, let the WebView handle them
                       },
 
                       // ✅ Navigation control
                       shouldOverrideUrlLoading: (ctrl, navigationAction) async {
                         if (_isDisposed) return NavigationActionPolicy.CANCEL;
-                        
-                        final urlStr = navigationAction.request.url?.toString() ?? '';
+
+                        final urlStr =
+                            navigationAction.request.url?.toString() ?? '';
                         debugPrint('🔗 Navigation request: $urlStr');
 
                         if (urlStr.contains('download=1')) {
-                          String cleanUrl = urlStr.replaceAll(RegExp(r'[?&]download=1'), '');
+                          String cleanUrl =
+                              urlStr.replaceAll(RegExp(r'[?&]download=1'), '');
                           if (cleanUrl != currentUrl) {
-                            ctrl.loadUrl(urlRequest: URLRequest(url: WebUri(cleanUrl)));
+                            ctrl.loadUrl(
+                                urlRequest: URLRequest(url: WebUri(cleanUrl)));
                             return NavigationActionPolicy.CANCEL;
                           }
                         }
                         if (urlStr == lastNavigatedUrl) {
                           navigationCount++;
-                          if (navigationCount > 5) return NavigationActionPolicy.CANCEL;
+                          if (navigationCount > 5)
+                            return NavigationActionPolicy.CANCEL;
                         } else {
                           lastNavigatedUrl = urlStr;
                           navigationCount = 1;
